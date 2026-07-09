@@ -16,16 +16,27 @@ import { ConsoleTab } from "./ConsoleTab";
 import { SavesTab } from "./SavesTab";
 import { RestartCard } from "./RestartCard";
 import { VersionCard } from "./VersionCard";
+import { EngineTab } from "./EngineTab";
 import { STATUS_LABELS } from "./labels";
 import { StatusBadge, btn, btnDanger, btnGhost, card, errorCls } from "./ui";
 
-type Tab = "overview" | "players" | "map" | "console" | "settings" | "mods" | "saves" | "logs";
+type Tab =
+  | "overview"
+  | "players"
+  | "map"
+  | "console"
+  | "settings"
+  | "engine"
+  | "mods"
+  | "saves"
+  | "logs";
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "總覽" },
   { id: "players", label: "玩家" },
   { id: "map", label: "線上地圖" },
   { id: "console", label: "指令" },
   { id: "settings", label: "世界設定" },
+  { id: "engine", label: "效能" },
   { id: "mods", label: "模組" },
   { id: "saves", label: "存檔備份" },
   { id: "logs", label: "日誌" },
@@ -168,6 +179,7 @@ export function InstanceDetailPage({
           canEditRaw={detail.backend === "native"}
         />
       )}
+      {tab === "engine" && <EngineTab client={client} instanceId={detail.id} />}
       {tab === "mods" && <ModsTab client={client} instanceId={detail.id} />}
       {tab === "saves" && (
         <SavesTab client={client} instanceId={detail.id} running={detail.status === "running"} />

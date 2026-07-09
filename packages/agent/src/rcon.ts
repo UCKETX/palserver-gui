@@ -69,7 +69,9 @@ export function requireRcon(rec: InstanceRecord): void {
   }
 }
 
-export function rconExec(rec: InstanceRecord, command: string): Promise<string> {
+/** `async` so a disabled-RCON instance rejects instead of throwing
+ * synchronously — callers attach .catch() and would otherwise be bypassed. */
+export async function rconExec(rec: InstanceRecord, command: string): Promise<string> {
   requireRcon(rec);
   const port = Number(rec.settings.RCONPort);
   const password = String(rec.settings.AdminPassword);

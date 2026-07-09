@@ -4,6 +4,8 @@ import type {
   BackupSchedule,
   CreateInstanceInput,
   DirEntry,
+  EngineSettings,
+  EngineSettingsStatus,
   FileContent,
   InstanceDetail,
   InstanceStats,
@@ -155,6 +157,17 @@ export class AgentClient {
 
   saveWorld(id: string): Promise<{ saved: boolean }> {
     return this.request(`/api/instances/${id}/save`, { method: "POST", body: "{}" });
+  }
+
+  engineSettings(id: string): Promise<EngineSettingsStatus> {
+    return this.request(`/api/instances/${id}/engine-settings`);
+  }
+
+  updateEngineSettings(id: string, values: EngineSettings): Promise<EngineSettingsStatus> {
+    return this.request(`/api/instances/${id}/engine-settings`, {
+      method: "PUT",
+      body: JSON.stringify(values),
+    });
   }
 
   version(id: string): Promise<VersionStatus> {

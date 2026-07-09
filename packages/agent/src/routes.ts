@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import {
   COMMANDS,
+  ENGINE_OPTIONS,
+  type EngineSettings,
   CreateInstanceSchema,
   UpdateSettingsSchema,
   WorldSettingsSchema,
@@ -23,6 +25,7 @@ import { getModsStatus, installComponent, setLuaModEnabled } from "./mods.js";
 import { getLiveStatus, rest } from "./restapi.js";
 import * as files from "./files.js";
 import * as saves from "./saves.js";
+import { getEngineSettings, writeEngineSettings } from "./engine-ini.js";
 import fs from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -292,6 +295,26 @@ export function registerRoutes(
     const { command } = z.object({ command: z.string().min(1).max(500) }).parse(req.body);
     const output = await rconExec(rec, command);
     return { command, output };
+  });
+
+  // ── Engine.ini performance settings ──
+  app.get("/api/instances/:id/engine-settings", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    return getEngineSettings(rec, ctxOf(rec));
+  });
+
+  app.put("/api/instances/:id/engine-settings", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const shape = Object.fromEntries(
+      Object.entries(ENGINE_OPTIONS).map(([key, meta]) => {
+        if (meta.type === "bool") return [key, z.boolean().optional()];
+        const num = meta.type === "int" ? z.number().int() : z.number();
+        return [key, num.min(meta.min ?? -Infinity).max(meta.max ?? Infinity).optional()];
+      }),
+    );
+    const patch = z.object(shape).strict().parse(req.body);
+    const status = writeEngineSettings(rec, ctxOf(rec), patch as EngineSettings);
+    return { ...status, applied: "on-next-restart" };
   });
 
   // ── game version & updates ──

@@ -114,4 +114,7 @@ Real-server verification needs an x86_64 Linux host.
       fallback) on the dashboard and the instance panel, compares the
       installed depot manifest against Steam's public branch, and offers a
       one-click update (background DepotDownloader run; server must be stopped)
+- [x] Engine.ini performance tab: tick rate, client rates, timeouts, frame
+      pacing and GC interval, with presets. Writes merge into Engine.ini,
+      preserving sections, keys and comments the GUI doesn't manage.
 - [ ] Multi-host aggregation in the UI, TLS guidance, i18n (reuse v1 locales)

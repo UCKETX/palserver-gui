@@ -3,6 +3,7 @@ import { WORLD_OPTIONS, type OptionMeta } from "./options.js";
 
 export * from "./options.js";
 export * from "./commands.js";
+export * from "./engine-options.js";
 
 /** Value type an option can hold at runtime. */
 export type WorldOptionValue = string | number | boolean;

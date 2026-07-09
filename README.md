@@ -107,5 +107,11 @@ Real-server verification needs an x86_64 Linux host.
       tar.gz backup / restore / download, and scheduled backups (interval,
       retention, skip-when-empty). Restores take a safety backup first and
       refuse to run while the server is up. Migration guide: [docs/MIGRATION.md](docs/MIGRATION.md)
-- [ ] Failure detection surfaced in UI (process exits / container crash loops)
+- [x] Automatic restarts: scheduled (interval or times of day), sustained
+      memory threshold, and crash recovery (rate-limited). Planned restarts
+      warn players and save first; a manual stop is never treated as a crash.
+- [x] Version check: shows the game version (REST `/info`, RCON `Info`
+      fallback) on the dashboard and the instance panel, compares the
+      installed depot manifest against Steam's public branch, and offers a
+      one-click update (background DepotDownloader run; server must be stopped)
 - [ ] Multi-host aggregation in the UI, TLS guidance, i18n (reuse v1 locales)

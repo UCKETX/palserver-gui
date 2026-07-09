@@ -17,7 +17,8 @@ import { AGENT_VERSION } from "./env.js";
 import type { InstanceStore, InstanceRecord } from "./store.js";
 import type { DriverContext, ServerDriver } from "./driver.js";
 import * as dockerOps from "./docker.js";
-import { nativeDriver } from "./native.js";
+import { isInstalling, nativeDriver, updateServer } from "./native.js";
+import { cachedVersionSummary, getVersionStatus } from "./version.js";
 import { getModsStatus, installComponent, setLuaModEnabled } from "./mods.js";
 import { getLiveStatus, rest } from "./restapi.js";
 import * as files from "./files.js";
@@ -46,6 +47,8 @@ export function registerRoutes(
 
   const toSummary = async (rec: InstanceRecord): Promise<InstanceSummary> => {
     const { status } = await driverOf(rec).status(rec, ctxOf(rec));
+    // Cached only — listing instances must never wait on Steam or the server.
+    const { gameVersion, updateAvailable } = cachedVersionSummary(rec, ctxOf(rec));
     return {
       id: rec.id,
       name: rec.name,
@@ -54,6 +57,8 @@ export function registerRoutes(
       gamePort: rec.gamePort,
       status,
       createdAt: rec.createdAt,
+      gameVersion,
+      updateAvailable,
     };
   };
 
@@ -287,6 +292,28 @@ export function registerRoutes(
     const { command } = z.object({ command: z.string().min(1).max(500) }).parse(req.body);
     const output = await rconExec(rec, command);
     return { command, output };
+  });
+
+  // ── game version & updates ──
+  app.get("/api/instances/:id/version", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    return getVersionStatus(rec, ctxOf(rec));
+  });
+
+  app.post("/api/instances/:id/update", async (req, reply) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    if (rec.backend !== "native") {
+      return reply.code(409).send({ error: "更新目前僅支援原生模式的實例" });
+    }
+    if ((await driverOf(rec).status(rec, ctxOf(rec))).status === "running") {
+      return reply.code(409).send({ error: "請先停止伺服器再更新" });
+    }
+    if (isInstalling(rec.id)) {
+      return reply.code(409).send({ error: "更新已在進行中" });
+    }
+    updateServer(rec, ctxOf(rec));
+    reply.code(202);
+    return { started: true, hint: "更新進度會顯示在日誌分頁(agent 來源)" };
   });
 
   // ── automatic restarts ──

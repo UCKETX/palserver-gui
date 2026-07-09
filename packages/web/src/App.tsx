@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GiSheep, GiEggClutch } from "react-icons/gi";
-import { FiPlus } from "react-icons/fi";
+import { FiDownload, FiPlus } from "react-icons/fi";
 import type { InstanceSummary } from "@palserver/shared";
 import { AgentClient, loadConnection, saveConnection, type Connection } from "./api";
 import { InstanceDetailPage } from "./InstanceDetail";
@@ -171,7 +171,13 @@ function Dashboard({ client, onOpen }: { client: AgentClient; onOpen: (id: strin
               </div>
               <p className="mt-1 text-[13px] text-ink-muted">
                 {inst.flavor === "vanilla" ? "原味" : "模組版"} · UDP {inst.gamePort}
+                {inst.gameVersion && ` · ${inst.gameVersion}`}
               </p>
+              {inst.updateAvailable && (
+                <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border-[1.5px] border-sun/40 bg-sun/15 px-2.5 py-1 text-xs font-bold text-sun">
+                  <FiDownload className="size-3.5" /> 有新版本可更新
+                </p>
+              )}
             </button>
           ))}
         </div>

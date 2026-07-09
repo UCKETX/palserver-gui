@@ -15,6 +15,7 @@ import { MapTab } from "./MapTab";
 import { ConsoleTab } from "./ConsoleTab";
 import { SavesTab } from "./SavesTab";
 import { RestartCard } from "./RestartCard";
+import { VersionCard } from "./VersionCard";
 import { STATUS_LABELS } from "./labels";
 import { StatusBadge, btn, btnDanger, btnGhost, card, errorCls } from "./ui";
 
@@ -153,7 +154,7 @@ export function InstanceDetailPage({
         ))}
       </div>
 
-      {tab === "overview" && <OverviewTab client={client} detail={detail} />}
+      {tab === "overview" && <OverviewTab client={client} detail={detail} onRefresh={refresh} />}
       {tab === "players" && <PlayersTab client={client} instanceId={detail.id} />}
       {tab === "map" && <MapTab client={client} instanceId={detail.id} />}
       {tab === "console" && <ConsoleTab client={client} instanceId={detail.id} />}
@@ -176,7 +177,15 @@ export function InstanceDetailPage({
   );
 }
 
-function OverviewTab({ client, detail }: { client: AgentClient; detail: Detail }) {
+function OverviewTab({
+  client,
+  detail,
+  onRefresh,
+}: {
+  client: AgentClient;
+  detail: Detail;
+  onRefresh: () => void;
+}) {
   const [stats, setStats] = useState<InstanceStats | null>(null);
 
   useEffect(() => {
@@ -241,6 +250,12 @@ function OverviewTab({ client, detail }: { client: AgentClient; detail: Detail }
           <p className="text-sm text-ink-muted">伺服器未在運作中。</p>
         )}
       </div>
+      <VersionCard
+        client={client}
+        instanceId={detail.id}
+        running={detail.status === "running"}
+        onUpdateStarted={onRefresh}
+      />
       <RestartCard client={client} instanceId={detail.id} />
     </div>
   );

@@ -4,6 +4,7 @@ import {
   FiCheck,
   FiClock,
   FiDownload,
+  FiFolder,
   FiPlay,
   FiRotateCcw,
   FiSave,
@@ -12,7 +13,11 @@ import {
 } from "react-icons/fi";
 import type { BackupSchedule, SavesStatus, WorldSave } from "@palserver/shared";
 import type { AgentClient } from "./api";
+import { FileBrowserDialog } from "./FileManager";
 import { btn, btnGhost, card, errorCls, inputCls } from "./ui";
+
+/** Where a world's .sav files live, relative to the server directory. */
+const worldPath = (guid: string) => `Pal/Saved/SaveGames/0/${guid}`;
 
 const fmtSize = (n: number) =>
   n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(2)} GB` : `${(n / (1 << 20)).toFixed(1)} MB`;
@@ -31,6 +36,7 @@ export function SavesTab({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [browsing, setBrowsing] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -122,6 +128,7 @@ export function SavesTab({
           onActivate={() =>
             act(() => client.setActiveWorld(instanceId, world.guid), "已設為啟用世界(下次啟動生效)")
           }
+          onBrowse={() => setBrowsing(worldPath(world.guid))}
           onDeletePlayer={(file) => {
             if (!confirm(`刪除玩家存檔「${file}」後,該玩家再次加入時會是全新角色。\n\n確定嗎?`)) return;
             void act(() => client.deletePlayerSave(instanceId, world.guid, file), "已刪除玩家存檔");
@@ -177,6 +184,18 @@ export function SavesTab({
           </div>
         )}
       </div>
+
+      {browsing !== null && (
+        <FileBrowserDialog
+          client={client}
+          instanceId={instanceId}
+          initialPath={browsing}
+          onClose={() => {
+            setBrowsing(null);
+            void refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -187,6 +206,7 @@ function WorldCard({
   running,
   onBackup,
   onActivate,
+  onBrowse,
   onDeletePlayer,
 }: {
   world: WorldSave;
@@ -194,6 +214,7 @@ function WorldCard({
   running: boolean;
   onBackup: () => void;
   onActivate: () => void;
+  onBrowse: () => void;
   onDeletePlayer: (file: string) => void;
 }) {
   const [showPlayers, setShowPlayers] = useState(false);
@@ -232,6 +253,13 @@ function WorldCard({
               設為啟用世界
             </button>
           )}
+          <button
+            className={`${btnGhost} inline-flex items-center gap-1.5`}
+            onClick={onBrowse}
+            title="瀏覽、編輯或上傳這個世界的存檔檔案"
+          >
+            <FiFolder className="size-4" /> 開啟存檔資料夾
+          </button>
           {world.playerSaves.length > 0 && (
             <button className={btnGhost} onClick={() => setShowPlayers((v) => !v)}>
               <FiUser className="inline size-4" /> 玩家存檔

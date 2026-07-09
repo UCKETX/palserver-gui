@@ -158,8 +158,17 @@ async function ensureInstalled(
 
   onLine(`[palserver] installing Palworld dedicated server into ${root} ...`);
   const dd = await ensureDepotDownloader();
+  await runDepotDownloader(dd, root, onLine);
+}
+
+/** Download/update the dedicated server into `root`. Also used by updateServer. */
+function runDepotDownloader(
+  dd: string,
+  root: string,
+  onLine: (line: string) => void,
+): Promise<void> {
   const osFlag = IS_WIN ? "windows" : "linux";
-  await new Promise<void>((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     const child = spawn(dd, [
       "-app", PALWORLD_APP_ID,
       "-dir", root,
@@ -186,9 +195,35 @@ function writeIni(rec: InstanceRecord, ctx: DriverContext): void {
   fs.writeFileSync(path.join(configDir, "PalWorldSettings.ini"), renderPalWorldSettingsIni(rec.settings));
 }
 
-/** Instances with a server download in flight (install runs in the
- * background so POST /start returns immediately). */
+/** Instances with a server download in flight (install/update runs in the
+ * background so the request returns immediately). */
 const installing = new Set<string>();
+
+export const isInstalling = (id: string) => installing.has(id);
+
+/**
+ * Re-run DepotDownloader over an existing install to pull the latest content.
+ * Runs in the background: the instance reports "installing" and the agent log
+ * stream carries the progress. The caller must ensure the server is stopped.
+ */
+export function updateServer(rec: InstanceRecord, ctx: DriverContext): void {
+  if (installing.has(rec.id)) return;
+  installing.add(rec.id);
+  const appendLog = (line: string) => fs.appendFileSync(logFile(ctx), line + "\n");
+  void (async () => {
+    try {
+      fs.mkdirSync(ctx.instanceDir, { recursive: true });
+      appendLog("[palserver] 開始更新伺服器…");
+      const dd = await ensureDepotDownloader();
+      await runDepotDownloader(dd, serverRoot(rec, ctx), appendLog);
+      appendLog("[palserver] 更新完成");
+    } catch (err) {
+      appendLog(`[palserver] 更新失敗:${err instanceof Error ? err.message : err}`);
+    } finally {
+      installing.delete(rec.id);
+    }
+  })();
+}
 
 async function getNativeStatus(
   rec: InstanceRecord,

@@ -13,6 +13,7 @@ import { InstanceStore } from "./store.js";
 import { PresenceTracker } from "./presence.js";
 import { BackupScheduler } from "./backup-scheduler.js";
 import { RestartSupervisor } from "./supervisor.js";
+import { fetchLatest } from "./version.js";
 import { nativeDriver } from "./native.js";
 import { dockerDriver } from "./docker.js";
 import { registerRoutes } from "./routes.js";
@@ -52,6 +53,10 @@ app.addHook("onRequest", async (req, reply) => {
     await makeAuthHook(token)(req, reply);
   }
 });
+
+// Warm the Steam version cache so the first instance listing already knows
+// whether an update is available (it only ever reads the cache).
+void fetchLatest().catch(() => {});
 
 const presence = new PresenceTracker(store);
 presence.start();

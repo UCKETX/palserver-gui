@@ -19,6 +19,7 @@ import type {
   RestartPolicy,
   RestartStatus,
   SavesStatus,
+  VersionStatus,
   WorldSettings,
 } from "@palserver/shared";
 
@@ -154,6 +155,14 @@ export class AgentClient {
 
   saveWorld(id: string): Promise<{ saved: boolean }> {
     return this.request(`/api/instances/${id}/save`, { method: "POST", body: "{}" });
+  }
+
+  version(id: string): Promise<VersionStatus> {
+    return this.request(`/api/instances/${id}/version`);
+  }
+
+  updateServer(id: string): Promise<{ started: boolean; hint: string }> {
+    return this.request(`/api/instances/${id}/update`, { method: "POST", body: "{}" });
   }
 
   restartPolicy(id: string): Promise<RestartStatus> {

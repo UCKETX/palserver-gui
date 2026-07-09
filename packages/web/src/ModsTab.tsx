@@ -3,7 +3,7 @@ import { GiShield, GiScrollUnfurled } from "react-icons/gi";
 import { FiDownload, FiCheck, FiPackage, FiFolder } from "react-icons/fi";
 import type { ModComponent, ModsStatus } from "@palserver/shared";
 import type { AgentClient } from "./api";
-import { FileManager } from "./FileManager";
+import { FileBrowserDialog } from "./FileManager";
 import { btn, btnGhost, card, errorCls } from "./ui";
 
 const COMPONENTS: {
@@ -211,34 +211,3 @@ export function ModsTab({ client, instanceId }: { client: AgentClient; instanceI
   );
 }
 
-function FileBrowserDialog({
-  client,
-  instanceId,
-  initialPath,
-  onClose,
-}: {
-  client: AgentClient;
-  instanceId: string;
-  initialPath: string;
-  onClose: () => void;
-}) {
-  return (
-    <div
-      className="fixed inset-0 flex items-start justify-center overflow-y-auto bg-[rgb(35_32_48/0.55)] p-6 backdrop-blur-[3px]"
-      onClick={onClose}
-    >
-      <div
-        className={`${card} my-auto flex w-[860px] max-w-full flex-col gap-3`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-extrabold">檔案管理</h2>
-          <button className={btnGhost} onClick={onClose}>
-            關閉
-          </button>
-        </div>
-        <FileManager client={client} instanceId={instanceId} initialPath={initialPath} />
-      </div>
-    </div>
-  );
-}

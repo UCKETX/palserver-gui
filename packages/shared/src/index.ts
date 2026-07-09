@@ -75,6 +75,9 @@ export interface InstanceSummary {
   gamePort: number;
   status: InstanceStatus;
   createdAt: string;
+  /** cached, so listing instances never hits the network */
+  gameVersion: string | null;
+  updateAvailable: boolean | null;
 }
 
 export interface InstanceDetail extends InstanceSummary {
@@ -330,6 +333,23 @@ export interface RestartStatus {
   restartsLastHour: number;
   /** current memory of the server process tree, when running */
   memoryMB: number | null;
+}
+
+/* ── game version / updates ── */
+
+export interface VersionStatus {
+  supported: boolean;
+  reason?: string;
+  /** the game's own version string, e.g. "v0.7.2" (from REST /info or RCON Info) */
+  gameVersion: string | null;
+  /** manifest id of the installed content depot */
+  installedBuild: string | null;
+  /** manifest id on Steam's public branch */
+  latestBuild: string | null;
+  latestUpdatedAt: string | null;
+  /** null when we can't tell (adopted Steam install, or Steam unreachable) */
+  updateAvailable: boolean | null;
+  checkedAt: string | null;
 }
 
 export interface AgentInfo {

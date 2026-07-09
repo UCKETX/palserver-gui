@@ -199,7 +199,7 @@ export function registerRoutes(
     return getModsStatus(rec, ctxOf(rec));
   });
 
-  app.post("/api/instances/:id/mods/:component/install", async (req) => {
+  app.post("/api/instances/:id/mods/:component/install", async (req, reply) => {
     const rec = getOr404((req.params as { id: string }).id);
     const component = z
       .enum(["ue4ss", "paldefender"])
@@ -207,6 +207,11 @@ export function registerRoutes(
     const { channel } = z
       .object({ channel: z.enum(["stable", "beta"]).default("stable") })
       .parse(req.body ?? {});
+    // The mod DLLs are loaded by the running server; Windows locks them, so an
+    // in-place overwrite fails. Require a stopped server for install/update.
+    if (await isRunning(rec)) {
+      return reply.code(409).send({ error: "請先停止伺服器再安裝或更新模組(執行中時檔案被鎖定無法覆寫)" });
+    }
     const { version } = await installComponent(rec, ctxOf(rec), component, channel);
     return { installed: component, version, applied: "on-next-restart" };
   });

@@ -26,7 +26,15 @@ const COMPONENTS: {
   },
 ];
 
-export function ModsTab({ client, instanceId }: { client: AgentClient; instanceId: string }) {
+export function ModsTab({
+  client,
+  instanceId,
+  running,
+}: {
+  client: AgentClient;
+  instanceId: string;
+  running: boolean;
+}) {
   const [mods, setMods] = useState<ModsStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -83,6 +91,11 @@ export function ModsTab({ client, instanceId }: { client: AgentClient; instanceI
   return (
     <div className="flex flex-col gap-4">
       {error && <p className={errorCls}>{error}</p>}
+      {running && (
+        <p className="rounded-xl bg-sun/10 px-3 py-2 text-[13px] font-bold text-sun">
+          伺服器運作中:安裝或更新模組需要先停止伺服器(執行中時模組檔案被鎖定,無法覆寫)。
+        </p>
+      )}
       <div className="grid gap-4 sm:grid-cols-2">
         {COMPONENTS.map((c) => {
           const state = mods[c.id];
@@ -105,7 +118,8 @@ export function ModsTab({ client, instanceId }: { client: AgentClient; instanceI
                     <button
                       className={`${btn} inline-flex items-center gap-1.5`}
                       onClick={() => install(c.id)}
-                      disabled={busy !== null}
+                      disabled={busy !== null || running}
+                      title={running ? "請先停止伺服器" : undefined}
                     >
                       <FiDownload className="size-4" />
                       {busy === c.id ? "安裝中…" : state.installed ? "更新到最新版" : "安裝穩定版"}
@@ -113,8 +127,8 @@ export function ModsTab({ client, instanceId }: { client: AgentClient; instanceI
                     <button
                       className={`${btnGhost} inline-flex items-center gap-1.5`}
                       onClick={() => install(c.id, "beta")}
-                      disabled={busy !== null}
-                      title="安裝最新測試版(含較新功能,可能不穩定)"
+                      disabled={busy !== null || running}
+                      title={running ? "請先停止伺服器" : "安裝最新測試版(含較新功能,可能不穩定)"}
                     >
                       安裝測試版
                     </button>

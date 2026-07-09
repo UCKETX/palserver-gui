@@ -198,7 +198,9 @@ export function InstanceDetailPage({
       {tab === "engine" && (
         <EngineTab client={client} instanceId={detail.id} running={detail.status === "running"} />
       )}
-      {tab === "mods" && <ModsTab client={client} instanceId={detail.id} />}
+      {tab === "mods" && (
+        <ModsTab client={client} instanceId={detail.id} running={detail.status === "running"} />
+      )}
       {tab === "paldefender" && (
         <PalDefenderTab client={client} instanceId={detail.id} running={detail.status === "running"} />
       )}

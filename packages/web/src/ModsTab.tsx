@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { GiShield, GiScrollUnfurled } from "react-icons/gi";
-import { FiDownload, FiCheck, FiPackage } from "react-icons/fi";
+import { FiDownload, FiCheck, FiPackage, FiFolder } from "react-icons/fi";
 import type { ModComponent, ModsStatus } from "@palserver/shared";
 import type { AgentClient } from "./api";
-import { btn, card, errorCls } from "./ui";
+import { FileManager } from "./FileManager";
+import { btn, btnGhost, card, errorCls } from "./ui";
 
 const COMPONENTS: {
   id: ModComponent;
@@ -29,6 +30,7 @@ export function ModsTab({ client, instanceId }: { client: AgentClient; instanceI
   const [mods, setMods] = useState<ModsStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [browsing, setBrowsing] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -115,12 +117,20 @@ export function ModsTab({ client, instanceId }: { client: AgentClient; instanceI
       <p className="text-[13px] text-ink-muted">安裝或更新後,重啟伺服器才會生效。</p>
 
       <div className={card}>
-        <h3 className="mb-2 text-sm font-extrabold text-ink-muted">Lua 模組(UE4SS)</h3>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-extrabold text-ink-muted">Lua 模組(UE4SS)</h3>
+          <button
+            className={`${btnGhost} inline-flex items-center gap-1.5`}
+            onClick={() => setBrowsing("Pal/Binaries/Win64")}
+          >
+            <FiFolder className="size-4" /> 開啟模組資料夾
+          </button>
+        </div>
         {mods.luaMods.length === 0 ? (
           <p className="text-[13px] text-ink-muted">
-            尚無 Lua 模組。安裝 UE4SS 後,把模組資料夾放進伺服器目錄的
+            尚無 Lua 模組。安裝 UE4SS 後,用上方的「開啟模組資料夾」上傳模組,或把資料夾放進
             <code className="mx-1 rounded bg-card-soft px-1.5 py-0.5 text-xs">Pal\Binaries\Win64\ue4ss\Mods</code>
-            即可在此管理。
+            。
           </p>
         ) : (
           <div className="flex flex-col divide-y divide-line">
@@ -145,12 +155,18 @@ export function ModsTab({ client, instanceId }: { client: AgentClient; instanceI
       </div>
 
       <div className={card}>
-        <h3 className="mb-2 text-sm font-extrabold text-ink-muted">Pak 模組</h3>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-extrabold text-ink-muted">Pak 模組</h3>
+          <button
+            className={`${btnGhost} inline-flex items-center gap-1.5`}
+            onClick={() => setBrowsing("Pal/Content/Paks")}
+          >
+            <FiFolder className="size-4" /> 開啟 Paks 資料夾
+          </button>
+        </div>
         {mods.pakMods.length === 0 ? (
           <p className="text-[13px] text-ink-muted">
-            尚無 Pak 模組。把 .pak 檔放進伺服器目錄的
-            <code className="mx-1 rounded bg-card-soft px-1.5 py-0.5 text-xs">Pal\Content\Paks</code>
-            (Blueprint 模組放 LogicMods 子資料夾)。
+            尚無 Pak 模組。用上方的「開啟 Paks 資料夾」上傳 .pak 檔(Blueprint 模組放 LogicMods 子資料夾)。
           </p>
         ) : (
           <ul className="flex flex-col gap-1.5">
@@ -161,6 +177,65 @@ export function ModsTab({ client, instanceId }: { client: AgentClient; instanceI
             ))}
           </ul>
         )}
+      </div>
+
+      <div className={card}>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-extrabold text-ink-muted">伺服器檔案</h3>
+          <button
+            className={`${btnGhost} inline-flex items-center gap-1.5`}
+            onClick={() => setBrowsing("")}
+          >
+            <FiFolder className="size-4" /> 瀏覽全部
+          </button>
+        </div>
+        <p className="text-[13px] text-ink-muted">
+          直接編輯、上傳或刪除伺服器目錄裡的檔案(例如 PalDefender 的 Config.json)。
+        </p>
+      </div>
+
+      {browsing !== null && (
+        <FileBrowserDialog
+          client={client}
+          instanceId={instanceId}
+          initialPath={browsing}
+          onClose={() => {
+            setBrowsing(null);
+            void refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function FileBrowserDialog({
+  client,
+  instanceId,
+  initialPath,
+  onClose,
+}: {
+  client: AgentClient;
+  instanceId: string;
+  initialPath: string;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 flex items-start justify-center overflow-y-auto bg-[rgb(35_32_48/0.55)] p-6 backdrop-blur-[3px]"
+      onClick={onClose}
+    >
+      <div
+        className={`${card} my-auto flex w-[860px] max-w-full flex-col gap-3`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-extrabold">檔案管理</h2>
+          <button className={btnGhost} onClick={onClose}>
+            關閉
+          </button>
+        </div>
+        <FileManager client={client} instanceId={instanceId} initialPath={initialPath} />
       </div>
     </div>
   );

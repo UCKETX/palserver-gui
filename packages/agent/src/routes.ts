@@ -13,6 +13,9 @@ import type { DriverContext, ServerDriver } from "./driver.js";
 import * as dockerOps from "./docker.js";
 import { nativeDriver } from "./native.js";
 import { getModsStatus, installComponent, setLuaModEnabled } from "./mods.js";
+import * as files from "./files.js";
+import fs from "node:fs";
+import { pipeline } from "node:stream/promises";
 import { z } from "zod";
 
 const drivers: Record<InstanceRecord["backend"], ServerDriver> = {
@@ -175,6 +178,54 @@ export function registerRoutes(app: FastifyInstance, store: InstanceStore): void
     const body = z.object({ name: z.string(), enabled: z.boolean() }).parse(req.body);
     setLuaModEnabled(rec, ctxOf(rec), body.name, body.enabled);
     return getModsStatus(rec, ctxOf(rec));
+  });
+
+  // ── file browser (native instances; confined to the server directory) ──
+  const PathQuery = z.object({ path: z.string().max(500).default("") });
+
+  app.get("/api/instances/:id/files", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const { path: rel } = PathQuery.parse(req.query);
+    return { path: rel, entries: files.listDir(files.fileRoot(rec, ctxOf(rec)), rel) };
+  });
+
+  app.get("/api/instances/:id/files/content", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const { path: rel } = PathQuery.parse(req.query);
+    return files.readFile(files.fileRoot(rec, ctxOf(rec)), rel);
+  });
+
+  app.put("/api/instances/:id/files/content", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const body = z.object({ path: z.string().max(500), content: z.string() }).parse(req.body);
+    files.writeFile(files.fileRoot(rec, ctxOf(rec)), body.path, body.content);
+    return { saved: body.path, applied: "on-next-restart" };
+  });
+
+  app.post("/api/instances/:id/files/dir", async (req, reply) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const body = z.object({ path: z.string().min(1).max(500) }).parse(req.body);
+    files.makeDir(files.fileRoot(rec, ctxOf(rec)), body.path);
+    reply.code(201);
+    return { created: body.path };
+  });
+
+  app.delete("/api/instances/:id/files", async (req, reply) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const { path: rel } = z.object({ path: z.string().min(1).max(500) }).parse(req.query);
+    files.deletePath(files.fileRoot(rec, ctxOf(rec)), rel);
+    reply.code(204);
+  });
+
+  // Raw body upload: `PUT /files/upload?path=Mods/foo.pak` with the file bytes.
+  // Streamed to disk so multi-hundred-MB pak mods don't buffer in memory.
+  app.put("/api/instances/:id/files/upload", async (req, reply) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const { path: rel } = z.object({ path: z.string().min(1).max(500) }).parse(req.query);
+    const target = files.uploadTarget(files.fileRoot(rec, ctxOf(rec)), rel);
+    await pipeline(req.raw, fs.createWriteStream(target));
+    reply.code(201);
+    return { uploaded: rel, size: fs.statSync(target).size };
   });
 
   app.get("/api/instances/:id/logs", { websocket: true }, (socket, req) => {

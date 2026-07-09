@@ -84,6 +84,9 @@ Real-server verification needs an x86_64 Linux host.
 - [x] Mods tab (native backend): one-click install/update of PalDefender
       (anti-cheat, ex-Palguard) and UE4SS from GitHub releases, Lua-mod
       enable/disable (both UE4SS layouts), pak-mod listing
+- [x] File manager (native backend): browse / edit text files / upload
+      (streamed, large paks ok) / delete / mkdir, confined to the instance's
+      server directory; "編輯原始檔" opens PalWorldSettings.ini directly
 - [ ] Player management via Palworld REST API / RCON passthrough
 - [ ] Save migration: import an existing world into an instance (v1 parity)
 - [ ] Failure detection surfaced in UI (process exits / container crash loops)

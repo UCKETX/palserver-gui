@@ -12,9 +12,13 @@ import { loadOrCreateToken, makeAuthHook } from "./auth.js";
 import { InstanceStore } from "./store.js";
 import { registerRoutes } from "./routes.js";
 
-const app = Fastify({ logger: true });
+const app = Fastify({ logger: true, bodyLimit: 1024 * 1024 * 1024 });
 const token = loadOrCreateToken();
 const store = new InstanceStore();
+
+// File uploads stream straight to disk (see PUT /files/upload), so hand the
+// raw request through instead of buffering it into a body.
+app.addContentTypeParser("application/octet-stream", (_req, _payload, done) => done(null, undefined));
 
 await app.register(cors, { origin: true });
 await app.register(websocket);

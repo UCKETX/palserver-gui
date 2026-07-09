@@ -104,6 +104,21 @@ export interface ModsStatus {
 
 export type ModComponent = "ue4ss" | "paldefender";
 
+/** One entry in the instance file browser (rooted at the server dir). */
+export interface DirEntry {
+  name: string;
+  isDir: boolean;
+  size: number;
+  modifiedAt: string;
+  /** text file, small enough to open in the editor */
+  editable: boolean;
+}
+
+export interface FileContent {
+  path: string;
+  content: string;
+}
+
 export interface AgentInfo {
   name: string;
   version: string;

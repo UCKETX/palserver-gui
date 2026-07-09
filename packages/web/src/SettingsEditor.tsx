@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { FiFileText } from "react-icons/fi";
 import {
   OPTION_CATEGORIES,
   WORLD_OPTIONS,
@@ -8,8 +9,16 @@ import {
   type WorldOptionValue,
   type WorldSettings,
 } from "@palserver/shared";
+import type { AgentClient } from "./api";
+import { FileEditor } from "./FileManager";
 import { CATEGORY_LABELS, ENUM_LABELS, OPTION_LABELS } from "./labels";
 import { btn, btnGhost, errorCls, inputCls } from "./ui";
+
+/** Where the native driver renders the ini, relative to the server dir. */
+const INI_PATHS = [
+  "Pal/Saved/Config/WindowsServer/PalWorldSettings.ini",
+  "Pal/Saved/Config/LinuxServer/PalWorldSettings.ini",
+];
 
 /** Schema-driven world-settings editor. Renders every option in
  * WORLD_OPTIONS by its metadata; no per-option UI code. */
@@ -17,14 +26,21 @@ export function SettingsEditor({
   settings,
   saving,
   onSave,
+  client,
+  instanceId,
+  canEditRaw,
 }: {
   settings: WorldSettings;
   saving: boolean;
   onSave: (patch: Partial<WorldSettings>) => Promise<void>;
+  client: AgentClient;
+  instanceId: string;
+  canEditRaw: boolean;
 }) {
   const [category, setCategory] = useState<OptionCategory>("server");
   const [draft, setDraft] = useState<Partial<WorldSettings>>({});
   const [error, setError] = useState<string | null>(null);
+  const [rawPath, setRawPath] = useState<string | null>(null);
 
   const dirtyKeys = useMemo(
     () =>
@@ -51,22 +67,45 @@ export function SettingsEditor({
     }
   };
 
+  /** The ini lives under the platform dir of whichever OS the agent runs on;
+   * try Windows first and fall back to Linux. */
+  const openRaw = async () => {
+    setError(null);
+    for (const candidate of INI_PATHS) {
+      try {
+        await client.readFile(instanceId, candidate);
+        setRawPath(candidate);
+        return;
+      } catch {
+        /* try next */
+      }
+    }
+    setError("找不到 PalWorldSettings.ini — 先啟動一次伺服器讓它生成設定檔");
+  };
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap gap-2">
-        {OPTION_CATEGORIES.map((c) => (
-          <button
-            key={c}
-            className={
-              c === category
-                ? "rounded-full bg-pal px-4 py-1.5 text-[13px] font-extrabold text-white"
-                : "rounded-full border-2 border-line bg-card-soft px-4 py-1.5 text-[13px] font-extrabold text-ink-muted transition hover:border-pal"
-            }
-            onClick={() => setCategory(c)}
-          >
-            {CATEGORY_LABELS[c]}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-2">
+          {OPTION_CATEGORIES.map((c) => (
+            <button
+              key={c}
+              className={
+                c === category
+                  ? "rounded-full bg-pal px-4 py-1.5 text-[13px] font-extrabold text-white"
+                  : "rounded-full border-2 border-line bg-card-soft px-4 py-1.5 text-[13px] font-extrabold text-ink-muted transition hover:border-pal"
+              }
+              onClick={() => setCategory(c)}
+            >
+              {CATEGORY_LABELS[c]}
+            </button>
+          ))}
+        </div>
+        {canEditRaw && (
+          <button className={`${btnGhost} inline-flex items-center gap-1.5`} onClick={openRaw}>
+            <FiFileText className="size-4" /> 編輯原始檔
           </button>
-        ))}
+        )}
       </div>
 
       <div className="flex flex-col divide-y divide-line">
@@ -90,6 +129,15 @@ export function SettingsEditor({
             </button>
           </div>
         </div>
+      )}
+
+      {rawPath && (
+        <FileEditor
+          client={client}
+          instanceId={instanceId}
+          path={rawPath}
+          onClose={() => setRawPath(null)}
+        />
       )}
     </div>
   );

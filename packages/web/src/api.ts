@@ -1,6 +1,8 @@
 import type {
   AgentInfo,
   CreateInstanceInput,
+  DirEntry,
+  FileContent,
   InstanceDetail,
   InstanceStats,
   InstanceSummary,
@@ -95,6 +97,51 @@ export class AgentClient {
       method: "POST",
       body: JSON.stringify({ name, enabled }),
     });
+  }
+
+  listFiles(id: string, path: string): Promise<{ path: string; entries: DirEntry[] }> {
+    return this.request(`/api/instances/${id}/files?path=${encodeURIComponent(path)}`);
+  }
+
+  readFile(id: string, path: string): Promise<FileContent> {
+    return this.request(`/api/instances/${id}/files/content?path=${encodeURIComponent(path)}`);
+  }
+
+  writeFile(id: string, path: string, content: string): Promise<{ saved: string }> {
+    return this.request(`/api/instances/${id}/files/content`, {
+      method: "PUT",
+      body: JSON.stringify({ path, content }),
+    });
+  }
+
+  makeDir(id: string, path: string): Promise<{ created: string }> {
+    return this.request(`/api/instances/${id}/files/dir`, {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    });
+  }
+
+  deleteFile(id: string, path: string): Promise<void> {
+    return this.request(`/api/instances/${id}/files?path=${encodeURIComponent(path)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async uploadFile(id: string, path: string, file: File): Promise<{ uploaded: string; size: number }> {
+    const res = await fetch(
+      `${this.conn.url}/api/instances/${id}/files/upload?path=${encodeURIComponent(path)}`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${this.conn.token}`,
+          "Content-Type": "application/octet-stream",
+        },
+        body: file,
+      },
+    );
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    if (!res.ok) throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+    return body as { uploaded: string; size: number };
   }
 
   logsSocket(id: string): WebSocket {

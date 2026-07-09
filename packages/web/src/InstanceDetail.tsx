@@ -140,7 +140,14 @@ export function InstanceDetailPage({
 
       {tab === "overview" && <OverviewTab client={client} detail={detail} />}
       {tab === "settings" && (
-        <SettingsEditor settings={detail.settings} saving={saving} onSave={saveSettings} />
+        <SettingsEditor
+          settings={detail.settings}
+          saving={saving}
+          onSave={saveSettings}
+          client={client}
+          instanceId={detail.id}
+          canEditRaw={detail.backend === "native"}
+        />
       )}
       {tab === "mods" && <ModsTab client={client} instanceId={detail.id} />}
       {tab === "logs" && <LogsTab client={client} instanceId={detail.id} />}

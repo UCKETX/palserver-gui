@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiImage, FiRefreshCw, FiRepeat, FiX } from "react-icons/fi";
+import { FiCrosshair, FiImage, FiRefreshCw, FiRepeat, FiX } from "react-icons/fi";
 import { MAP_BOUND, savToMap, type LiveStatus, type RestPlayer } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { btn, btnGhost, card, errorCls, inputCls } from "./ui";
@@ -13,7 +13,26 @@ import { btn, btnGhost, card, errorCls, inputCls } from "./ui";
 const BG_KEY = "palserver.mapBackground";
 const FLIP_Y_KEY = "palserver.mapFlipY";
 const FLIP_X_KEY = "palserver.mapFlipX";
+const CALIB_KEY = "palserver.mapCalibration";
 const SIZE = 2 * MAP_BOUND; // svg viewBox is the map square itself
+
+/** How the background image is laid over the coordinate square. Map images
+ * from different sources (and different game versions — Sakurajima, Feybreak…)
+ * don't all frame the square identically, so the user can nudge/zoom it. */
+interface Calibration {
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+}
+const DEFAULT_CALIBRATION: Calibration = { scale: 1, offsetX: 0, offsetY: 0 };
+
+function loadCalibration(): Calibration {
+  try {
+    return { ...DEFAULT_CALIBRATION, ...JSON.parse(localStorage.getItem(CALIB_KEY) ?? "{}") };
+  } catch {
+    return DEFAULT_CALIBRATION;
+  }
+}
 
 export function MapTab({ client, instanceId }: { client: AgentClient; instanceId: string }) {
   const [live, setLive] = useState<LiveStatus | null>(null);
@@ -21,6 +40,8 @@ export function MapTab({ client, instanceId }: { client: AgentClient; instanceId
   const [background, setBackground] = useState(() => localStorage.getItem(BG_KEY) ?? "");
   const [flipX, setFlipX] = useState(() => localStorage.getItem(FLIP_X_KEY) === "1");
   const [flipY, setFlipY] = useState(() => localStorage.getItem(FLIP_Y_KEY) === "1");
+  const [calib, setCalibState] = useState<Calibration>(loadCalibration);
+  const [showCalib, setShowCalib] = useState(false);
   const [urlDraft, setUrlDraft] = useState("");
   const [hovered, setHovered] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -63,6 +84,12 @@ export function MapTab({ client, instanceId }: { client: AgentClient; instanceId
     const next = !flipX;
     setFlipX(next);
     localStorage.setItem(FLIP_X_KEY, next ? "1" : "0");
+  };
+
+  const setCalibration = (patch: Partial<Calibration>) => {
+    const next = { ...calib, ...patch };
+    setCalibState(next);
+    localStorage.setItem(CALIB_KEY, JSON.stringify(next));
   };
 
   if (!live) return <p className="text-ink-muted">{error ?? "載入中…"}</p>;
@@ -108,12 +135,20 @@ export function MapTab({ client, instanceId }: { client: AgentClient; instanceId
             <FiImage className="size-4" /> 上傳底圖
           </button>
           {background && (
-            <button
-              className={`${btnGhost} inline-flex items-center gap-1.5 text-berry hover:border-berry`}
-              onClick={() => saveBackground("")}
-            >
-              <FiX className="size-4" /> 移除底圖
-            </button>
+            <>
+              <button
+                className={`${btnGhost} inline-flex items-center gap-1.5 ${showCalib ? "border-pal text-pal" : ""}`}
+                onClick={() => setShowCalib((v) => !v)}
+              >
+                <FiCrosshair className="size-4" /> 校正底圖
+              </button>
+              <button
+                className={`${btnGhost} inline-flex items-center gap-1.5 text-berry hover:border-berry`}
+                onClick={() => saveBackground("")}
+              >
+                <FiX className="size-4" /> 移除底圖
+              </button>
+            </>
           )}
           <input
             ref={fileRef}
@@ -142,6 +177,46 @@ export function MapTab({ client, instanceId }: { client: AgentClient; instanceId
         </div>
       )}
 
+      {background && showCalib && (
+        <div className={`${card} flex flex-col gap-3`}>
+          <p className="text-[13px] text-ink-muted">
+            調整底圖直到地形與玩家實際位置吻合(不同來源、不同遊戲版本的地圖裁切範圍不一樣)。
+          </p>
+          <Slider
+            label="縮放"
+            value={calib.scale}
+            min={0.5}
+            max={2}
+            step={0.005}
+            format={(v) => `${(v * 100).toFixed(1)}%`}
+            onChange={(scale) => setCalibration({ scale })}
+          />
+          <Slider
+            label="水平位移(東西)"
+            value={calib.offsetX}
+            min={-MAP_BOUND}
+            max={MAP_BOUND}
+            step={5}
+            format={(v) => String(Math.round(v))}
+            onChange={(offsetX) => setCalibration({ offsetX })}
+          />
+          <Slider
+            label="垂直位移(南北)"
+            value={calib.offsetY}
+            min={-MAP_BOUND}
+            max={MAP_BOUND}
+            step={5}
+            format={(v) => String(Math.round(v))}
+            onChange={(offsetY) => setCalibration({ offsetY })}
+          />
+          <div>
+            <button className={btnGhost} onClick={() => setCalibration(DEFAULT_CALIBRATION)}>
+              重置校正
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className={`${card} overflow-hidden p-2`}>
         <svg
           viewBox={`${-MAP_BOUND} ${-MAP_BOUND} ${SIZE} ${SIZE}`}
@@ -150,10 +225,10 @@ export function MapTab({ client, instanceId }: { client: AgentClient; instanceId
           {background && (
             <image
               href={background}
-              x={-MAP_BOUND}
-              y={-MAP_BOUND}
-              width={SIZE}
-              height={SIZE}
+              x={-MAP_BOUND * calib.scale + calib.offsetX}
+              y={-MAP_BOUND * calib.scale + calib.offsetY}
+              width={SIZE * calib.scale}
+              height={SIZE * calib.scale}
               preserveAspectRatio="none"
             />
           )}
@@ -175,6 +250,40 @@ export function MapTab({ client, instanceId }: { client: AgentClient; instanceId
         座標為遊戲內地圖座標(範圍 ±{MAP_BOUND},x 向東、y 向北,北方朝上)。
         底圖方向若與遊戲不同,可用「翻轉南北 / 翻轉東西」校正。
       </p>
+    </div>
+  );
+}
+
+function Slider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  format,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  format: (v: number) => string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <span className="w-32 text-[13px] font-bold text-ink-muted">{label}</span>
+      <input
+        type="range"
+        className="min-w-40 flex-1 accent-(--color-pal)"
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+      <span className="w-16 text-right text-[13px] font-bold">{format(value)}</span>
     </div>
   );
 }

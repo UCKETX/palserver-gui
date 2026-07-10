@@ -55,21 +55,48 @@ const ue4ssModsDir = (root: string) => {
   return fs.existsSync(nested) ? nested : path.join(win64Dir(root), "Mods");
 };
 const paksDir = (root: string) => path.join(root, "Pal", "Content", "Paks");
-/** Marker recording which versions the GUI installed. */
+/** Marker recording which versions the GUI installed, plus the top-level
+ * files each component's archive extracted — so uninstall removes exactly
+ * those. Older markers only carry the version strings. */
+interface ModsMarker {
+  paldefender?: string;
+  ue4ss?: string;
+  files?: Partial<Record<ModComponent, string[]>>;
+}
 const markerFile = (root: string) => path.join(win64Dir(root), ".palserver-mods.json");
 
-function readMarker(root: string): Partial<Record<ModComponent, string>> {
+function readMarker(root: string): ModsMarker {
   try {
-    return JSON.parse(fs.readFileSync(markerFile(root), "utf8"));
+    return JSON.parse(fs.readFileSync(markerFile(root), "utf8")) as ModsMarker;
   } catch {
     return {};
   }
 }
 
-function writeMarker(root: string, component: ModComponent, version: string): void {
-  const marker = { ...readMarker(root), [component]: version };
+function writeMarker(root: string, component: ModComponent, version: string, files?: string[]): void {
+  const marker = readMarker(root);
+  marker[component] = version;
+  if (files) marker.files = { ...(marker.files ?? {}), [component]: files };
   fs.writeFileSync(markerFile(root), JSON.stringify(marker, null, 2));
 }
+
+/** Top-level entries (files/dirs) an archive extracts, for uninstall tracking. */
+async function archiveTopLevel(zipPath: string): Promise<string[]> {
+  const { stdout } = await execFileP("tar", ["-tf", zipPath]);
+  const top = new Set<string>();
+  for (const line of stdout.split("\n")) {
+    const seg = line.trim().replace(/^\.\//, "").split(/[\\/]/)[0];
+    if (seg) top.add(seg);
+  }
+  return [...top];
+}
+
+/** Fallback removal set for mods installed before we tracked files. Excludes
+ * any shared proxy DLL to avoid breaking the other component. */
+const DEFAULT_MOD_FILES: Record<ModComponent, string[]> = {
+  paldefender: ["PalDefender.dll", "PalDefender"],
+  ue4ss: ["UE4SS.dll", "UE4SS-settings.ini", "ue4ss", "Mods"],
+};
 
 export function getModsStatus(rec: InstanceRecord, ctx: DriverContext): ModsStatus {
   const unsupported = (reason: string): ModsStatus => ({
@@ -239,8 +266,46 @@ export async function installComponent(
 
   // Both zips are laid out relative to Pal/Binaries/Win64.
   // (tar on Windows 10+/macOS is bsdtar, which extracts zip archives.)
+  const files = await archiveTopLevel(zipPath);
   await execFileP("tar", ["-xf", zipPath, "-C", win64Dir(root)]);
   fs.rmSync(zipPath, { force: true });
-  writeMarker(root, component, version);
+  writeMarker(root, component, version, files);
   return { version };
+}
+
+/** Uninstall a component: remove the files its install extracted (tracked in
+ * the marker; falls back to known defaults for older installs). Never removes
+ * a file the other still-installed component also claims, so removing one mod
+ * can't break the other. Caller must ensure the server is stopped (DLLs are
+ * locked while running). */
+export async function removeComponent(
+  rec: InstanceRecord,
+  ctx: DriverContext,
+  component: ModComponent,
+): Promise<void> {
+  const status = getModsStatus(rec, ctx);
+  if (!status.supported) {
+    throw Object.assign(new Error(status.reason ?? "mods unsupported"), { statusCode: 409 });
+  }
+  const root = serverRoot(rec, ctx);
+  const w64 = win64Dir(root);
+  const marker = readMarker(root);
+
+  const other: ModComponent = component === "ue4ss" ? "paldefender" : "ue4ss";
+  const keep = new Set(
+    status[other].installed ? (marker.files?.[other] ?? DEFAULT_MOD_FILES[other]) : [],
+  );
+  const targets = (
+    marker.files?.[component]?.length ? marker.files[component]! : DEFAULT_MOD_FILES[component]
+  ).filter((f) => !keep.has(f));
+
+  for (const rel of targets) {
+    const p = path.resolve(w64, rel);
+    if (p === w64 || !p.startsWith(w64 + path.sep)) continue; // 安全:必須落在 Win64 之內
+    fs.rmSync(p, { recursive: true, force: true });
+  }
+
+  delete marker[component];
+  if (marker.files) delete marker.files[component];
+  fs.writeFileSync(markerFile(root), JSON.stringify(marker, null, 2));
 }

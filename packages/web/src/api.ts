@@ -160,6 +160,10 @@ export class AgentClient {
     });
   }
 
+  uninstallMod(id: string, component: ModComponent): Promise<{ removed: string }> {
+    return this.request(`/api/instances/${id}/mods/${component}/uninstall`, { method: "POST" });
+  }
+
   toggleLuaMod(id: string, name: string, enabled: boolean): Promise<ModsStatus> {
     return this.request(`/api/instances/${id}/mods/lua-toggle`, {
       method: "POST",

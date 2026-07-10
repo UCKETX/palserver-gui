@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { GiShield, GiScrollUnfurled } from "react-icons/gi";
-import { FiDownload, FiCheck, FiPackage, FiFolder } from "react-icons/fi";
+import { FiDownload, FiCheck, FiPackage, FiFolder, FiTrash2, FiAlertTriangle } from "react-icons/fi";
 import type { ModComponent, ModsStatus } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { FileBrowserDialog } from "./FileManager";
@@ -69,6 +69,23 @@ export function ModsTab({
     }
   };
 
+  const uninstall = async (component: ModComponent) => {
+    const label = component === "paldefender" ? "PalDefender" : "UE4SS";
+    if (!confirm(`確定要移除 ${label} 嗎?\n\n會刪除它安裝的檔案(${label === "UE4SS" ? "含 Lua 模組" : "含設定檔"}也會一併移除)。此動作無法復原,重啟後生效。`)) {
+      return;
+    }
+    setBusy(component);
+    setError(null);
+    try {
+      await client.uninstallMod(instanceId, component);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const toggle = async (name: string, enabled: boolean) => {
     try {
       setMods(await client.toggleLuaMod(instanceId, name, enabled));
@@ -91,9 +108,16 @@ export function ModsTab({
   return (
     <div className="flex flex-col gap-4">
       {error && <p className={errorCls}>{error}</p>}
+      <p className="inline-flex items-start gap-2 rounded-xl border-2 border-sun/40 bg-sun/10 px-3 py-2 text-[13px] text-sun">
+        <FiAlertTriangle className="mt-0.5 size-4 shrink-0" />
+        <span>
+          每次 <b>Palworld 改版</b>後,PalDefender / UE4SS 常會<b>暫時無法使用</b>,要等模組作者釋出相容版本
+          (通常改版後幾天內)。若改版後伺服器啟動異常或閃退,先回這裡<b>更新到最新版</b>,或先<b>移除</b>模組再開服。
+        </span>
+      </p>
       {running && (
         <p className="rounded-xl bg-sun/10 px-3 py-2 text-[13px] font-bold text-sun">
-          伺服器運作中:安裝或更新模組需要先停止伺服器(執行中時模組檔案被鎖定,無法覆寫)。
+          伺服器運作中:安裝、更新或移除模組需要先停止伺服器(執行中時模組檔案被鎖定)。
         </p>
       )}
       <div className="grid gap-4 sm:grid-cols-2">
@@ -132,6 +156,17 @@ export function ModsTab({
                     >
                       安裝測試版
                     </button>
+                    {state.installed && (
+                      <button
+                        className={`${btnGhost} inline-flex items-center gap-1.5 text-berry hover:border-berry`}
+                        onClick={() => uninstall(c.id)}
+                        disabled={busy !== null || running}
+                        title={running ? "請先停止伺服器" : "移除此模組"}
+                      >
+                        <FiTrash2 className="size-4" />
+                        {busy === c.id ? "處理中…" : "移除"}
+                      </button>
+                    )}
                   </div>
                   {c.id === "paldefender" && (
                     <p className="mt-2 text-xs text-ink-muted">

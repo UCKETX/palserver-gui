@@ -32,7 +32,7 @@ import * as dockerOps from "./docker.js";
 import { SERVER_LAUNCHER, classifyServerDir, isInstalling, nativeDriver, updateServer } from "./native.js";
 import { cachedVersionSummary, getVersionStatus } from "./version.js";
 import { getConnectionInfo } from "./connectivity.js";
-import { getModsStatus, installComponent, installedEnhancements, setLuaModEnabled } from "./mods.js";
+import { getModsStatus, installComponent, installedEnhancements, removeComponent, setLuaModEnabled } from "./mods.js";
 import { getModerationLists, moderation } from "./moderation.js";
 import { getLiveStatus, rest } from "./restapi.js";
 import * as files from "./files.js";
@@ -275,6 +275,19 @@ export function registerRoutes(
     }
     const { version } = await installComponent(rec, ctxOf(rec), component, channel);
     return { installed: component, version, applied: "on-next-restart" };
+  });
+
+  app.post("/api/instances/:id/mods/:component/uninstall", async (req, reply) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const component = z
+      .enum(["ue4ss", "paldefender"])
+      .parse((req.params as { component: string }).component);
+    // Same lock issue as install: the DLLs are held by the running server.
+    if (await isRunning(rec)) {
+      return reply.code(409).send({ error: "請先停止伺服器再移除模組(執行中時檔案被鎖定無法刪除)" });
+    }
+    await removeComponent(rec, ctxOf(rec), component);
+    return { removed: component };
   });
 
   app.post("/api/instances/:id/mods/lua-toggle", async (req) => {

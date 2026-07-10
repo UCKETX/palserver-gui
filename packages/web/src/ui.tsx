@@ -1,5 +1,6 @@
 import type { InstanceStatus } from "@palserver/shared";
 import { STATUS_LABELS } from "./labels";
+import { t, useI18n } from "./i18n";
 
 export const btn =
   "rounded-full bg-pal px-5 py-2 text-sm font-extrabold text-white transition " +
@@ -27,12 +28,13 @@ const STATUS_CLS: Record<InstanceStatus, string> = {
 };
 
 export function StatusBadge({ status }: { status: InstanceStatus }) {
+  useI18n();
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border-[1.5px] px-3 py-1 text-xs font-bold ${STATUS_CLS[status]}`}
     >
       <span className="size-2 rounded-full bg-current" />
-      {STATUS_LABELS[status]}
+      {t(STATUS_LABELS[status])}
     </span>
   );
 }

@@ -39,7 +39,7 @@ export function AnnouncementPopup() {
       <div className={`${card} w-[460px] max-w-full`}>
         <div className="flex items-center justify-between gap-3">
           <h2 className="inline-flex items-center gap-2 text-lg font-extrabold">
-            <FiBell className="size-5 text-pal" /> {current.title}
+            <FiBell className="size-5 text-pal" /> {t(current.title)}
           </h2>
           {queue.length > 1 && (
             <span className="shrink-0 rounded-full bg-card-soft px-2.5 py-1 text-xs font-bold text-ink-muted">

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { FiCopy, FiCheck, FiGlobe, FiExternalLink, FiShield, FiMessageCircle } from "react-icons/fi";
 import type { ConnectionInfo } from "@palserver/shared";
 import type { AgentClient } from "./api";
+import { copyText } from "./clipboard";
 import { usePromoConfig } from "./promoConfig";
 import { card, btn as btnPrimary, btnGhost } from "./ui";
 
@@ -126,9 +127,10 @@ function Section({
 function AddressChip({ address }: { address: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    await navigator.clipboard.writeText(address).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    if (await copyText(address)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
   };
   return (
     <button

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { FiX, FiCopy, FiCheck, FiRefreshCw, FiSmartphone, FiKey, FiWifi, FiTrash2 } from "react-icons/fi";
 import type { AgentClient, Connection } from "./api";
+import { copyText } from "./clipboard";
 import { Overlay, card, btn, btnGhost } from "./ui";
 
 /**
@@ -176,9 +177,10 @@ export function SettingsModal({
 function Copyable({ text, mono, big }: { text: string; mono?: boolean; big?: boolean }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    await navigator.clipboard.writeText(text).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    if (await copyText(text)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
   };
   return (
     <button

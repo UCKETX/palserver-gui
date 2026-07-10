@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { FiCheck, FiCopy, FiEye, FiEyeOff } from "react-icons/fi";
+import { copyText } from "./clipboard";
 
 /**
  * Steam IDs identify a real person, so every surface that shows one masks it
@@ -26,9 +27,10 @@ export function SteamId({ userId }: { userId: string }) {
   const raw = userId.replace(/^steam_/, "");
 
   const copy = async () => {
-    await navigator.clipboard.writeText(raw).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    if (await copyText(raw)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
   };
 
   return (

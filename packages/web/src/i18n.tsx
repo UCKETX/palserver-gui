@@ -28,7 +28,7 @@ const KEY = "palserver.lang";
 const DICT_CACHE_PREFIX = "palserver.i18n.";
 const LOCAL_BASE = "/i18n/";
 const REMOTE_BASE =
-  "https://raw.githubusercontent.com/io-software-ai/palserver-gui/main/packages/web/public/i18n/";
+  "https://raw.githubusercontent.com/UCKETX/palserver-gui/main/packages/web/public/i18n/";
 
 type Dict = Record<string, string>;
 
@@ -69,20 +69,19 @@ async function loadDict(l: Lang): Promise<void> {
   if (l === "zh-TW" || loaded.has(l)) return;
   loaded.add(l);
   const cached = readDictCache(l);
-  if (cached) {
-    dicts[l] = cached;
-    notify();
-  }
-  // bundled 墊底(沒有快取才需要,有快取時快取一定不比 bundled 舊)
-  if (!cached) {
-    try {
-      const res = await fetch(`${LOCAL_BASE}${l}.json`, { signal: AbortSignal.timeout(4000) });
-      if (res.ok) {
-        dicts[l] = (await res.json()) as Dict;
-        notify();
-      }
-    } catch {
-      /* 沒有 bundled 檔就先用原文 */
+  // 先用快取墊底,再疊上 bundled。這樣新版新增或修正詞條時,舊快取不會讓
+  // 它們永久退回繁中原文;後面抓到的遠端版仍可覆蓋 bundled。
+  try {
+    const res = await fetch(`${LOCAL_BASE}${l}.json`, { signal: AbortSignal.timeout(4000) });
+    if (res.ok) {
+      const bundled = (await res.json()) as Dict;
+      dicts[l] = { ...(cached ?? {}), ...bundled };
+      notify();
+    }
+  } catch {
+    if (cached) {
+      dicts[l] = cached;
+      notify();
     }
   }
   // 遠端(GitHub)為準,抓到有變才更新
@@ -93,10 +92,11 @@ async function loadDict(l: Lang): Promise<void> {
     });
     if (res.ok) {
       const remote = (await res.json()) as Dict;
-      if (JSON.stringify(remote) !== JSON.stringify(dicts[l] ?? null)) {
-        dicts[l] = remote;
+      const next = { ...(dicts[l] ?? {}), ...remote };
+      if (JSON.stringify(next) !== JSON.stringify(dicts[l] ?? null)) {
+        dicts[l] = next;
         try {
-          localStorage.setItem(DICT_CACHE_PREFIX + l, JSON.stringify(remote));
+          localStorage.setItem(DICT_CACHE_PREFIX + l, JSON.stringify(next));
         } catch {
           /* 存不進去就下次再抓 */
         }

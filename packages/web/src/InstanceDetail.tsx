@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiArrowLeft, FiPlay, FiSquare, FiRefreshCw, FiTerminal, FiX } from "react-icons/fi";
+import { FiArrowLeft, FiPlay, FiSquare, FiRefreshCw, FiTerminal, FiX, FiAlertTriangle } from "react-icons/fi";
 import type {
   InstanceDetail as Detail,
   LogSource,
@@ -185,6 +185,24 @@ export function InstanceDetailPage({
       )}
 
       {error && <p className={errorCls}>{error}</p>}
+
+      {detail.installError && (
+        <p className={`${errorCls} inline-flex flex-wrap items-start gap-2`}>
+          <FiAlertTriangle className="mt-0.5 size-4 shrink-0" />
+          <span>
+            {t("安裝失敗")}:{" "}
+            {detail.installError.code === "disk-full"
+              ? t("磁碟空間不足,請清出更多空間後再試(Palworld 伺服器約需數十 GB)。")
+              : detail.installError.message}{" "}
+            <button
+              className="underline underline-offset-2 hover:opacity-80"
+              onClick={() => setTab("logs")}
+            >
+              {t("查看日誌")}
+            </button>
+          </span>
+        </p>
+      )}
 
       <div className="flex flex-wrap gap-x-2 gap-y-1 border-b-2 border-line">
         {TABS.filter((t) => t.id !== "paldefender" || palDefender).map((t) => (

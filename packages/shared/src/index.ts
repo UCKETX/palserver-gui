@@ -75,11 +75,16 @@ export type CreateInstanceInput = z.infer<typeof CreateInstanceSchema>;
  * `givepal_j` 發一隻客製帕魯給玩家。欄位對應 PalTemplate:詞條=Passives、體質=IVs、
  * 星星=CondensedPals、靈魂=PalSouls。省略的欄位就用 PalDefender 預設。
  */
-export const CustomPalSchema = z.object({
-  /** 目標玩家的 UserId(givepal_j 的第一個參數)。 */
-  userId: z.string().trim().min(1).max(128),
-  /** 帕魯種類 ID,例:Anubis(paldb.cc 可查)。 */
-  palId: z.string().trim().min(1).max(64),
+export const CustomPalSchema = z
+  .object({
+    /** 給予方式:pal=直接給帕魯(givepal_j,需玩家);egg=給帕魯蛋(giveegg_j,需蛋 ID)。 */
+    mode: z.enum(["pal", "egg"]).default("pal"),
+    /** 目標玩家的 UserId(givepal_j 的第一個參數;egg 模式不需要)。 */
+    userId: z.string().trim().max(128).optional(),
+    /** 蛋 ID,例:PalEgg_Ice_01(giveegg_j 的第一個參數;pal 模式不需要)。 */
+    eggId: z.string().trim().max(64).optional(),
+    /** 帕魯種類 ID,例:Anubis(paldb.cc 可查)。 */
+    palId: z.string().trim().min(1).max(64),
   nickname: z.string().trim().max(40).optional(),
   gender: z.enum(["Male", "Female", "None"]).optional(),
   level: z.number().int().min(1).max(100).optional(),
@@ -107,9 +112,19 @@ export const CustomPalSchema = z.object({
       craftSpeed: z.number().int().min(0).max(20).optional(),
     })
     .optional(),
-  partnerSkillLevel: z.number().int().min(1).max(5).optional(),
-});
+    partnerSkillLevel: z.number().int().min(1).max(5).optional(),
+  })
+  .refine((d) => (d.mode === "egg" ? !!d.eggId : !!d.userId), {
+    message: "pal 模式需要 userId,egg 模式需要 eggId",
+  });
 export type CustomPalInput = z.infer<typeof CustomPalSchema>;
+
+/** 最後一次安裝/更新失敗的原因,讓 UI 不用翻日誌就能看到。
+ *  code=disk-full 讓前端翻成友善的當地語言提示;其餘顯示 message 原文。 */
+export interface InstallError {
+  code: "disk-full" | "error";
+  message: string;
+}
 
 export interface InstanceSummary {
   id: string;
@@ -124,6 +139,8 @@ export interface InstanceSummary {
   updateAvailable: boolean | null;
   /** installed enhancements (PalDefender / UE4SS), for the 原味/強化 label */
   enhancements: string[];
+  /** 最後一次安裝/更新失敗的原因(成功或安裝中時為 null);僅 native。 */
+  installError: InstallError | null;
 }
 
 export interface InstanceDetail extends InstanceSummary {

@@ -31,7 +31,7 @@ import {
 import type { InstanceStore, InstanceRecord } from "./store.js";
 import type { DriverContext, ServerDriver } from "./driver.js";
 import * as dockerOps from "./docker.js";
-import { SERVER_LAUNCHER, classifyServerDir, isInstalling, nativeDriver, serverRoot, updateServer } from "./native.js";
+import { SERVER_LAUNCHER, classifyServerDir, isInstalling, lastInstallError, nativeDriver, serverRoot, updateServer } from "./native.js";
 import { cachedVersionSummary, getVersionStatus } from "./version.js";
 import { getConnectionInfo } from "./connectivity.js";
 import { getModsStatus, installComponent, installedEnhancements, removeComponent, setLuaModEnabled } from "./mods.js";
@@ -89,6 +89,7 @@ export function registerRoutes(
       gameVersion,
       updateAvailable,
       enhancements,
+      installError: rec.backend === "native" ? lastInstallError(rec.id) : null,
     };
   };
 

@@ -4,7 +4,7 @@ import os from "node:os";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import extractZip from "extract-zip";
-import type { InstanceStats, InstanceStatus } from "@palserver/shared";
+import type { InstallError, InstanceStats, InstanceStatus } from "@palserver/shared";
 import type { DriverContext, ServerDriver } from "./driver.js";
 import type { InstanceRecord } from "./store.js";
 import { renderPalWorldSettingsIni } from "./settings-ini.js";
@@ -180,6 +180,15 @@ async function ensureInstalled(
   await runDepotDownloader(dd, root, onLine);
 }
 
+/** DepotDownloader / OS 在磁碟寫滿時吐的字樣(跨平台、含 .NET IOException)。 */
+const DISK_FULL_RE =
+  /no space left on device|not enough space|disk( is)? full|enospc|there is not enough space on the disk|0x70|System\.IO\.IOException.*space/i;
+
+/** 標成磁碟不足的錯誤;前端據 code 顯示友善提示。 */
+function diskFullError(): Error & { code: "disk-full" } {
+  return Object.assign(new Error("磁碟空間不足"), { code: "disk-full" as const });
+}
+
 /** Download/update the dedicated server into `root`. Also used by updateServer. */
 function runDepotDownloader(
   dd: string,
@@ -188,21 +197,29 @@ function runDepotDownloader(
 ): Promise<void> {
   const osFlag = IS_WIN ? "windows" : "linux";
   return new Promise<void>((resolve, reject) => {
+    let sawDiskFull = false;
+    const handle = (b: Buffer) =>
+      b
+        .toString()
+        .split("\n")
+        .filter(Boolean)
+        .forEach((line) => {
+          if (DISK_FULL_RE.test(line)) sawDiskFull = true;
+          onLine(line);
+        });
     const child = spawn(
       dd,
       ["-app", PALWORLD_APP_ID, "-dir", root, "-os", osFlag, "-osarch", "64", "-validate"],
       { windowsHide: true },
     );
-    child.stdout.on("data", (b: Buffer) =>
-      b.toString().split("\n").filter(Boolean).forEach(onLine),
-    );
-    child.stderr.on("data", (b: Buffer) =>
-      b.toString().split("\n").filter(Boolean).forEach(onLine),
-    );
+    child.stdout.on("data", handle);
+    child.stderr.on("data", handle);
     child.on("error", reject);
-    child.on("exit", (code) =>
-      code === 0 ? resolve() : reject(new Error(`DepotDownloader exited with code ${code}`)),
-    );
+    child.on("exit", (code) => {
+      if (code === 0) return resolve();
+      // 非零離開 + 看到磁碟不足字樣 = 幾乎確定是空間問題,給前端可翻譯的 code。
+      reject(sawDiskFull ? diskFullError() : new Error(`DepotDownloader exited with code ${code}`));
+    });
   });
 }
 
@@ -218,6 +235,21 @@ const installing = new Set<string>();
 
 export const isInstalling = (id: string) => installing.has(id);
 
+/** 每個實例最後一次安裝/更新失敗的原因,讓 UI 不用翻日誌就看得到。開始新的
+ * 安裝或成功時清掉。 */
+const installErrors = new Map<string, InstallError>();
+
+export const lastInstallError = (id: string): InstallError | null => installErrors.get(id) ?? null;
+
+/** 把丟出來的錯誤歸類成給前端的 InstallError(磁碟不足會標成可翻譯的 code)。 */
+function classifyInstallError(err: unknown): InstallError {
+  const code = (err as { code?: string })?.code;
+  if (code === "disk-full" || code === "ENOSPC") {
+    return { code: "disk-full", message: "磁碟空間不足" };
+  }
+  return { code: "error", message: err instanceof Error ? err.message : String(err) };
+}
+
 /**
  * Re-run DepotDownloader over an existing install to pull the latest content.
  * Runs in the background: the instance reports "installing" and the agent log
@@ -226,6 +258,7 @@ export const isInstalling = (id: string) => installing.has(id);
 export function updateServer(rec: InstanceRecord, ctx: DriverContext): void {
   if (installing.has(rec.id)) return;
   installing.add(rec.id);
+  installErrors.delete(rec.id); // 新的一次嘗試,清掉上次的失敗
   const appendLog = (line: string) => fs.appendFileSync(logFile(ctx), line + "\n");
   void (async () => {
     try {
@@ -235,7 +268,13 @@ export function updateServer(rec: InstanceRecord, ctx: DriverContext): void {
       await runDepotDownloader(dd, serverRoot(rec, ctx), appendLog);
       appendLog("[palserver] 更新完成");
     } catch (err) {
-      appendLog(`[palserver] 更新失敗:${err instanceof Error ? err.message : err}`);
+      const info = classifyInstallError(err);
+      installErrors.set(rec.id, info);
+      appendLog(
+        info.code === "disk-full"
+          ? "[palserver] 更新失敗:磁碟空間不足,請清出更多空間後再試(Palworld 伺服器約需數十 GB)。"
+          : `[palserver] 更新失敗:${info.message}`,
+      );
     } finally {
       installing.delete(rec.id);
     }
@@ -292,18 +331,26 @@ export const nativeDriver: ServerDriver = {
       // Fast path: spawn synchronously so errors surface in the response.
       await ensureInstalled(rec, ctx, appendLog); // validates adopted dirs
       spawnServer(rec, ctx);
+      installErrors.delete(rec.id); // 成功啟動,清掉上次的安裝失敗
       return;
     }
 
     // Slow path: multi-GB download. Run in the background — the instance
     // reports "installing" and the log stream carries the progress.
     installing.add(rec.id);
+    installErrors.delete(rec.id); // 新的一次嘗試,清掉上次的失敗
     void (async () => {
       try {
         await ensureInstalled(rec, ctx, appendLog);
         spawnServer(rec, ctx);
       } catch (err) {
-        appendLog(`[palserver] install/start failed: ${err instanceof Error ? err.message : err}`);
+        const info = classifyInstallError(err);
+        installErrors.set(rec.id, info);
+        appendLog(
+          info.code === "disk-full"
+            ? "[palserver] 安裝失敗:磁碟空間不足,請清出更多空間後再試(Palworld 伺服器約需數十 GB)。"
+            : `[palserver] install/start failed: ${info.message}`,
+        );
       } finally {
         installing.delete(rec.id);
       }

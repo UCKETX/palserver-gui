@@ -801,5 +801,8 @@
  "複製中…": "Duplicating…",
  "建立複本": "Create copy",
  "已複製為「{name}」(遊戲埠 {port}),可在伺服器列表找到它。": "Copied as \"{name}\" (game port {port}); find it in the server list.",
- "請先停止伺服器再複製,才能得到乾淨的存檔複本。": "Stop the server before duplicating to get a clean copy of the saves."
+ "請先停止伺服器再複製,才能得到乾淨的存檔複本。": "Stop the server before duplicating to get a clean copy of the saves.",
+ "安裝失敗": "Install failed",
+ "磁碟空間不足,請清出更多空間後再試(Palworld 伺服器約需數十 GB)。": "Not enough disk space. Free up more space and try again (a Palworld server needs tens of GB).",
+ "查看日誌": "View logs"
 }

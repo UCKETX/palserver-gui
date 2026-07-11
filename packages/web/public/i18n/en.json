@@ -825,5 +825,6 @@
  "PalDefender 玩家名冊(含離線)": "PalDefender roster (incl. offline)",
  "由 PalDefender 提供:列出存檔內所有玩家(含從未被本 GUI 記錄過的離線玩家)。點任一位可查看帕魯、背包與進度。": "From PalDefender: every player in the save (including offline players this GUI never recorded). Click any to view their Pals, inventory and progression.",
  "玩家操作": "Player actions",
- "給予自訂帕魯(贊助者)": "Give a custom Pal (sponsor)"
+ "給予自訂帕魯(贊助者)": "Give a custom Pal (sponsor)",
+ "給予自訂帕魯": "Give a custom Pal"
 }

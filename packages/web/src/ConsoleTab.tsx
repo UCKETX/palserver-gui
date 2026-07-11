@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiTerminal, FiPlay, FiSearch, FiTrash2, FiStar } from "react-icons/fi";
+import { FiTerminal, FiPlay, FiSearch, FiTrash2 } from "react-icons/fi";
 import { GiShield } from "react-icons/gi";
 import {
   COMMAND_CATEGORY_LABELS,
@@ -267,8 +267,7 @@ export function ConsoleTab({
               placeholder={t("搜尋指令…")}
             />
           </div>
-          {/* 贊助者先行版:自訂帕魯(帕魯 / 帕魯蛋兩條)—— 樣式與下方指令一致,藍色標示贊助。
-              一律顯示,點了跳彈窗;未解鎖時彈窗內表單不可用。 */}
+          {/* 自訂帕魯(帕魯 / 帕魯蛋兩條),點擊後開啟完整參數表單。 */}
           {catalog.paldefender && (
             <>
               <button
@@ -276,9 +275,7 @@ export function ConsoleTab({
                 className="shrink-0 rounded-lg px-2 py-1.5 text-left text-[13px] transition hover:bg-card-soft"
                 onClick={() => setCustomPalMode("pal")}
               >
-                <span className="inline-flex items-center gap-1 font-mono text-sky-500">
-                  givepal_j <FiStar className="size-3" />
-                </span>
+                <span className="font-mono text-sky-500">givepal_j</span>
                 <span className="block text-xs text-ink-muted">{t("自訂帕魯(詞條 / 體質 / 星星)")}</span>
               </button>
               <button
@@ -286,9 +283,7 @@ export function ConsoleTab({
                 className="shrink-0 rounded-lg px-2 py-1.5 text-left text-[13px] transition hover:bg-card-soft"
                 onClick={() => setCustomPalMode("egg")}
               >
-                <span className="inline-flex items-center gap-1 font-mono text-sky-500">
-                  giveegg_j <FiStar className="size-3" />
-                </span>
+                <span className="font-mono text-sky-500">giveegg_j</span>
                 <span className="block text-xs text-ink-muted">{t("自訂帕魯蛋(詞條 / 體質 / 星星)")}</span>
               </button>
             </>

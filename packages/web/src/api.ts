@@ -259,7 +259,7 @@ export class AgentClient {
     });
   }
 
-  /** 自訂帕魯(贊助者先行版):PalDefender 範本 + givepal_j。 */
+  /** 自訂帕魯:PalDefender 範本 + givepal_j。 */
   giveCustomPal(id: string, input: CustomPalInput): Promise<{ output: string }> {
     return this.request(`/api/instances/${id}/pals/give`, {
       method: "POST",

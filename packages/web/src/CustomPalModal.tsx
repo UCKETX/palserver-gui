@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FiStar, FiLock, FiX, FiExternalLink } from "react-icons/fi";
+import { FiX, FiExternalLink } from "react-icons/fi";
 import { GiEggClutch } from "react-icons/gi";
 import type { CustomPalInput, KnownPlayer } from "@palserver/shared";
 import type { AgentClient } from "./api";
@@ -50,10 +50,7 @@ function numOrUndef(v: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-/**
- * 自訂帕魯彈窗(贊助者先行版 custom-pal):詞條 / 體質 / 星星 / 靈魂 → PalDefender givepal_j。
- * 未解鎖時整個表單照樣顯示,但變灰、不可操作(右側不讓使用),並提示去設定頁輸入識別碼。
- */
+/** 自訂帕魯彈窗:詞條 / 體質 / 星星 / 靈魂 → PalDefender givepal_j。 */
 export function CustomPalModal({
   client,
   instanceId,
@@ -71,7 +68,6 @@ export function CustomPalModal({
 }) {
   useI18n();
   const gameData = useGameData();
-  const [entitled, setEntitled] = useState<boolean | null>(null);
   const [players, setPlayers] = useState<KnownPlayer[]>([]);
 
   const [userId, setUserId] = useState(initialUserId ?? "");
@@ -91,22 +87,16 @@ export function CustomPalModal({
   const [result, setResult] = useState<string | null>(null);
 
   useEffect(() => {
-    client
-      .license()
-      .then((l) => setEntitled(l.features.includes("custom-pal")))
-      .catch(() => setEntitled(false));
     client.knownPlayers(instanceId).then(setPlayers).catch(() => setPlayers([]));
   }, [client, instanceId]);
 
-  const locked = entitled === false;
   const canSubmit = useMemo(
     () =>
-      !locked &&
       palId.trim() !== "" &&
       userId.trim() !== "" &&
       (mode !== "egg" || eggId.trim() !== "") &&
       !busy,
-    [locked, mode, eggId, userId, palId, busy],
+    [mode, eggId, userId, palId, busy],
   );
 
   const submit = async () => {
@@ -172,21 +162,11 @@ export function CustomPalModal({
           <h2 className="inline-flex items-center gap-2 text-lg font-extrabold">
             <GiEggClutch className="size-5 text-sky-500" />{" "}
             {mode === "egg" ? t("自訂帕魯蛋") : t("自訂帕魯")}
-            <span className="inline-flex items-center gap-1 rounded-full bg-sky-500/10 px-2 py-0.5 text-xs font-bold text-sky-500">
-              <FiStar className="size-3" /> {t("贊助者")}
-            </span>
           </h2>
           <button className="text-ink-muted transition hover:text-ink" onClick={onClose} aria-label={t("關閉")}>
             <FiX className="size-5" />
           </button>
         </div>
-
-        {locked && (
-          <div className="inline-flex items-center gap-2 rounded-cute border-2 border-sun/40 bg-sun/10 px-3 py-2 text-xs font-bold text-sun">
-            <FiLock className="size-4 shrink-0" />
-            {t("這是贊助者先行版功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}
-          </div>
-        )}
 
         <p className="text-xs text-ink-muted">
           {t("透過 PalDefender 發一隻客製帕魯給玩家。留空的欄位會用預設。ID 可在")}{" "}
@@ -196,8 +176,7 @@ export function CustomPalModal({
           {t("查。")}
         </p>
 
-        {/* 表單:未解鎖時整組變灰、不可操作 */}
-        <div className={locked ? "pointer-events-none flex flex-col gap-3 opacity-55" : "flex flex-col gap-3"}>
+        <div className="flex flex-col gap-3">
           <div className="grid gap-2 sm:grid-cols-2">
             {/* 兩種模式都要指定玩家(egg 走 REST /give/paleggs/{userId})。 */}
             <label className="flex min-w-0 flex-col gap-1 text-xs font-bold text-ink-muted">

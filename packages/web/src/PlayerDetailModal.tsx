@@ -15,7 +15,7 @@ import { Overlay, card, btn, btnGhost, errorCls } from "./ui";
 const PLAYER_ACTIONS: { label: string; cmd?: string; customPal?: boolean }[] = [
   { label: "給予道具", cmd: "give" },
   { label: "給予帕魯", cmd: "givepal" },
-  { label: "給予自訂帕魯(贊助者)", customPal: true },
+  { label: "給予自訂帕魯", customPal: true },
   { label: "給予經驗值", cmd: "give_exp" },
   { label: "給予科技點數", cmd: "givetechpoints" },
   { label: "給予古代科技點數", cmd: "givebosstechpoints" },
@@ -145,7 +145,7 @@ export function PlayerDetailModal({
         </Overlay>
       )}
 
-      {/* 自訂帕魯(贊助者):CustomPalModal 自帶授權閘門,預填目標玩家。 */}
+      {/* 自訂帕魯表單,預填目前玩家。 */}
       {showCustomPal && (
         <CustomPalModal
           client={client}

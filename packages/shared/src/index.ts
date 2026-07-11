@@ -75,7 +75,7 @@ export const CreateInstanceSchema = z.object({
 export type CreateInstanceInput = z.infer<typeof CreateInstanceSchema>;
 
 /**
- * 自訂帕魯(贊助者先行版功能 custom-pal):透過 PalDefender 的 PalTemplate + RCON
+ * 自訂帕魯:透過 PalDefender 的 PalTemplate + RCON
  * `givepal_j` 發一隻客製帕魯給玩家。欄位對應 PalTemplate:詞條=Passives、體質=IVs、
  * 星星=CondensedPals、靈魂=PalSouls。省略的欄位就用 PalDefender 預設。
  */

@@ -13,6 +13,7 @@ import {
   type AgentInfo,
   type InstanceDetail,
   type InstanceSummary,
+  type KnownPlayer,
   type RconCommandsResponse,
 } from "@palserver/shared";
 import { fetchServerCommands, rconExec, requireRcon } from "./rcon.js";
@@ -554,9 +555,33 @@ export function registerRoutes(
     return getPlayerDetail(rec, ctxOf(rec), identifier);
   });
 
+  // 統一名冊:有開 PalDefender REST 就以它的 /players 為準(1.8+ 含離線玩家),
+  // 用 agent 自己的紀錄補歷史欄位(首見/上線時長/等級);沒開就純用自己的紀錄。
+  // PalDefender 沒列到、但自己看過的玩家也保留(舊版 PalDefender 只回在線時的兜底)。
   app.get("/api/instances/:id/players/known", async (req) => {
     const rec = getOr404((req.params as { id: string }).id);
-    return presence.knownPlayers(rec.id);
+    const own = presence.knownPlayers(rec.id);
+    const pd = await getPdPlayers(rec, ctxOf(rec));
+    if (!pd.available) return own;
+    const byId = new Map(own.map((p) => [p.userId, p]));
+    const merged: KnownPlayer[] = pd.players.map((p) => {
+      const prev = byId.get(p.userId);
+      byId.delete(p.userId);
+      return {
+        userId: p.userId,
+        name: p.name || prev?.name || "",
+        accountName: prev?.accountName ?? "",
+        online: p.online,
+        firstSeen: prev?.firstSeen ?? "",
+        lastSeen: prev?.lastSeen ?? "",
+        sessions: prev?.sessions ?? 0,
+        playtimeSeconds: prev?.playtimeSeconds ?? 0,
+        lastLevel: prev?.lastLevel ?? 0,
+        ...(p.guildName ? { guildName: p.guildName } : {}),
+      };
+    });
+    for (const leftover of byId.values()) merged.push(leftover);
+    return merged;
   });
 
   app.get("/api/instances/:id/players/events", async (req) => {

@@ -399,6 +399,8 @@ export interface KnownPlayer {
   sessions: number;
   playtimeSeconds: number;
   lastLevel: number;
+  /** 公會名(僅 PalDefender 名冊有;agent 自記錄的沒有)。 */
+  guildName?: string;
 }
 
 export interface PresenceEvent {

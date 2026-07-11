@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiArrowLeft, FiPlay, FiSquare, FiRefreshCw } from "react-icons/fi";
+import { FiArrowLeft, FiPlay, FiSquare, FiRefreshCw, FiTerminal, FiX } from "react-icons/fi";
 import type {
   InstanceDetail as Detail,
   LogSource,
@@ -25,14 +25,13 @@ import { EngineTab } from "./EngineTab";
 import { maskSteamIdsInText } from "./SteamId";
 import { STATUS_LABELS } from "./labels";
 import { t, t as translate, useI18n } from "./i18n";
-import { StatusBadge, btn, btnGhost, card, errorCls } from "./ui";
+import { Overlay, StatusBadge, btn, btnGhost, card, errorCls } from "./ui";
 
 type Tab =
   | "overview"
   | "performance"
   | "players"
   | "map"
-  | "console"
   | "settings"
   | "engine"
   | "mods"
@@ -46,7 +45,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "performance", label: "效能分析" },
   { id: "players", label: "玩家" },
   { id: "map", label: "線上地圖" },
-  { id: "console", label: "指令" },
   { id: "settings", label: "世界設定" },
   { id: "engine", label: "引擎微調" },
   { id: "mods", label: "模組" },
@@ -71,6 +69,7 @@ export function InstanceDetailPage({
   useI18n();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
+  const [showConsole, setShowConsole] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [palDefender, setPalDefender] = useState(false);
@@ -155,8 +154,35 @@ export function InstanceDetailPage({
           <button className={`${btnGhost} inline-flex items-center gap-1.5`} onClick={() => act("restart")}>
             <FiRefreshCw className="size-4" /> {t("重啟")}
           </button>
+          <button
+            className={`${btnGhost} inline-flex items-center gap-1.5`}
+            onClick={() => setShowConsole(true)}
+            title={t("指令台")}
+            aria-label={t("指令台")}
+          >
+            <FiTerminal className="size-4" />
+          </button>
         </div>
       </div>
+
+      {showConsole && (
+        <Overlay onClose={() => setShowConsole(false)}>
+          <div
+            className={`${card} flex max-h-[85vh] w-190 max-w-full flex-col gap-3 overflow-auto`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="inline-flex items-center gap-2 text-lg font-extrabold">
+                <FiTerminal className="size-5 text-pal" /> {t("指令台")}
+              </h2>
+              <button className={btnGhost} onClick={() => setShowConsole(false)} aria-label={t("關閉")}>
+                <FiX className="size-4" />
+              </button>
+            </div>
+            <ConsoleTab client={client} instanceId={detail.id} />
+          </div>
+        </Overlay>
+      )}
 
       {error && <p className={errorCls}>{error}</p>}
 
@@ -183,7 +209,6 @@ export function InstanceDetailPage({
       )}
       {tab === "players" && <PlayersTab client={client} instanceId={detail.id} />}
       {tab === "map" && <MapTab client={client} instanceId={detail.id} />}
-      {tab === "console" && <ConsoleTab client={client} instanceId={detail.id} />}
       {tab === "settings" && (
         <SettingsEditor
           settings={detail.settings}

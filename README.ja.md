@@ -1,6 +1,6 @@
 # palserver GUI
 
-[繁體中文](README.md) | [English](README.en.md) | **日本語**
+[繁體中文](README.md) | [简体中文](README.zh-CN.md) | [English](README.en.md) | **日本語**
 
 <p align="center"><a href="https://palserver-GUI.iosoftware.ai"><b>公式サイト palserver-GUI.iosoftware.ai</b></a> —— ダウンロード・ガイド・FAQ</p>
 
@@ -22,7 +22,7 @@
 
 ## スクリーンショット
 
-> UI は 繁體中文 / English / 日本語 とライト / ダークテーマに対応。スクリーンショット内のプレイヤーとデータはデモ用です。
+> UI は 繁體中文 / 简体中文 / English / 日本語とライト / ダークテーマに対応。スクリーンショット内のプレイヤーとデータはデモ用です。
 
 ![プレイヤー管理](docs/screenshots/players.png)
 
@@ -89,7 +89,7 @@
 - 計画再起動の前にはカウントダウンを配信してセーブ。手動停止はクラッシュ扱いになりません
 
 **その他**
-- 3 言語対応:繁體中文 / English / 日本語。ライト / ダークテーマ
+- 4 言語対応:繁體中文 / 简体中文 / English / 日本語。ライト / ダークテーマ
 - 接続診断:公開 IP や NAT/CGNAT 配下かを検出し、VPN(Tailscale / Radmin)での公開手順を案内
 - GUI 自己アップデート(任意):GitHub Releases を確認し、SHA256 検証後にバイナリを差し替えて自動再起動
 

@@ -65,39 +65,37 @@
   --shadow-cute-hover: 0 10px 24px rgb(0 0 0 / 0.45);
 }
 
-/* ── 贊助者專屬主題:黑金銀(Onyx · Gold · Silver)。只有有效贊助者可在設定頁選用。 ── */
+/* ── 贊助者專屬主題:白銀(Vercel 風)。純黑底 + 銀白 + 銀色漸層。有效贊助者可在設定頁選用。 ── */
 :root[data-theme="sponsor"] {
   color-scheme: dark;
-  --color-sky-soft: #101012; /* 中性近黑(不帶古銅暖調) */
-  --color-card: #1b1b1e;
-  --color-card-soft: #26262b;
-  --color-ink: #f3f2ef;
-  --color-ink-muted: #a7a6a3;
-  --color-pal: #d9bd6a; /* 主色=金(強調 / 連結 / 星星) */
-  --color-pal-strong: #ecd488;
-  --color-line: #343330;
-  --shadow-cute: 0 8px 24px rgb(0 0 0 / 0.6);
-  --shadow-cute-hover: 0 12px 32px rgb(0 0 0 / 0.7);
+  --color-sky-soft: #000000; /* 純黑(Vercel) */
+  --color-card: #0f0f0f;
+  --color-card-soft: #1a1a1a;
+  --color-ink: #fafafa;
+  --color-ink-muted: #a1a1a1;
+  --color-pal: #ededed; /* 主色=銀白(按鈕 / 連結 / 星星) */
+  --color-pal-strong: #ffffff;
+  --color-line: #2a2a2a;
+  --shadow-cute: 0 8px 24px rgb(0 0 0 / 0.7);
+  --shadow-cute-hover: 0 12px 32px rgb(0 0 0 / 0.85);
 }
-/* 頁面背景:黑底 + 金(左上)與銀(右上)雙光暈 */
+/* 頁面背景:純黑 + 頂部一圈微銀光暈(極簡、乾淨) */
 :root[data-theme="sponsor"] body {
-  background-color: #101012;
-  background-image:
-    radial-gradient(1100px 600px at 8% -12%, rgb(217 189 106 / 0.16), transparent 60%),
-    radial-gradient(1000px 560px at 100% -6%, rgb(203 209 217 / 0.13), transparent 55%);
+  background-color: #000000;
+  background-image: radial-gradient(1200px 640px at 50% -22%, rgb(255 255 255 / 0.12), transparent 62%);
   background-attachment: fixed;
 }
-/* 主色按鈕(bg-pal):金→銀金屬漸層 + 深色字(黑金銀三色都到位) */
+/* 主色按鈕(bg-pal):白→銀直向漸層 + 深色字(Vercel 主按鈕質感) */
 :root[data-theme="sponsor"] .bg-pal {
-  background-image: linear-gradient(135deg, #e8d489 0%, #cbb163 42%, #dee2e8 100%);
-  color: #201a0c;
+  background-image: linear-gradient(180deg, #ffffff 0%, #cfcfd4 100%);
+  color: #0a0a0a;
 }
 :root[data-theme="sponsor"] .bg-pal:hover {
-  background-image: linear-gradient(135deg, #f2e29a 0%, #d8be6e 42%, #eef1f5 100%);
+  background-image: linear-gradient(180deg, #ffffff 0%, #e3e3e7 100%);
 }
-/* 卡片頂緣:金→銀斜向 sheen */
+/* 卡片頂緣:一條銀色玻璃 sheen */
 :root[data-theme="sponsor"] .bg-card {
-  background-image: linear-gradient(100deg, rgb(217 189 106 / 0.10), rgb(203 209 217 / 0.06) 42%, transparent 78%);
+  background-image: linear-gradient(180deg, rgb(255 255 255 / 0.06), rgb(255 255 255 / 0) 88px);
 }
 
 body {

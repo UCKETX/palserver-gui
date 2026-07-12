@@ -232,7 +232,7 @@ export function SettingsModal({
                       }}
                     />
                     <FiStar className="size-3.5 text-pal" />
-                    {t("啟用贊助者專屬主題(黑金銀 × 漸層)")}
+                    {t("啟用贊助者專屬主題(白銀 × 漸層,Vercel 風)")}
                   </label>
                 )}
               </div>

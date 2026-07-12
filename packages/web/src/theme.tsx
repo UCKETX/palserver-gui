@@ -9,7 +9,7 @@ import { useI18n } from "./i18n";
  * 選擇存 localStorage,main.tsx 在 React 掛載前先套用,避免閃色。
  */
 
-/** auto/light/dark 是深淺色;sponsor 是贊助者專屬主題(黑金銀漸層),
+/** auto/light/dark 是深淺色;sponsor 是贊助者專屬主題(白銀漸層,Vercel 風),
  *  只在 SettingsModal 對有效贊助者開放選用。 */
 export type ThemeMode = "auto" | "light" | "dark" | "sponsor";
 

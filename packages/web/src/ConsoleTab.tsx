@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiTerminal, FiPlay, FiSearch, FiTrash2, FiStar } from "react-icons/fi";
+import { FiTerminal, FiPlay, FiSearch, FiTrash2, FiStar, FiMapPin } from "react-icons/fi";
 import { GiShield } from "react-icons/gi";
 import {
   COMMAND_CATEGORY_LABELS,
@@ -15,6 +15,7 @@ import { EntityPicker } from "./EntityPicker";
 import { PlayerPicker } from "./PlayerPicker";
 import { CustomPalModal } from "./CustomPalModal";
 import { GiveItemsModal } from "./GiveItemsModal";
+import { MapPickModal } from "./MapPickModal";
 import { SHOW_SPONSOR_FEATURES } from "./flags";
 import { useGameData, itemIconUrl, palIconUrl, type GameData } from "./gameData";
 import { t, useI18n } from "./i18n";
@@ -24,6 +25,50 @@ interface LogEntry {
   command: string;
   output: string;
   failed: boolean;
+}
+
+/** 座標參數:可自由輸入 x y (z),也可「在地圖描點」用世界地圖選一個點填入。 */
+function CoordField({
+  arg,
+  value,
+  onChange,
+}: {
+  arg: CommandArg;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  useI18n();
+  const [showMap, setShowMap] = useState(false);
+  return (
+    <label className={`${labelCls} min-w-0`}>
+      {t(arg.label)}
+      {!arg.required && <span className="font-normal">{t("(選填)")}</span>}
+      <div className="flex items-center gap-2">
+        <input
+          className={`${inputCls} min-w-0 flex-1`}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={arg.placeholder}
+        />
+        <button
+          type="button"
+          className={`${btnGhost} inline-flex shrink-0 items-center gap-1.5`}
+          onClick={() => setShowMap(true)}
+        >
+          <FiMapPin className="size-4" /> {t("地圖描點")}
+        </button>
+      </div>
+      {showMap && (
+        <MapPickModal
+          onClose={() => setShowMap(false)}
+          onPick={(coords) => {
+            onChange(coords);
+            setShowMap(false);
+          }}
+        />
+      )}
+    </label>
+  );
 }
 
 /** A command argument. `userid` arguments get a picker listing online players
@@ -45,7 +90,10 @@ function ArgField({
   onChange: (value: string) => void;
 }) {
   useI18n();
-  const isPlayerArg = arg.name === "userid";
+  const isPlayerArg = !!arg.player || arg.name === "userid";
+
+  // 座標參數:文字欄 + 「地圖描點」按鈕(自帶狀態,獨立成元件避免條件 hook)。
+  if (arg.coord) return <CoordField arg={arg} value={value} onChange={onChange} />;
 
   // Item/Egg/Pal id args get an icon search picker backed by the catalogs.
   // eggid 只列帕魯蛋(不是全部道具),itemid 才是全物品目錄。

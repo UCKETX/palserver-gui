@@ -8,7 +8,7 @@ import {
   FiUserCheck,
   FiUserX,
 } from "react-icons/fi";
-import { SteamId } from "./SteamId";
+import { SteamId, maskSteamId } from "./SteamId";
 import { useGameData, palIconUrl, type GameData } from "./gameData";
 import { PlayerDetailModal } from "./PlayerDetailModal";
 import { PlayerActionsMenu } from "./PlayerActionsMenu";
@@ -397,7 +397,7 @@ function KnownPlayersCard({
                   client={client}
                   instanceId={instanceId}
                   userId={p.userId}
-                  displayLabel={p.name || p.userId}
+                  displayLabel={p.name || maskSteamId(p.userId)}
                 />
               </div>
             );

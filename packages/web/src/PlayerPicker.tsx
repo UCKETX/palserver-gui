@@ -2,9 +2,10 @@ import { FiX } from "react-icons/fi";
 import type { KnownPlayer } from "@palserver/shared";
 import { t, useI18n } from "./i18n";
 import { inputCls } from "./ui";
+import { maskSteamId } from "./SteamId";
 
-/** 玩家的顯示名(名冊裡的取 name/accountName,否則就是原始 id)。 */
-const playerLabel = (p: KnownPlayer) => p.name || p.accountName || p.userId;
+/** 玩家的顯示名:名冊有名字就用名字,否則用中間碼掉的 id(不露完整 SteamId)。 */
+const playerLabel = (p: KnownPlayer) => p.name || p.accountName || maskSteamId(p.userId);
 
 /**
  * 統一的「選擇玩家」欄位:指令列表與自訂帕魯共用。
@@ -35,7 +36,7 @@ export function PlayerPicker({
     return (
       <div className={`${inputCls} flex min-w-0 items-center gap-2`}>
         <span className="min-w-0 flex-1 truncate font-bold text-ink">
-          {known ? playerLabel(known) : value}
+          {known ? playerLabel(known) : maskSteamId(value)}
         </span>
         <button
           type="button"

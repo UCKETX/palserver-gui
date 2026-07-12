@@ -29,6 +29,11 @@ export interface CommandArg {
   label: string;
   required: boolean;
   placeholder?: string;
+  /** 用玩家選單渲染此參數(可挑線上/曾見過的玩家,也可自由輸入 UserId / 座標)。
+   *  讓一個指令能有多個玩家參數(name 各異),例如 tp 的來源玩家 + 目標玩家。 */
+  player?: boolean;
+  /** 座標參數:提供「在地圖上描點」按鈕(填入世界座標 x y),也可自由輸入。 */
+  coord?: boolean;
 }
 
 export interface CommandSpec {
@@ -75,8 +80,9 @@ export const COMMANDS: CommandSpec[] = [
   { name: "KickPlayer", source: "builtin", category: "moderation", label: "踢出玩家", args: [userId()] },
   { name: "BanPlayer", source: "builtin", category: "moderation", label: "封鎖玩家", args: [userId()], dangerous: true },
   { name: "UnBanPlayer", source: "builtin", category: "moderation", label: "解除封鎖", args: [userId()] },
-  { name: "TeleportToPlayer", source: "builtin", category: "players", label: "傳送到該玩家", args: [userId()] },
-  { name: "TeleportToMe", source: "builtin", category: "players", label: "把玩家傳送到我身邊", args: [userId()] },
+  // 官方 TeleportToPlayer / TeleportToMe 需要「遊戲內執行者(admin 角色)」,純 RCON
+  // 沒有這個角色,套用無效(同 giveme/godmode 被省略的理由)。玩家間傳送改用
+  // PalDefender 的 tp(第一參數就是來源玩家,不依賴執行者)。
 
   // ── PalDefender ──────────────────────────────────────────────────────
   { name: "version", source: "paldefender", category: "server", label: "顯示遊戲與 PalDefender 版本", args: [] },
@@ -168,11 +174,23 @@ export const COMMANDS: CommandSpec[] = [
     args: [{ name: "hour", label: "時間", required: true, placeholder: "0-23 / day / night" }],
   },
   {
+    // PalDefender tp:第一參數=來源玩家,第二=目標玩家或座標(x y z)。
+    //   tp <來源> <目標玩家>      → 把來源玩家傳到目標玩家所在
+    //   tp <來源> <x> <y> <z>     → 把來源玩家傳到座標(空白分隔,直接打進目標欄)
     name: "tp",
     source: "paldefender",
     category: "players",
-    label: "傳送(玩家 / 座標 / home / oilrig)",
-    args: [{ name: "target", label: "目標", required: true, placeholder: "<UserId> 或 <x> <y> <z>" }],
+    label: "傳送玩家到玩家 / 座標",
+    args: [
+      { name: "source", label: "要傳送的玩家", required: true, player: true },
+      {
+        name: "target",
+        label: "目標玩家 / 座標",
+        required: true,
+        player: true,
+        placeholder: "選玩家,或輸入座標 x y z(如 100 50 200)",
+      },
+    ],
   },
   {
     name: "give_exp",
@@ -243,7 +261,7 @@ export const COMMANDS: CommandSpec[] = [
     label: "生成野生帕魯",
     args: [
       { name: "palid", label: "帕魯 ID", required: true },
-      { name: "coords", label: "座標與等級(選填)", required: false, placeholder: "x y z level" },
+      { name: "coords", label: "座標與等級(選填)", required: false, coord: true, placeholder: "x y z level" },
     ],
   },
   {
@@ -302,7 +320,7 @@ export const COMMANDS: CommandSpec[] = [
     source: "paldefender",
     category: "bases",
     label: "查詢最近的據點擁有者",
-    args: [{ name: "coords", label: "座標(選填)", required: false, placeholder: "x y z" }],
+    args: [{ name: "coords", label: "座標(選填)", required: false, coord: true, placeholder: "x y z" }],
   },
   {
     name: "killnearestbase",
@@ -310,7 +328,7 @@ export const COMMANDS: CommandSpec[] = [
     category: "bases",
     label: "摧毀最近的據點",
     dangerous: true,
-    args: [{ name: "coords", label: "座標(選填)", required: false, placeholder: "x y z" }],
+    args: [{ name: "coords", label: "座標(選填)", required: false, coord: true, placeholder: "x y z" }],
   },
   {
     name: "setguildleader",

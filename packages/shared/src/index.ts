@@ -455,6 +455,14 @@ export function savToMap(savX: number, savY: number): { x: number; y: number } {
   };
 }
 
+/** Inverse of savToMap:圖上座標(x 東、y 北)→ Unreal 世界座標(給 tp 等指令用)。 */
+export function mapToSav(mapX: number, mapY: number): { x: number; y: number } {
+  return {
+    x: mapY * WORLD_SCALE - WORLD_OFFSET.northSouth,
+    y: mapX * WORLD_SCALE - WORLD_OFFSET.eastWest,
+  };
+}
+
 /** A player the agent has seen at least once on this instance — the roster
  * that survives logouts, so offline targets (e.g. /unban) stay selectable. */
 export interface KnownPlayer {

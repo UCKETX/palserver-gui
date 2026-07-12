@@ -14,7 +14,8 @@
 | 新物品、新武器、新道具 | `items.json` + `items/` 圖示 |
 | 新詞條（被動技） | `passives.json` |
 | 新主動技 | `activeSkills.json` |
-| 新地區 / 地圖重繪 | 地圖底圖 + `landmarks.json`（見最後一節） |
+| 新地區 / 地圖重繪 | 地圖底圖 + `landmarks.json` + `bosses.json`（見最後一節） |
+| 新野外頭目（Alpha Pal） | `bosses.json`（見最後一節） |
 
 ## 資料檔清單與 schema
 
@@ -99,10 +100,20 @@ node scripts/fetch-skills-passives.mjs
   新地區若擴大了世界邊界，這兩組數字都要跟著改，否則地標會偏移。
 - **座標換算**：`savToMap(worldX, worldY)`（存檔世界座標 → 遊戲內地圖座標），marker 放在
   `L.latLng(mapY, mapX)`。paldb.cc 的 `ipos` 就等於 `savToMap` 的輸出（已用「起始之丘」校準）。
-- **地標**：`packages/web/public/game-data/landmarks.json`，`{type, x, y, lv?, name:{en,zh,ja}}`，
-  x/y 是地圖座標（= savToMap 輸出）。type 目前有 `Fast Travel` / `Tower` / `Dungeon`，各有專屬
-  圖示在 `game-data/landmark-icons/`。新地區的傳送點/塔主/地牢從 paldb.cc 抓，`ipos` 直接當 x/y。
-- 地標是**贊助者限定**功能（與公會據點同層 gating），改資料不影響 gating。
+- **地標與野外頭目的資料源**：paldb.cc 的地圖 marker 資料檔 **`https://paldb.cc/js/map_data_en.js`**
+  （i18n 版本換 `map_data_tw.js` / `map_data_ja.js`）。主陣列是 `var fixedDungeon = [...]`（~13000 筆,
+  含各類 marker），每筆 `{id, lv?, type, item(顯示名), fixed_icon, ipos:{X,Y}}`。**`ipos.X`/`ipos.Y`
+  就直接等於我們的地圖座標 x/y（已驗證,無需換算）**。
+- **地標**：`packages/web/public/game-data/landmarks.json`，`{type, x, y, lv?, name:{en,zh,ja}}`。
+  type 目前有 `Fast Travel` / `Tower` / `Dungeon`（對應 `fixedDungeon` 裡同名 type），各有專屬圖示在
+  `game-data/landmark-icons/`。
+- **野外頭目（Alpha Pal）**：`packages/web/public/game-data/bosses.json`，`{name:{en,zh,ja}, x, y, lv?, icon?}`。
+  取 `fixedDungeon` 裡 `type==="Alpha Pal"` 的 marker（上次 83 筆）。boss `id` = `BOSS_<palId>`,
+  **去掉 `BOSS_` 前綴就對得上 `pals.json`**——名稱 zh/ja 與圖示（帕魯肖像,已在 `pals/`）都從 pals.json 取,
+  少數對不上的 boss 才用 map_data 的 `item`/`fixed_icon` 兜底（缺的圖示從 cdn.paldb.cc 補下）。
+- 地標與野外頭目都是**贊助者限定**功能（與公會據點同層 gating），改資料不影響 gating。
+- **公會據點圖示**用遊戲素材 `landmark-icons/palbox.webp`（帕魯方舟 `T_icon_buildObject_PalBoxV2`），
+  放在公會色外框上;boss 圖示是帕魯肖像+紅框+皇冠,與玩家頭像刻意做得不同。
 
 ---
 

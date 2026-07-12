@@ -263,80 +263,6 @@ export function PalStatsTab({ client, instanceId }: { client: AgentClient; insta
         </div>
       ) : (
         <>
-          {status.rows.length > 0 && (
-            <div className={`${card} flex flex-col gap-2`}>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="inline-flex items-center gap-2 text-sm font-extrabold text-ink-muted">
-                  <FiList className="size-4 text-pal" /> {t("已修改的帕魯")}
-                  <span className="rounded-full bg-pal/10 px-2 py-0.5 text-xs font-bold text-pal">
-                    {status.rows.length}
-                  </span>
-                </h3>
-                <button
-                  className={`${btnGhost} inline-flex items-center gap-1.5 text-berry hover:border-berry`}
-                  onClick={clearAll}
-                  disabled={saving}
-                >
-                  <FiTrash2 className="size-4" /> {t("刪除所有修改")}
-                </button>
-              </div>
-              <p className="text-xs text-ink-muted">
-                {t("這裡列出已寫入 PalSchema 的所有物種數值調整;點「編輯」可載回上方表單修改。")}
-              </p>
-              <div className="flex flex-col divide-y divide-line">
-                {status.rows.map((r) => {
-                  const parsed = parseRow(r.row);
-                  const pal = gameData?.palById.get(parsed.palId);
-                  const vlabel = PAL_ROW_VARIANTS.find((x) => x.id === parsed.variant)?.label;
-                  const changed = Object.entries(r.values) as [PalStatKey, number][];
-                  return (
-                    <div key={r.row} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
-                      <div className="flex min-w-44 items-center gap-2">
-                        {pal?.icon ? (
-                          <img src={palIconUrl(pal.icon)} alt="" className="size-7 rounded-md" />
-                        ) : (
-                          <GiSheep className="size-7 text-ink-muted" />
-                        )}
-                        <div className="min-w-0">
-                          <p className="flex items-center gap-1.5 truncate text-sm font-bold">
-                            {pal ? displayName(pal) : parsed.palId}
-                            {parsed.variant !== "normal" && vlabel && (
-                              <span className="rounded-full border border-line px-1.5 py-0.5 text-[11px] font-bold text-ink-muted">
-                                {t(vlabel)}
-                              </span>
-                            )}
-                          </p>
-                          <p className="font-mono text-[11px] text-ink-muted">{r.row}</p>
-                        </div>
-                      </div>
-                      <div className="flex flex-1 flex-wrap gap-1.5">
-                        {changed.map(([k, val]) => (
-                          <span
-                            key={k}
-                            className="rounded-full bg-card-soft px-2 py-0.5 text-[11px] text-ink-muted"
-                          >
-                            {t(PAL_STAT_OPTIONS[k].label)}{" "}
-                            <span className="font-mono font-bold text-ink">{val}</span>
-                          </span>
-                        ))}
-                      </div>
-                      {!locked && (
-                        <button
-                          className={`${btnGhost} inline-flex shrink-0 items-center gap-1 text-xs`}
-                          onClick={() => {
-                            setPalId(parsed.palId);
-                            setVariant(parsed.variant);
-                          }}
-                        >
-                          <FiEdit2 className="size-3.5" /> {t("編輯")}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
           <div className={locked ? "pointer-events-none flex flex-col gap-4 opacity-55" : "flex flex-col gap-4"}>
           <div className={`${card} flex flex-col gap-3`}>
             <div className="grid gap-2 sm:grid-cols-2">
@@ -447,6 +373,80 @@ export function PalStatsTab({ client, instanceId }: { client: AgentClient; insta
             <p className="text-ink-muted">{t("先選一隻帕魯再編輯數值。")}</p>
           )}
         </div>
+          {status.rows.length > 0 && (
+            <div className={`${card} flex flex-col gap-2`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="inline-flex items-center gap-2 text-sm font-extrabold text-ink-muted">
+                  <FiList className="size-4 text-pal" /> {t("已修改的帕魯")}
+                  <span className="rounded-full bg-pal/10 px-2 py-0.5 text-xs font-bold text-pal">
+                    {status.rows.length}
+                  </span>
+                </h3>
+                <button
+                  className={`${btnGhost} inline-flex items-center gap-1.5 text-berry hover:border-berry`}
+                  onClick={clearAll}
+                  disabled={saving}
+                >
+                  <FiTrash2 className="size-4" /> {t("刪除所有修改")}
+                </button>
+              </div>
+              <p className="text-xs text-ink-muted">
+                {t("這裡列出已寫入 PalSchema 的所有物種數值調整;點「編輯」可載回上方表單修改。")}
+              </p>
+              <div className="flex flex-col divide-y divide-line">
+                {status.rows.map((r) => {
+                  const parsed = parseRow(r.row);
+                  const pal = gameData?.palById.get(parsed.palId);
+                  const vlabel = PAL_ROW_VARIANTS.find((x) => x.id === parsed.variant)?.label;
+                  const changed = Object.entries(r.values) as [PalStatKey, number][];
+                  return (
+                    <div key={r.row} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
+                      <div className="flex min-w-44 items-center gap-2">
+                        {pal?.icon ? (
+                          <img src={palIconUrl(pal.icon)} alt="" className="size-7 rounded-md" />
+                        ) : (
+                          <GiSheep className="size-7 text-ink-muted" />
+                        )}
+                        <div className="min-w-0">
+                          <p className="flex items-center gap-1.5 truncate text-sm font-bold">
+                            {pal ? displayName(pal) : parsed.palId}
+                            {parsed.variant !== "normal" && vlabel && (
+                              <span className="rounded-full border border-line px-1.5 py-0.5 text-[11px] font-bold text-ink-muted">
+                                {t(vlabel)}
+                              </span>
+                            )}
+                          </p>
+                          <p className="font-mono text-[11px] text-ink-muted">{r.row}</p>
+                        </div>
+                      </div>
+                      <div className="flex flex-1 flex-wrap gap-1.5">
+                        {changed.map(([k, val]) => (
+                          <span
+                            key={k}
+                            className="rounded-full bg-card-soft px-2 py-0.5 text-[11px] text-ink-muted"
+                          >
+                            {t(PAL_STAT_OPTIONS[k].label)}{" "}
+                            <span className="font-mono font-bold text-ink">{val}</span>
+                          </span>
+                        ))}
+                      </div>
+                      {!locked && (
+                        <button
+                          className={`${btnGhost} inline-flex shrink-0 items-center gap-1 text-xs`}
+                          onClick={() => {
+                            setPalId(parsed.palId);
+                            setVariant(parsed.variant);
+                          }}
+                        >
+                          <FiEdit2 className="size-3.5" /> {t("編輯")}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

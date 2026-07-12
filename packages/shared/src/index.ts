@@ -159,7 +159,8 @@ export interface InstanceDetail extends InstanceSummary {
 }
 
 export interface InstanceStats {
-  cpuPercent: number;
+  /** null when a backend has not collected two valid samples yet. */
+  cpuPercent: number | null;
   /** 主機/容器可用的邏輯核心數,讓前端判讀 cpuPercent 的滿載基準。 */
   cpuCores: number;
   memoryBytes: number;
@@ -620,6 +621,43 @@ export interface ConfigHealth {
   engine: FileHealth;
 }
 
+/* ── INI configuration snapshots ── */
+
+export type ConfigSnapshotFileName = "PalWorldSettings.ini" | "Engine.ini";
+
+/** The only files a configuration snapshot may contain. */
+export interface ConfigSnapshotFiles {
+  /** null means the server has not generated this file yet. */
+  "PalWorldSettings.ini": string | null;
+  "Engine.ini": string | null;
+}
+
+export interface ConfigSnapshotMetadata {
+  instanceId: string;
+  backend: Backend;
+}
+
+/** JSON payload stored below an instance's config-backups directory. */
+export interface ConfigSnapshot {
+  files: ConfigSnapshotFiles;
+  metadata: ConfigSnapshotMetadata;
+  reason: string;
+  createdAt: string;
+  /** UTF-8 byte size of the INI files that exist. */
+  size: number;
+}
+
+/** Snapshot payload plus its agent-generated, filesystem-safe identifier. */
+export interface ConfigSnapshotInfo extends ConfigSnapshot {
+  id: string;
+}
+
+export interface ConfigSnapshotList {
+  supported: boolean;
+  reason?: string;
+  snapshots: ConfigSnapshotInfo[];
+}
+
 /** How a friend can reach this server (LAN / VPN / public). */
 /**
  * 認出常見「遊戲用 VPN」的位址,回傳顯示名稱;不是已知 VPN 就回 null。這些 VPN 都在
@@ -660,6 +698,10 @@ export interface AgentInfo {
   authenticated: boolean;
   /** agent 所在主機平台(process.platform:darwin / win32 / linux)。前端用來提示 macOS 限制。 */
   platform: string;
+  /** 此平台可用的 backend 清單。前端依此動態顯示/隱藏 backend 選項。
+   * Windows 只支援 native（Docker Desktop UDP 不可靠）；
+   * Linux 支援 native/docker/k8s；macOS 只支援 native（無 Palworld server binary）。 */
+  availableBackends: Backend[];
 }
 
 /** GUI 自我更新的偏好設定(存在 agent 的 data dir)。 */

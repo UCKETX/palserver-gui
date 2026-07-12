@@ -1,9 +1,9 @@
 import * as k8s from "@kubernetes/client-node";
-import fs from "node:fs";
 import { PassThrough } from "node:stream";
 import type { InstanceStats, InstanceStatus, LogSource, LogSourceId } from "@palserver/shared";
 import type { ServerDriver, DriverContext } from "./driver.js";
 import type { InstanceRecord } from "./store.js";
+import { execInPod, findPodName, loadKubeConfig } from "./k8s-files.js";
 
 /**
  * k8s backend driver.
@@ -33,42 +33,6 @@ function strategicMergeMiddleware(): any {
     },
     post: (ctx: unknown) => of(ctx),
   };
-}
-
-/**
- * Load a kubeconfig with a precedence that covers all agent deployment shapes:
- *   1. PALSERVER_KUBECONFIG env → explicit file (SSH-tunnel / admin-supplied path)
- *   2. in-cluster service account (agent runs as a Pod)
- *   3. ~/.kube/config default (out-of-cluster dev/ops)
- */
-export function loadKubeConfig(): k8s.KubeConfig {
-  const kc = new k8s.KubeConfig();
-  const kubeconfigPath = process.env.PALSERVER_KUBECONFIG;
-  if (kubeconfigPath && fs.existsSync(kubeconfigPath)) {
-    kc.loadFromFile(kubeconfigPath);
-    return kc;
-  }
-  try {
-    kc.loadFromCluster();
-    return kc;
-  } catch {
-    // not in a Pod — fall through to default kubeconfig
-  }
-  kc.loadFromDefault();
-  return kc;
-}
-
-/** Find the first Pod backing a StatefulSet via its `app=<sts>` label. */
-export async function findPodName(
-  coreApi: k8s.CoreV1Api,
-  namespace: string,
-  statefulSet: string,
-): Promise<string | null> {
-  const pods = await coreApi.listNamespacedPod({
-    namespace,
-    labelSelector: `app=${statefulSet}`,
-  });
-  return pods.items[0]?.metadata?.name ?? null;
 }
 
 export const k8sDriver: ServerDriver = {
@@ -145,8 +109,8 @@ export const k8sDriver: ServerDriver = {
   },
 
   async stats(rec, _ctx): Promise<InstanceStats | null> {
-    // k8s 下透過 exec 讀容器的 cgroup 與 /proc 取記憶體與運行時間。
-    // CPU 因難以從單次取樣推算百分比，暫不提供（前端顯示 —）。
+    // k8s 下透過 exec 讀容器的 cgroup 與 /proc。CPU 必須以同一 Pod 的
+    // 累積時間差取樣，第一筆只建立基線，避免把 0 誤當成真實使用率。
     const namespace = rec.k8sNamespace!;
     const stsName = rec.k8sStatefulSet!;
     const kc = loadKubeConfig();
@@ -156,26 +120,52 @@ export const k8sDriver: ServerDriver = {
     if (!podName) return null;
 
     try {
-      // 記憶體：cgroup v2 的 memory.current（bytes）；v1 fallback 到 memory.usage_in_bytes
-      let memoryBytes = 0;
-      try {
-        const memOut = await execInPod(rec, ["sh", "-c",
-          "cat /sys/fs/cgroup/memory.current 2>/dev/null || cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null || echo 0"]);
-        memoryBytes = Number(memOut.trim()) || 0;
-      } catch { /* best-effort */ }
+      const now = Date.now();
+      const cpuStatV2 = await readFirst(rec, ["/sys/fs/cgroup/cpu.stat"]);
+      const usageMicros = cpuStatV2 !== null
+        ? parseCpuStatUsageMicros(cpuStatV2)
+        : parseCpuAcctUsageMicros(await readFirst(rec, ["/sys/fs/cgroup/cpuacct/cpuacct.usage"]));
+      const cpuMaxV2 = await readFirst(rec, ["/sys/fs/cgroup/cpu.max"]);
+      const cpuCores = cpuMaxV2 !== null
+        ? parseCpuMaxCores(cpuMaxV2, await readFirst(rec, ["/proc/cpuinfo"]))
+        : parseCpuQuotaCores(
+          await readFirst(rec, ["/sys/fs/cgroup/cpu/cpu.cfs_quota_us"]),
+          await readFirst(rec, ["/sys/fs/cgroup/cpu/cpu.cfs_period_us"]),
+          await readFirst(rec, ["/proc/cpuinfo"]),
+        );
+
+      const memoryCurrent = await readFirst(rec, ["/sys/fs/cgroup/memory.current"]);
+      const memoryV1 = await readFirst(rec, ["/sys/fs/cgroup/memory/memory.usage_in_bytes"]);
+      const memoryBytes = parseBytes(memoryCurrent ?? memoryV1);
+      const memoryMax = await readFirst(rec, ["/sys/fs/cgroup/memory.max"]);
+      const memoryLimitV1 = await readFirst(rec, ["/sys/fs/cgroup/memory/memory.limit_in_bytes"]);
+      const memoryLimitBytes = parseMemoryLimit(memoryMax ?? memoryLimitV1);
+
+      const previous = usageMicros === null ? undefined : k8sStatsSamples.get(rec.id);
+      const cpuPercent = usageMicros === null || previous?.podName !== podName
+        ? null
+        : computeCpuPercent(previous, usageMicros, now);
+      if (usageMicros === null) k8sStatsSamples.delete(rec.id);
+      else k8sStatsSamples.set(rec.id, { podName, usageMicros, atMs: now });
 
       // uptime：從 /proc/uptime 的第一欄（秒）
       let uptimeSeconds: number | undefined;
       try {
-        const upOut = await execInPod(rec, ["sh", "-c", "cut -d' ' -f1 /proc/uptime"]);
-        uptimeSeconds = Math.round(Number(upOut.trim()) || 0);
+        const upOut = await execInPod(rec, ["cat", "/proc/uptime"]);
+        const statOut = await execInPod(rec, ["cat", "/proc/1/stat"]);
+        const hzOut = await execInPod(rec, ["getconf", "CLK_TCK"]).catch(() => "100");
+        uptimeSeconds = computeContainerUptimeSeconds(
+          Number(upOut.trim().split(/\s+/)[0]),
+          parseProcStatStartTicks(statOut),
+          Number(hzOut.trim()) || 100,
+        );
       } catch { /* best-effort */ }
 
       return {
-        cpuPercent: 0,
-        cpuCores: 1,
+        cpuPercent,
+        cpuCores,
         memoryBytes,
-        memoryLimitBytes: 0,
+        memoryLimitBytes,
         uptimeSeconds,
       } satisfies InstanceStats;
     } catch {
@@ -232,168 +222,110 @@ export const k8sDriver: ServerDriver = {
   },
 };
 
-// ── container file operations via Exec API ──────────────────────────────
-// These helpers drive files inside the game-server Pod over `kubectl exec`-
-// equivalent WebSocket calls. The game-server image mounts its data at
-// /palworld/, so relPath arguments are interpreted relative to that root.
-// They are NOT part of the ServerDriver interface — saves.ts / engine-ini.ts
-// import them directly to stay backend-aware without leaking exec concerns
-// into the driver abstraction.
+type K8sStatsSample = { podName: string; usageMicros: number; atMs: number };
+const k8sStatsSamples = new Map<string, K8sStatsSample>();
 
-/** Resolve the backing Pod for an instance, or throw when none is running. */
-async function podOf(rec: InstanceRecord): Promise<{ kc: k8s.KubeConfig; namespace: string; podName: string; containerName: string }> {
-  const kc = loadKubeConfig();
-  const coreApi = kc.makeApiClient(k8s.CoreV1Api);
-  const namespace = rec.k8sNamespace!;
-  const stsName = rec.k8sStatefulSet!;
-  const podName = await findPodName(coreApi, namespace, stsName);
-  if (!podName) throw new Error("找不到運行中的 game-server Pod");
-  // 取得容器名（StatefulSet 的第一個容器）
-  const sts = await kc.makeApiClient(k8s.AppsV1Api).readNamespacedStatefulSet({
-    name: stsName, namespace,
-  });
-  const containerName = sts.spec?.template?.spec?.containers?.[0]?.name ?? "";
-  return { kc, namespace, podName, containerName };
+async function readFirst(rec: InstanceRecord, paths: string[]): Promise<string | null> {
+  for (const file of paths) {
+    try {
+      return await execInPod(rec, ["cat", file]);
+    } catch {
+      // Try the next cgroup layout.
+    }
+  }
+  return null;
 }
 
-/** Run a command inside the game-server Pod; resolve to collected stdout. */
-export async function execInPod(rec: InstanceRecord, command: string[]): Promise<string> {
-  const { kc, namespace, podName, containerName } = await podOf(rec);
-  const exec = new k8s.Exec(kc);
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  let output = "";
-  let errOutput = "";
-  stdout.on("data", (chunk) => {
-    output += chunk.toString();
-  });
-  stderr.on("data", (chunk) => {
-    errOutput += chunk.toString();
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    exec
-      .exec(
-        namespace,
-        podName,
-        containerName,
-        command,
-        stdout,
-        stderr,
-        null,
-        false,
-        (status) => {
-          if (status.status === "Failure" || errOutput) {
-            reject(new Error(errOutput || "exec failed"));
-          } else {
-            resolve();
-          }
-        },
-      )
-      .catch(reject);
-  });
-  return output;
+export function parseCpuStatUsageMicros(raw: string): number | null {
+  const match = /(?:^|\n)usage_usec\s+(\d+)/.exec(raw);
+  return match ? Number(match[1]) : null;
 }
 
-/** Read a file under /palworld/ in the Pod as text. */
-export async function readFileInPod(rec: InstanceRecord, relPath: string): Promise<string> {
-  return execInPod(rec, ["cat", `/palworld/${relPath}`]);
+export function parseCpuAcctUsageMicros(raw: string | null): number | null {
+  if (!raw) return null;
+  const nanos = Number(raw.trim());
+  return Number.isFinite(nanos) && nanos >= 0 ? nanos / 1000 : null;
 }
 
-/**
- * Write text to a file under /palworld/ in the Pod. Uses a quoted heredoc so
- * the content is passed verbatim (single-quoted PALSERVER_EOF disables shell
- * expansion in the delimiter line), avoiding quoting pitfalls in the body.
- */
-export async function writeFileInPod(rec: InstanceRecord, relPath: string, content: string): Promise<void> {
-  const fullPath = `/palworld/${relPath}`;
-  await execInPod(rec, [
-    "sh",
-    "-c",
-    `cat > '${fullPath}' <<'PALSERVER_EOF'\n${content}\nPALSERVER_EOF`,
-  ]);
+function parseBytes(raw: string | null): number {
+  if (!raw) return 0;
+  const value = Number(raw.trim());
+  return Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
-/** List a directory under /palworld/ one entry per line. */
-export async function listDirInPod(rec: InstanceRecord, relPath: string): Promise<string> {
-  return execInPod(rec, ["ls", "-1", `/palworld/${relPath}`]);
+export function parseMemoryLimit(raw: string | null): number {
+  if (!raw || raw.trim() === "max") return 0;
+  const value = Number(raw.trim());
+  // cgroup v1 uses a very large sentinel for unlimited memory.
+  return Number.isFinite(value) && value > 0 && value < 1e18 ? value : 0;
 }
 
-/** Pack a directory under /palworld/ into a tar.gz and return the bytes. */
-export async function tarDirInPod(rec: InstanceRecord, relPath: string): Promise<Buffer> {
-  const { kc, namespace, podName, containerName } = await podOf(rec);
-  const exec = new k8s.Exec(kc);
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  const chunks: Buffer[] = [];
-  stdout.on("data", (chunk) => {
-    chunks.push(Buffer.from(chunk));
-  });
-  let errOutput = "";
-  stderr.on("data", (chunk) => {
-    errOutput += chunk.toString();
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    exec
-      .exec(
-        namespace,
-        podName,
-        containerName,
-        ["tar", "czf", "-", "-C", `/palworld/${relPath}`, "."],
-        stdout,
-        stderr,
-        null,
-        false,
-        (status) => {
-          if (status.status === "Failure" || errOutput) {
-            reject(new Error(errOutput || "tar failed"));
-          } else {
-            resolve();
-          }
-        },
-      )
-      .catch(reject);
-  });
-  return Buffer.concat(chunks);
+function cpuInfoCores(raw: string | null): number {
+  if (!raw) return 1;
+  const count = (raw.match(/^processor\s*:/gm) ?? []).length;
+  return count > 0 ? count : 1;
 }
 
-/** Pipe a tar.gz byte stream into a directory under /palworld/ in the Pod. */
-export async function untarIntoPod(rec: InstanceRecord, relPath: string, archive: Buffer): Promise<void> {
-  const { kc, namespace, podName, containerName } = await podOf(rec);
-  const exec = new k8s.Exec(kc);
-  const stdin = new PassThrough();
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  let errOutput = "";
-  stderr.on("data", (chunk) => {
-    errOutput += chunk.toString();
-  });
-
-  // Ensure target exists, then stream the archive into tar's stdin.
-  await execInPod(rec, ["mkdir", "-p", `/palworld/${relPath}`]);
-
-  const done = new Promise<void>((resolve, reject) => {
-    exec
-      .exec(
-        namespace,
-        podName,
-        containerName,
-        ["tar", "xzf", "-", "-C", `/palworld/${relPath}`],
-        stdout,
-        stderr,
-        stdin,
-        false,
-        (status) => {
-          if (status.status === "Failure" || errOutput) {
-            reject(new Error(errOutput || "untar failed"));
-          } else {
-            resolve();
-          }
-        },
-      )
-      .catch(reject);
-  });
-  stdin.end(archive);
-  await done;
+export function parseCpuMaxCores(raw: string, cpuInfoRaw: string | null): number {
+  const [quota, period] = raw.trim().split(/\s+/);
+  if (!quota || quota === "max") return cpuInfoCores(cpuInfoRaw);
+  const q = Number(quota);
+  const p = Number(period);
+  return Number.isFinite(q) && q > 0 && Number.isFinite(p) && p > 0 ? Math.max(q / p, 0.01) : cpuInfoCores(cpuInfoRaw);
 }
+
+export function parseCpuQuotaCores(quotaRaw: string | null, periodRaw: string | null, cpuInfoRaw: string | null): number {
+  const quota = Number(quotaRaw?.trim());
+  const period = Number(periodRaw?.trim());
+  if (!Number.isFinite(quota) || quota <= 0 || !Number.isFinite(period) || period <= 0) return cpuInfoCores(cpuInfoRaw);
+  return Math.max(quota / period, 0.01);
+}
+
+export function parseProcStatStartTicks(raw: string): number | null {
+  const commEnd = raw.lastIndexOf(")");
+  if (commEnd < 0) return null;
+  const fields = raw.slice(commEnd + 2).trim().split(/\s+/);
+  const startTicks = Number(fields[19]); // field 22; fields start at field 3
+  return Number.isFinite(startTicks) && startTicks >= 0 ? startTicks : null;
+}
+
+export function computeContainerUptimeSeconds(
+  hostUptimeSeconds: number,
+  startTicks: number | null,
+  ticksPerSecond: number,
+): number {
+  if (!Number.isFinite(hostUptimeSeconds) || hostUptimeSeconds < 0) return 0;
+  if (startTicks === null || !Number.isFinite(ticksPerSecond) || ticksPerSecond <= 0) {
+    return Math.round(hostUptimeSeconds);
+  }
+  return Math.max(0, Math.round(hostUptimeSeconds - startTicks / ticksPerSecond));
+}
+
+export function computeCpuPercent(
+  previous: K8sStatsSample | undefined,
+  usageMicros: number,
+  atMs: number,
+): number | null {
+  if (!previous || previous.atMs >= atMs || usageMicros < previous.usageMicros) return null;
+  const wallMicros = (atMs - previous.atMs) * 1000;
+  if (wallMicros <= 0) return null;
+  return Math.max(0, (usageMicros - previous.usageMicros) / wallMicros * 100);
+}
+
+// Keep the historical k8s.ts import surface for saves.ts and engine-ini.ts.
+export {
+  deletePathInPod,
+  downloadFileInPod,
+  execInPod,
+  execInPodBuffer,
+  listDirInPod,
+  makeDirInPod,
+  readFileInPod,
+  resolvePodPath,
+  tarDirInPod,
+  untarIntoPod,
+  uploadFileInPod,
+  writeFileBytesInPod,
+  writeFileInPod,
+} from "./k8s-files.js";
+export { findPodName, loadKubeConfig } from "./k8s-files.js";

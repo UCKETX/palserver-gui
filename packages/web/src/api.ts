@@ -6,6 +6,8 @@ import type {
   BackupSchedule,
   ConfigHealth,
   ConnectionInfo,
+  ConfigSnapshotInfo,
+  ConfigSnapshotList,
   CreateInstanceInput,
   CustomPalInput,
   DirEntry,
@@ -50,6 +52,19 @@ export interface TelemetryStatus {
   /** true = 被 PALSERVER_TELEMETRY=0 強制停用,GUI 開關無效。 */
   envDisabled: boolean;
   installId: string;
+}
+
+export interface ConfigSnapshotResult {
+  supported: boolean;
+  reason?: string;
+  snapshot?: ConfigSnapshotInfo;
+}
+
+export interface ConfigSnapshotRestoreResult {
+  supported: boolean;
+  reason?: string;
+  snapshot?: ConfigSnapshotInfo;
+  safetySnapshot?: ConfigSnapshotInfo;
 }
 
 const STORAGE_KEY = "palserver.connection";
@@ -390,6 +405,31 @@ export class AgentClient {
     return this.request(`/api/instances/${id}/config-health`);
   }
 
+  listConfigBackups(id: string): Promise<ConfigSnapshotList> {
+    return this.request(`/api/instances/${id}/config-backups`);
+  }
+
+  createConfigBackup(id: string, reason?: string): Promise<ConfigSnapshotResult> {
+    return this.request(`/api/instances/${id}/config-backups`, {
+      method: "POST",
+      body: JSON.stringify(reason?.trim() ? { reason: reason.trim() } : {}),
+    });
+  }
+
+  configBackupDownloadUrl(id: string, name: string): string {
+    const url = new URL(`${this.conn.url}/api/instances/${encodeURIComponent(id)}/config-backups/download`);
+    url.searchParams.set("name", name);
+    url.searchParams.set("token", this.conn.token);
+    return url.toString();
+  }
+
+  restoreConfigBackup(id: string, name: string): Promise<ConfigSnapshotRestoreResult> {
+    return this.request(`/api/instances/${id}/config-backups/restore`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+  }
+
   regenerateConfig(id: string, file: "world" | "engine"): Promise<{ path: string; backedUp: boolean }> {
     return this.request(`/api/instances/${id}/config/regenerate`, {
       method: "POST",
@@ -472,6 +512,33 @@ export class AgentClient {
   deletePlayerSave(id: string, worldGuid: string, file: string): Promise<void> {
     const q = new URLSearchParams({ worldGuid, file });
     return this.request(`/api/instances/${id}/saves/player?${q}`, { method: "DELETE" });
+  }
+
+  /** 鏡像遷移：把此實例的存檔+INI+GameUserSettings 複製到目標實例。 */
+  mirrorWorld(id: string, targetId: string): Promise<{ mirrored: boolean; worldGuid: string; targetId: string }> {
+    return this.request(`/api/instances/${id}/mirror`, {
+      method: "POST",
+      body: JSON.stringify({ targetId }),
+    });
+  }
+
+  /** Pak mod 列表（跨平台）。 */
+  listPakMods(id: string): Promise<{ mods: { name: string; size: number; enabled: boolean }[] }> {
+    return this.request(`/api/instances/${id}/pak-mods`);
+  }
+
+  /** 啟停 pak mod。 */
+  togglePakMod(id: string, name: string, enabled: boolean): Promise<{ toggled: string; enabled: boolean }> {
+    return this.request(`/api/instances/${id}/pak-mods/toggle`, {
+      method: "POST",
+      body: JSON.stringify({ name, enabled }),
+    });
+  }
+
+  /** 移除 pak mod。 */
+  removePakMod(id: string, name: string): Promise<void> {
+    const q = new URLSearchParams({ name });
+    return this.request(`/api/instances/${id}/pak-mods?${q}`, { method: "DELETE" });
   }
 
   updateBackupSchedule(id: string, patch: Partial<BackupSchedule>): Promise<BackupSchedule> {

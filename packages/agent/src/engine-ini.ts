@@ -26,25 +26,37 @@ const K8S_REL_PATH = "Pal/Saved/Config/LinuxServer/Engine.ini";
 
 const enginePath = (root: string) => path.join(root, ...REL_PATH.split("/"));
 
-/** Backend-aware Engine.ini read: native hits the host FS, k8s reaches the
- * Pod over exec. Returns null when the file does not exist. */
+/** Backend-aware Engine.ini read: native/docker hit the host FS (docker via
+ * bind-mount), k8s reaches the Pod over exec. Returns null when absent. */
 async function readEngineIni(rec: InstanceRecord, ctx: DriverContext): Promise<string | null> {
   if (rec.backend === "k8s") {
     return readFileInPod(rec, K8S_REL_PATH).catch(() => null);
   }
-  const file = enginePath(serverRoot(rec, ctx));
+  // docker: bind-mount saved = Pal/Saved, so config is under saved/Config/...
+  const base = rec.backend === "docker"
+    ? path.join(ctx.instanceDir, "saved")
+    : serverRoot(rec, ctx);
+  const rel = rec.backend === "docker"
+    ? `Saved/Config/${CONFIG_PLATFORM_DIR}/Engine.ini`
+    : REL_PATH;
+  const file = path.join(base, ...rel.split("/"));
   return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
 }
 
-/** Backend-aware Engine.ini write. native ensures the config dir exists;
- * k8s writes into the running Pod (the dir already exists once the server
- * has booted at least once). */
+/** Backend-aware Engine.ini write. native/docker ensures the config dir exists;
+ * k8s writes into the running Pod. */
 async function writeEngineIni(rec: InstanceRecord, ctx: DriverContext, content: string): Promise<void> {
   if (rec.backend === "k8s") {
     await writeFileInPod(rec, K8S_REL_PATH, content);
     return;
   }
-  const file = enginePath(serverRoot(rec, ctx));
+  const base = rec.backend === "docker"
+    ? path.join(ctx.instanceDir, "saved")
+    : serverRoot(rec, ctx);
+  const rel = rec.backend === "docker"
+    ? `Saved/Config/${CONFIG_PLATFORM_DIR}/Engine.ini`
+    : REL_PATH;
+  const file = path.join(base, ...rel.split("/"));
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content);
 }
@@ -53,15 +65,6 @@ export async function getEngineSettings(
   rec: InstanceRecord,
   ctx: DriverContext,
 ): Promise<EngineSettingsStatus> {
-  if (rec.backend === "docker") {
-    return {
-      supported: false,
-      reason: "效能設定目前不支援 Docker 模式的實例",
-      exists: false,
-      path: null,
-      values: {},
-    };
-  }
   const displayPath = rec.backend === "k8s" ? K8S_REL_PATH : REL_PATH;
   const raw = await readEngineIni(rec, ctx);
   // 顯示以 store 為準:伺服器每次關機都會把 Engine.ini 重寫回它自己的預設,
@@ -93,9 +96,6 @@ export async function writeEngineSettings(
   ctx: DriverContext,
   patch: EngineSettings,
 ): Promise<{ status: EngineSettingsStatus; engineSettings: EngineSettings }> {
-  if (rec.backend === "docker") {
-    throw Object.assign(new Error("效能設定目前不支援 Docker 模式的實例"), { statusCode: 409 });
-  }
   const existing = (await readEngineIni(rec, ctx)) ?? "";
   // 累積在 store:既有值(store 優先,舊實例從檔案遷移)疊上這次的 patch。
   const merged: EngineSettings = { ...(rec.engineSettings ?? parseEngineValues(existing)), ...patch };

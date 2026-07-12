@@ -11,7 +11,7 @@ import {
   FiTrash2,
   FiUser,
 } from "react-icons/fi";
-import type { BackupSchedule, SavesStatus, WorldSave } from "@palserver/shared";
+import type { BackupSchedule, InstanceSummary, SavesStatus, WorldSave } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { FileBrowserDialog } from "./FileManager";
 import { t, useI18n } from "./i18n";
@@ -108,6 +108,14 @@ export function SavesTab({
           {t("伺服器運作中:可以建立備份,但還原存檔、切換世界、刪除玩家存檔需要先停止伺服器。")}
         </p>
       )}
+
+      <MirrorCard
+        client={client}
+        instanceId={instanceId}
+        busy={busy}
+        onError={setError}
+        onNotice={flash}
+      />
 
       <ScheduleCard
         client={client}
@@ -419,6 +427,86 @@ function ScheduleCard({
         >
           <FiPlay className="size-4" /> {t("立即測試執行")}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/** 鏡像遷移卡片：把此實例的存檔+INI 鏡像到同 agent 的其他實例。 */
+function MirrorCard({
+  client,
+  instanceId,
+  busy,
+  onError,
+  onNotice,
+}: {
+  client: AgentClient;
+  instanceId: string;
+  busy: boolean;
+  onError: (e: string) => void;
+  onNotice: (t: string) => void;
+}) {
+  const [instances, setInstances] = useState<InstanceSummary[]>([]);
+  const [targetId, setTargetId] = useState("");
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    client.listInstances().then((list) => {
+      setInstances(list.filter((i) => i.id !== instanceId));
+    }).catch(() => {});
+  }, [client, instanceId]);
+
+  if (!open) {
+    return (
+      <div className={`${card} flex items-center justify-between`}>
+        <div>
+          <p className="text-sm font-bold">{t("鏡像遷移")}</p>
+          <p className="text-xs text-ink-muted">{t("把此實例的存檔與世界設定複製到其他實例")}</p>
+        </div>
+        <button className={btnGhost} onClick={() => setOpen(true)} disabled={busy || instances.length === 0}>
+          {t("鏡像到…")}
+        </button>
+      </div>
+    );
+  }
+
+  const doMirror = async () => {
+    if (!targetId) return;
+    try {
+      const res = await client.mirrorWorld(instanceId, targetId);
+      onNotice(t("已鏡像到目標實例(worldguid: {guid})", { guid: res.worldGuid.slice(0, 8) }));
+      setOpen(false);
+      setTargetId("");
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <div className={card}>
+      <p className="text-sm font-bold">{t("鏡像遷移")}</p>
+      <p className="mb-3 text-xs text-ink-muted">
+        {t("選擇目標實例。此實例的存檔、世界 INI、GameUserSettings 會複製過去,目標的 DedicatedServerName 會改為此實例的 worldguid。")}
+      </p>
+      <div className="flex flex-col gap-2">
+        <select
+          className={inputCls}
+          value={targetId}
+          onChange={(e) => setTargetId(e.target.value)}
+        >
+          <option value="">{t("選擇目標實例…")}</option>
+          {instances.map((i) => (
+            <option key={i.id} value={i.id}>{i.name} ({i.backend})</option>
+          ))}
+        </select>
+        <div className="flex gap-2">
+          <button className={btn} onClick={doMirror} disabled={!targetId || busy}>
+            {t("執行鏡像")}
+          </button>
+          <button className={btnGhost} onClick={() => setOpen(false)}>
+            {t("取消")}
+          </button>
+        </div>
       </div>
     </div>
   );

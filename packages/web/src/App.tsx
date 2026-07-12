@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GiSheep, GiEggClutch } from "react-icons/gi";
 import { FiDownload, FiHeart, FiHelpCircle, FiPlus, FiSettings, FiAlertTriangle } from "react-icons/fi";
-import type { InstanceSummary } from "@palserver/shared";
+import type { Backend, InstanceSummary } from "@palserver/shared";
 import { AgentClient, loadConnection, saveConnection, type Connection } from "./api";
 import { usePromoConfig } from "./promoConfig";
 import { ConnectFlow } from "./ConnectFlow";
@@ -224,6 +224,8 @@ function CreateDialog({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [platform, setPlatform] = useState<string | null>(null);
+  const [availableBackends, setAvailableBackends] = useState<Backend[]>(["native"]);
+  const [advancedMode, setAdvancedMode] = useState(false);
   // k8s 是把伺服器跑在叢集裡(agent 只是遙控),所以 agent 這台是不是 macOS 無所謂。
   const isMac = platform === "darwin" && backend !== "k8s";
   const k8sIncomplete = backend === "k8s" && (!k8sNamespace.trim() || !k8sStatefulSet.trim());
@@ -231,7 +233,15 @@ function CreateDialog({
   // agent 在 macOS 時,主機無法實際執行 Palworld 伺服器(SteamCMD 32-bit 在
   // Rosetta 下不可用、PalServer 存檔即崩潰),不論 native 或 Docker 都一樣。
   useEffect(() => {
-    client.info().then((i) => setPlatform(i.platform)).catch(() => {});
+    client.info().then((i) => {
+      setPlatform(i.platform);
+      if (i.availableBackends && i.availableBackends.length > 0) {
+        setAvailableBackends(i.availableBackends);
+        if (!i.availableBackends.includes(backend)) {
+          setBackend("native");
+        }
+      }
+    }).catch(() => {});
   }, [client]);
 
   const submit = async (e: React.FormEvent) => {
@@ -287,11 +297,23 @@ function CreateDialog({
         <label className={labelCls}>
           {t("運行方式")}
           <Select value={backend} onChange={(e) => setBackend(e.target.value as "native" | "docker" | "k8s")}>
-            <option value="native">{t("原生(直接在這台主機上運行,推薦)")}</option>
-            <option value="docker">{t("Docker 容器(beta)")}</option>
-            <option value="k8s">{t("Kubernetes(遙控叢集內的 StatefulSet)")}</option>
+            <option value="native" disabled={!availableBackends.includes("native")}>{t("原生(直接在這台主機上運行,推薦)")}</option>
+            <option value="docker" disabled={!availableBackends.includes("docker")}>{t("Docker 容器(beta)")}</option>
+            {advancedMode && (
+              <option value="k8s" disabled={!availableBackends.includes("k8s")}>{t("Kubernetes(遙控叢集內的 StatefulSet)")}</option>
+            )}
           </Select>
         </label>
+        {!advancedMode && (
+          <label className="flex items-center gap-2 text-xs text-ink-muted cursor-pointer">
+            <input
+              type="checkbox"
+              checked={advancedMode}
+              onChange={(e) => setAdvancedMode(e.target.checked)}
+            />
+            {t("顯示進階選項(Kubernetes)")}
+          </label>
+        )}
         {backend === "k8s" && (
           <>
             <p className="rounded-xl border-2 border-pal/30 bg-pal/5 px-3 py-2 text-xs text-ink-muted">

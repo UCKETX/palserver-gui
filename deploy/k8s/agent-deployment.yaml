@@ -51,16 +51,9 @@ roleRef:
   kind: Role
   name: palserver-agent-role
   apiGroup: rbac.authorization.k8s.io
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: palworld-secrets
-  namespace: palserver
-type: Opaque
-stringData:
-  server-password: "test123"
-  admin-password: "test123"
+# Before applying this bundle, create the referenced Secret out-of-band:
+# kubectl -n palserver create secret generic palworld-secrets
+#   --from-literal=server-password='...' --from-literal=admin-password='...'
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -80,6 +73,9 @@ spec:
         app: palserver-agent
     spec:
       serviceAccountName: palserver-agent-sa
+      volumes:
+        - name: agent-data
+          emptyDir: {}
       containers:
         - name: agent
           image: palserver-agent:local
@@ -102,6 +98,17 @@ spec:
               value: "0"
             - name: PALSERVER_AUTO_UPDATE
               value: "0"
+            # 持久化 store（instances.json、token 等）到 volume，
+            # 避免 pod 重啟遺失 instance 註冊。
+            # 預設用 emptyDir（pod 存活期間持久）；生產環境改掛 PVC：
+            #   - name: agent-data
+            #     persistentVolumeClaim:
+            #       claimName: palserver-agent-data
+            - name: PALSERVER_DATA_DIR
+              value: /agent-data
+          volumeMounts:
+            - name: agent-data
+              mountPath: /agent-data
           resources:
             requests:
               memory: "128Mi"

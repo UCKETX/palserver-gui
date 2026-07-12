@@ -5,30 +5,27 @@ import type { DriverContext } from "./driver.js";
 import type { InstanceRecord } from "./store.js";
 import { serverRoot } from "./native.js";
 import { renderPalWorldSettingsIni } from "./settings-ini.js";
+import { makeDirInPod, readFileInPod, writeFileInPod } from "./k8s-files.js";
 
-/**
- * Detects a corrupted PalWorldSettings.ini or Engine.ini on disk and can
- * regenerate a fresh one. These files can be broken by a hand edit, a bad
- * adopted install, or a half-written save — the game then silently starts a
- * new world or ignores the config, which is worse than a clear error.
- *
- * "Corrupted" here means: the file exists but its structure is unusable.
- * Regeneration backs the bad file up first (never a silent data loss), then
- * writes a valid one — the world ini from the agent's stored settings (the
- * source of truth), the engine ini as a minimal valid file.
- */
+/** Configuration health for host-native files and the LinuxServer files in a k8s Pod. */
 
 const PLATFORM_DIR = process.platform === "win32" ? "WindowsServer" : "LinuxServer";
-const configDir = (root: string) => path.join(root, "Pal", "Saved", "Config", PLATFORM_DIR);
+const NATIVE_CONFIG_REL = `Pal/Saved/Config/${PLATFORM_DIR}`;
+const K8S_CONFIG_REL = "Pal/Saved/Config/LinuxServer";
+
+const configDir = (root: string) => path.join(root, ...NATIVE_CONFIG_REL.split("/"));
 const worldIni = (root: string) => path.join(configDir(root), "PalWorldSettings.ini");
 const engineIni = (root: string) => path.join(configDir(root), "Engine.ini");
+const nativeRel = (root: string, file: string) => path.relative(root, file).split(path.sep).join("/");
 
-const rel = (root: string, file: string) => path.relative(root, file).split(path.sep).join("/");
+function fail(message: string, statusCode = 400): Error & { statusCode: number } {
+  return Object.assign(new Error(message), { statusCode });
+}
 
 /** A line the ini parser should recognise: blank, comment, section, key=value. */
 const INI_LINE = /^\s*($|;|#|\[.+\]\s*$|[^=\s][^=]*=)/;
 
-function checkStructure(text: string): string | null {
+export function checkStructure(text: string): string | null {
   const lines = text.split(/\r?\n/);
   let sawSection = false;
   for (const raw of lines) {
@@ -45,48 +42,76 @@ function checkStructure(text: string): string | null {
   return null;
 }
 
-function worldHealth(root: string): FileHealth {
-  const file = worldIni(root);
-  if (!fs.existsSync(file)) {
-    return { exists: false, corrupted: false, path: rel(root, file) };
-  }
-  const text = fs.readFileSync(file, "utf8");
+function worldHealthText(text: string, displayPath: string): FileHealth {
   const structural = checkStructure(text);
-  if (structural) return { exists: true, corrupted: true, reason: structural, path: rel(root, file) };
-
-  // PalWorldSettings.ini specifically needs the world-settings section and a
-  // balanced OptionSettings=(...) tuple; the game rejects a broken one.
+  if (structural) return { exists: true, corrupted: true, reason: structural, path: displayPath };
   if (!/\[\/Script\/Pal\.PalGameWorldSettings\]/.test(text)) {
-    return { exists: true, corrupted: true, reason: "缺少 PalGameWorldSettings 區段", path: rel(root, file) };
+    return { exists: true, corrupted: true, reason: "缺少 PalGameWorldSettings 區段", path: displayPath };
   }
   const opt = /OptionSettings\s*=\s*\((.*)\)\s*$/m.exec(text);
   if (!opt) {
-    return { exists: true, corrupted: true, reason: "OptionSettings 缺失或括號不完整", path: rel(root, file) };
+    return { exists: true, corrupted: true, reason: "OptionSettings 缺失或括號不完整", path: displayPath };
   }
-  return { exists: true, corrupted: false, path: rel(root, file) };
+  return { exists: true, corrupted: false, path: displayPath };
 }
 
-function engineHealth(root: string): FileHealth {
-  const file = engineIni(root);
-  if (!fs.existsSync(file)) {
-    return { exists: false, corrupted: false, path: rel(root, file) };
+function engineHealthText(text: string, displayPath: string): FileHealth {
+  const structural = checkStructure(text);
+  return { exists: true, corrupted: structural !== null, reason: structural ?? undefined, path: displayPath };
+}
+
+function missing(displayPath: string): FileHealth {
+  return { exists: false, corrupted: false, path: displayPath };
+}
+
+function nativeHealth(rec: InstanceRecord, ctx: DriverContext): ConfigHealth {
+  // docker: bind-mount saved = Pal/Saved, config under saved/Config/...
+  if (rec.backend === "docker") {
+    const savedDir = path.join(ctx.instanceDir, "saved");
+    const cfgDir = path.join(savedDir, "Config", PLATFORM_DIR);
+    const world = path.join(cfgDir, "PalWorldSettings.ini");
+    const engine = path.join(cfgDir, "Engine.ini");
+    const rel = (f: string) => `Saved/Config/${PLATFORM_DIR}/${path.basename(f)}`;
+    return {
+      supported: true,
+      world: fs.existsSync(world) ? worldHealthText(fs.readFileSync(world, "utf8"), rel(world)) : missing(rel(world)),
+      engine: fs.existsSync(engine) ? engineHealthText(fs.readFileSync(engine, "utf8"), rel(engine)) : missing(rel(engine)),
+    };
   }
-  const structural = checkStructure(fs.readFileSync(file, "utf8"));
+  const root = serverRoot(rec, ctx);
+  const world = worldIni(root);
+  const engine = engineIni(root);
   return {
-    exists: true,
-    corrupted: structural !== null,
-    reason: structural ?? undefined,
-    path: rel(root, file),
+    supported: true,
+    world: fs.existsSync(world) ? worldHealthText(fs.readFileSync(world, "utf8"), nativeRel(root, world)) : missing(nativeRel(root, world)),
+    engine: fs.existsSync(engine) ? engineHealthText(fs.readFileSync(engine, "utf8"), nativeRel(root, engine)) : missing(nativeRel(root, engine)),
   };
 }
 
-export function getConfigHealth(rec: InstanceRecord, ctx: DriverContext): ConfigHealth {
-  if (rec.backend !== "native") {
-    const na: FileHealth = { exists: false, corrupted: false, path: null };
-    return { supported: false, world: na, engine: na };
+/** Read k8s files independently so a first boot can report both as missing. */
+async function k8sHealth(rec: InstanceRecord): Promise<ConfigHealth> {
+  const worldPath = `${K8S_CONFIG_REL}/PalWorldSettings.ini`;
+  const enginePath = `${K8S_CONFIG_REL}/Engine.ini`;
+  let world: FileHealth;
+  let engine: FileHealth;
+  try {
+    world = worldHealthText(await readFileInPod(rec, worldPath), worldPath);
+  } catch (error) {
+    if (error instanceof Error && /找不到運行中的 game-server Pod/.test(error.message)) {
+      return { supported: true, world: missing(worldPath), engine: missing(enginePath) };
+    }
+    world = missing(worldPath);
   }
-  const root = serverRoot(rec, ctx);
-  return { supported: true, world: worldHealth(root), engine: engineHealth(root) };
+  try {
+    engine = engineHealthText(await readFileInPod(rec, enginePath), enginePath);
+  } catch {
+    engine = missing(enginePath);
+  }
+  return { supported: true, world, engine };
+}
+
+export async function getConfigHealth(rec: InstanceRecord, ctx: DriverContext): Promise<ConfigHealth> {
+  return rec.backend === "k8s" ? k8sHealth(rec) : nativeHealth(rec, ctx);
 }
 
 function backupCorrupt(file: string): void {
@@ -95,25 +120,34 @@ function backupCorrupt(file: string): void {
   fs.renameSync(file, `${file}.corrupt-${stamp}.bak`);
 }
 
-export function regenerateConfig(
+export async function regenerateConfig(
   rec: InstanceRecord,
   ctx: DriverContext,
   which: "world" | "engine",
-): { path: string; backedUp: boolean } {
+): Promise<{ path: string; backedUp: boolean }> {
+  if (rec.backend === "k8s") {
+    const rel = `${K8S_CONFIG_REL}/${which === "world" ? "PalWorldSettings.ini" : "Engine.ini"}`;
+    const health = await getConfigHealth(rec, ctx);
+    const existed = which === "world" ? health.world.exists : health.engine.exists;
+    const content = which === "world" ? renderPalWorldSettingsIni(rec.settings) : "; regenerated by palserver GUI\n";
+    try {
+      await makeDirInPod(rec, K8S_CONFIG_REL);
+      await writeFileInPod(rec, rel, content);
+    } catch (error) {
+      if (error instanceof Error && /找不到運行中的 game-server Pod/.test(error.message)) {
+        throw fail("k8s 沒有運行中的 Pod，無法重建設定檔", 409);
+      }
+      throw error;
+    }
+    return { path: rel, backedUp: existed };
+  }
+
   const root = serverRoot(rec, ctx);
   fs.mkdirSync(configDir(root), { recursive: true });
-
   const file = which === "world" ? worldIni(root) : engineIni(root);
   const existed = fs.existsSync(file);
   backupCorrupt(file);
-
-  if (which === "world") {
-    // The store's settings are the source of truth; write them out fresh.
-    fs.writeFileSync(file, renderPalWorldSettingsIni(rec.settings));
-  } else {
-    // A minimal valid Engine.ini; the engine fills in its own defaults, and
-    // the 效能 tab writes overrides into it as needed.
-    fs.writeFileSync(file, "; regenerated by palserver GUI\n");
-  }
-  return { path: rel(root, file), backedUp: existed };
+  if (which === "world") fs.writeFileSync(file, renderPalWorldSettingsIni(rec.settings));
+  else fs.writeFileSync(file, "; regenerated by palserver GUI\n");
+  return { path: nativeRel(root, file), backedUp: existed };
 }

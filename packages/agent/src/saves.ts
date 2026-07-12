@@ -29,6 +29,15 @@ function existingPortablePaths(root: string): string[] {
 
 /** 匯出成 tar.gz 的可讀串流(存檔+設定,不含遊戲執行檔);沒東西可匯出時回 null。 */
 export function exportArchiveStream(rec: InstanceRecord, ctx: DriverContext): Readable | null {
+  if (rec.backend === "docker") {
+    // docker bind-mount: saved = Pal/Saved, portable paths are relative to it
+    const saved = path.join(ctx.instanceDir, "saved");
+    const dockerRel = ["SaveGames", "Config"].filter((p) => fs.existsSync(path.join(saved, p)));
+    if (dockerRel.length === 0) return null;
+    const child = spawn("tar", ["-czf", "-", "-C", saved, ...dockerRel], { windowsHide: true });
+    child.on("error", () => {});
+    return child.stdout;
+  }
   const root = serverRoot(rec, ctx);
   const rel = existingPortablePaths(root);
   if (rel.length === 0) return null;
@@ -72,19 +81,51 @@ function fail(message: string, statusCode = 400): Error & { statusCode: number }
   return Object.assign(new Error(message), { statusCode });
 }
 
-const saveGamesDir = (root: string) => path.join(root, "Pal", "Saved", "SaveGames", "0");
-const backupsDir = (ctx: DriverContext) => path.join(ctx.instanceDir, "backups");
-const gameUserSettings = (root: string) =>
-  path.join(root, "Pal", "Saved", "Config", CONFIG_PLATFORM_DIR, "GameUserSettings.ini");
+function assertWorldGuid(worldGuid: string): void {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(worldGuid)) throw fail("世界 GUID 格式不合法");
+}
 
-/** Backends that expose the world-save tree for read/write. native reads the
- * host filesystem directly; k8s reaches files over `kubectl exec`. docker has
- * no exec path wired here and stays unsupported. */
-function requireFileCapable(rec: InstanceRecord): void {
-  if (rec.backend === "docker") {
-    throw fail("存檔管理目前不支援 Docker 模式的實例", 409);
+async function validateArchiveMembers(archive: string): Promise<void> {
+  const listing = await execFileP("tar", ["-tzf", archive], { windowsHide: true }).catch(() => {
+    throw fail("備份檔不是有效的 tar.gz", 422);
+  });
+  for (const member of listing.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)) {
+    const normalized = member.replace(/\\/g, "/");
+    if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized) || normalized.split("/").includes("..")) {
+      throw fail("備份檔包含不安全的路徑", 422);
+    }
   }
 }
+
+/** Path helpers. These take the Pal/Saved root (not the full server root):
+ *  native: serverRoot/Pal/Saved, docker: instanceDir/saved. */
+const saveGamesDir = (savedRoot: string) => path.join(savedRoot, "SaveGames", "0");
+const backupsDir = (ctx: DriverContext) => path.join(ctx.instanceDir, "backups");
+const gameUserSettings = (savedRoot: string) =>
+  path.join(savedRoot, "Config", CONFIG_PLATFORM_DIR, "GameUserSettings.ini");
+
+/** Backends that expose the world-save tree for read/write. native and docker
+ * read the host filesystem directly (docker via bind-mount); k8s reaches
+ * files over `kubectl exec`. */
+function requireFileCapable(rec: InstanceRecord): void {
+  // all backends are now file-capable
+  void rec;
+}
+
+/** The Pal/Saved directory for host-FS backends.
+ * native: <serverRoot>/Pal/Saved
+ * docker: <instanceDir>/saved (bind-mount maps directly to Pal/Saved) */
+const savedRoot = (rec: InstanceRecord, ctx: DriverContext): string =>
+  rec.backend === "docker"
+    ? path.join(ctx.instanceDir, "saved")
+    : path.join(serverRoot(rec, ctx), "Pal", "Saved");
+
+/** saveGamesDir relative to the Pal/Saved directory. */
+const saveGamesFromSaved = (saved: string): string => path.join(saved, "SaveGames", "0");
+
+/** GameUserSettings.ini path relative to the Pal/Saved directory. */
+const gameUserSettingsFromSaved = (saved: string): string =>
+  path.join(saved, "Config", CONFIG_PLATFORM_DIR, "GameUserSettings.ini");
 
 export const serverRootOf = (rec: InstanceRecord, ctx: DriverContext) => serverRoot(rec, ctx);
 
@@ -178,7 +219,7 @@ export async function setActiveWorldGuidBackend(
     await writeFileInPod(rec, K8S_GAME_USER_SETTINGS_REL, applyDedicatedServerName(ini, guid));
     return;
   }
-  setActiveWorldGuid(serverRoot(rec, ctx), guid);
+  setActiveWorldGuid(savedRoot(rec, ctx), guid);
 }
 
 function listWorlds(root: string): WorldSave[] {
@@ -284,7 +325,7 @@ async function listWorldsK8s(rec: InstanceRecord): Promise<WorldSave[]> {
  * Used by the backup scheduler, which ticks async. */
 export async function activeWorldGuidAsync(rec: InstanceRecord, ctx: DriverContext): Promise<string | null> {
   if (rec.backend === "k8s") return activeWorldGuidK8s(rec);
-  return activeWorldGuid(serverRoot(rec, ctx));
+  return activeWorldGuid(savedRoot(rec, ctx));
 }
 
 function listBackups(ctx: DriverContext): BackupInfo[] {
@@ -320,7 +361,7 @@ export async function getSavesStatus(
   if (rec.backend === "k8s") {
     return { supported: true, worlds: await listWorldsK8s(rec), backups: listBackups(ctx) };
   }
-  const root = serverRoot(rec, ctx);
+  const root = savedRoot(rec, ctx);
   if (!fs.existsSync(saveGamesDir(root))) {
     return {
       supported: false,
@@ -348,6 +389,7 @@ export async function createBackup(
   ctx: DriverContext,
   worldGuid: string,
 ): Promise<BackupInfo> {
+  assertWorldGuid(worldGuid);
   requireFileCapable(rec);
   const flushed = await flushWorld(rec);
   fs.mkdirSync(backupsDir(ctx), { recursive: true });
@@ -365,7 +407,7 @@ export async function createBackup(
     });
     fs.writeFileSync(archive, buf);
   } else {
-    const root = serverRoot(rec, ctx);
+    const root = savedRoot(rec, ctx);
     const worldDir = path.join(saveGamesDir(root), worldGuid);
     if (!fs.existsSync(worldDir)) throw fail(`找不到世界存檔 ${worldGuid}`, 404);
     await execFileP("tar", ["-czf", archive, "-C", worldDir, "."], { windowsHide: true });
@@ -386,6 +428,7 @@ export async function restoreBackup(
   backupName: string,
   running: boolean,
 ): Promise<{ worldGuid: string; safetyBackup: string }> {
+  assertWorldGuid(path.basename(backupName).replace(/\.tar\.gz$/, "").split("__")[0] ?? "");
   requireFileCapable(rec);
   // k8s: the Pod must exist to receive the restore, so we don't gate on
   // `running` the way native does (native wants the server stopped so its
@@ -399,6 +442,8 @@ export async function restoreBackup(
 
   const worldGuid = path.basename(backupName).replace(/\.tar\.gz$/, "").split("__")[0];
   if (!worldGuid) throw fail("備份檔名無法解析出世界 GUID");
+  assertWorldGuid(worldGuid);
+  await validateArchiveMembers(archive);
 
   if (rec.backend === "k8s") {
     // Safety backup first (re-uses createBackup's tar-out path), then replace.
@@ -414,7 +459,7 @@ export async function restoreBackup(
     return { worldGuid, safetyBackup };
   }
 
-  const root = serverRoot(rec, ctx);
+  const root = savedRoot(rec, ctx);
   const worldDir = path.join(saveGamesDir(root), worldGuid);
 
   // Never destroy the current world without keeping a copy of it first.
@@ -448,6 +493,7 @@ export async function deletePlayerSave(
   file: string,
   running: boolean,
 ): Promise<void> {
+  assertWorldGuid(worldGuid);
   requireFileCapable(rec);
   // k8s: the Pod must exist to reach the file, so it must be running; native
   // wants the server stopped so its save files aren't locked mid-write.
@@ -465,7 +511,73 @@ export async function deletePlayerSave(
     return;
   }
 
-  const target = path.join(saveGamesDir(serverRoot(rec, ctx)), worldGuid, "Players", file);
+  const target = path.join(saveGamesDir(savedRoot(rec, ctx)), worldGuid, "Players", file);
   if (!fs.existsSync(target)) throw fail("找不到該玩家存檔", 404);
   fs.rmSync(target);
+}
+
+/**
+ * 鏡像遷移：把來源實例的存檔、世界 INI、GameUserSettings 複製到目標實例，
+ * 並把目標的 DedicatedServerName 改為來源的 worldguid，讓 server 載入相同的世界。
+ *
+ * 限制：同一 agent 內的 instance 間。native↔native 走 host FS；k8s↔k8s 走 exec。
+ * native↔k8s 混合（一個在 host、一個在 Pod）需額外傳輸機制，暫不支援。
+ */
+export async function mirrorWorld(
+  srcRec: InstanceRecord,
+  srcCtx: DriverContext,
+  dstRec: InstanceRecord,
+  dstCtx: DriverContext,
+): Promise<{ worldGuid: string }> {
+  const sameBackend = srcRec.backend === dstRec.backend;
+
+  // 1. 取得來源的活躍 worldguid
+  const srcGuid = await activeWorldGuidAsync(srcRec, srcCtx);
+  if (!srcGuid) throw fail("來源實例找不到活躍世界( DedicatedServerName 未設定)", 409);
+
+  // 2. 停止目標 server（native 要停、k8s 也先 scale down 確保檔案穩定）
+  //    呼叫端負責停/啟，這裡只做檔案操作
+
+  if (sameBackend && (srcRec.backend === "native" || srcRec.backend === "docker")) {
+    // native↔native / docker↔docker：直接 host FS 複製
+    const srcSaved = savedRoot(srcRec, srcCtx);
+    const dstSaved = savedRoot(dstRec, dstCtx);
+    if (srcRec.backend === "native") {
+      // native 用 copyPortableData（含完整 server root 結構）
+      copyPortableData(serverRoot(srcRec, srcCtx), serverRoot(dstRec, dstCtx));
+    } else {
+      // docker 只需 cp saved 目錄
+      fs.cpSync(srcSaved, dstSaved, { recursive: true });
+    }
+    // 改 DedicatedServerName
+    const dstGusPath = gameUserSettings(dstSaved);
+    if (fs.existsSync(dstGusPath)) {
+      const ini = fs.readFileSync(dstGusPath, "utf8");
+      fs.writeFileSync(dstGusPath, applyDedicatedServerName(ini, srcGuid));
+    }
+  } else if (sameBackend && srcRec.backend === "k8s") {
+    // k8s↔k8s：透過 exec tar pipe（src Pod → stdout → dst Pod stdin）
+    const srcSavePath = `/palworld/${K8S_SAVEGAMES_REL}`;
+    const dstSavePath = `/palworld/${K8S_SAVEGAMES_REL}`;
+    const archive = await tarDirInPod(srcRec, `${K8S_SAVEGAMES_REL}/0/${srcGuid}`);
+    await untarIntoPod(dstRec, K8S_SAVEGAMES_REL, archive);
+
+    // INI 也複製
+    const K8S_CONFIG_REL = "Pal/Saved/Config/LinuxServer";
+    for (const file of ["PalWorldSettings.ini", "Engine.ini", "GameUserSettings.ini"]) {
+      const content = await readFileInPod(srcRec, `${K8S_CONFIG_REL}/${file}`);
+      await writeFileInPod(dstRec, `${K8S_CONFIG_REL}/${file}`, content);
+    }
+
+    // 改 DedicatedServerName
+    const gus = await readFileInPod(dstRec, K8S_GAME_USER_SETTINGS_REL);
+    await writeFileInPod(dstRec, K8S_GAME_USER_SETTINGS_REL, applyDedicatedServerName(gus, srcGuid));
+  } else {
+    throw fail(
+      `鏡像遷移目前不支援 ${srcRec.backend} → ${dstRec.backend}（僅支援同類 backend）`,
+      409,
+    );
+  }
+
+  return { worldGuid: srcGuid };
 }

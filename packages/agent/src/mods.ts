@@ -108,7 +108,7 @@ export function getModsStatus(rec: InstanceRecord, ctx: DriverContext): ModsStat
   });
 
   if (rec.backend !== "native") {
-    return unsupported("模組管理目前僅支援原生模式的實例");
+    return unsupported("模組管理需要 Windows 原生模式(UE4SS/PalDefender 是 Windows DLL,在 Linux 容器/Pod 內無法載入)");
   }
   const root = serverRoot(rec, ctx);
   if (!fs.existsSync(win64Dir(root))) {

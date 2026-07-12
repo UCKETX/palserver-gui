@@ -150,10 +150,10 @@ export class RestartSupervisor {
 
   private async tick(): Promise<void> {
     for (const rec of this.store.list()) {
-      // docker has no supervisor path wired. native does full crash/memory/
-      // scheduled. k8s: scheduled restarts only — STS handles Pod self-heal
-      // and "exited" (replicas=0) is a deliberate stop, never a crash.
-      if (rec.backend === "docker" || this.busy.has(rec.id)) continue;
+      // docker: scheduled + memory restart only (crash handled by unless-stopped).
+      // native: full crash/memory/scheduled. k8s: scheduled only — STS handles
+      // Pod self-heal and "exited" (replicas=0) is a deliberate stop, not crash.
+      if (this.busy.has(rec.id)) continue;
       try {
         await this.check(rec);
       } catch {

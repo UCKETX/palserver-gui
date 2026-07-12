@@ -15,7 +15,9 @@ export const INI_TO_ENV: Record<string, string> = {
   ServerDescription: 'SERVER_DESCRIPTION',
   ServerPassword: 'SERVER_PASSWORD',
   AdminPassword: 'ADMIN_PASSWORD',
-  PublicPort: 'PUBLIC_PORT',
+  // The thijsvanloef image uses PORT for the game listener; PUBLIC_PORT is
+  // not the runtime env name in the deployed StatefulSet.
+  PublicPort: 'PORT',
   PublicIP: 'PUBLIC_IP',
   ServerPlayerMaxNum: 'SERVER_PLAYER_MAX_NUM',
   CoopPlayerMaxNum: 'COOP_PLAYER_MAX_NUM',

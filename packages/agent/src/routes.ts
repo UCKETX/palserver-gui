@@ -38,12 +38,28 @@ import { SERVER_LAUNCHER, classifyServerDir, isInstalling, lastInstallError, mov
 import { cachedVersionSummary, getVersionStatus } from "./version.js";
 import { getConnectionInfo } from "./connectivity.js";
 import { getModsStatus, installComponent, installedEnhancements, removeComponent, setLuaModEnabled } from "./mods.js";
+import * as pakMods from "./pak-mods.js";
 import { getModerationLists, moderation } from "./moderation.js";
 import { getLiveStatus, rest } from "./restapi.js";
 import * as files from "./files.js";
+import {
+  deletePathInPodBrowser,
+  listDirInPodBrowser,
+  makeDirInPodBrowser,
+  readFileInPodBrowser,
+  uploadFileInPodBrowser,
+  writeFileInPodBrowser,
+} from "./k8s-file-browser.js";
 import * as saves from "./saves.js";
 import { getEngineSettings, writeEngineSettings } from "./engine-ini.js";
 import { getConfigHealth, regenerateConfig } from "./config-health.js";
+import {
+  configSnapshotPath,
+  createConfigSnapshot,
+  listConfigSnapshots,
+  readConfigSnapshot,
+  restoreConfigSnapshot,
+} from "./config-backup.js";
 import { getPalDefenderConfig, writePalDefenderConfig } from "./paldefender-config.js";
 import { getPlayerDetail, getPdPlayers, getPdGuilds, getPdGuild, getPdRestStatus, setPdRestEnabled, provisionPdToken } from "./paldefender-rest.js";
 import { setTelemetryEnabled, telemetryStatus, track } from "./telemetry.js";
@@ -100,6 +116,17 @@ export function registerRoutes(
   const ctxOf = (rec: InstanceRecord): DriverContext => ({
     instanceDir: store.instanceDir(rec.id),
   });
+  const snapshotBefore = async (rec: InstanceRecord, reason: string): Promise<void> => {
+    if (rec.backend === "docker") return;
+    try {
+      await createConfigSnapshot(rec, ctxOf(rec), reason);
+    } catch (error) {
+      throw Object.assign(
+        new Error(`設定快照失敗，已取消操作：${error instanceof Error ? error.message : String(error)}`),
+        { statusCode: 409 },
+      );
+    }
+  };
   const driverOf = (rec: InstanceRecord) => drivers[rec.backend];
 
   const toSummary = async (rec: InstanceRecord): Promise<InstanceSummary> => {
@@ -148,6 +175,9 @@ export function registerRoutes(
       instanceCount: store.list().length,
       authenticated,
       platform: process.platform,
+      availableBackends: process.platform === "linux"
+        ? ["native", "docker", "k8s"]
+        : ["native"],
     };
   });
 
@@ -245,7 +275,7 @@ export function registerRoutes(
     if (store.findByName(input.name)) {
       return reply.code(409).send({ error: `instance "${input.name}" already exists` });
     }
-    const portTaken = store.list().some((r) => r.gamePort === input.gamePort);
+    const portTaken = input.backend !== "k8s" && store.list().some((r) => r.gamePort === input.gamePort);
     if (portTaken) {
       return reply.code(409).send({ error: `game port ${input.gamePort} already in use` });
     }
@@ -272,17 +302,53 @@ export function registerRoutes(
       }
       serverDirManaged = kind === "install" ? true : undefined;
     }
-    // k8s 需要指定要遙控的 StatefulSet(driver 用 rec.k8sNamespace!/k8sStatefulSet!)。
-    if (input.backend === "k8s" && (!input.k8sNamespace?.trim() || !input.k8sStatefulSet?.trim())) {
-      return reply
-        .code(400)
-        .send({ error: "k8s backend requires k8sNamespace and k8sStatefulSet" });
+    if (input.backend === "k8s") {
+      const dnsLabel = (value: string | undefined, label: string): string | null => {
+        const trimmed = value?.trim() ?? "";
+        if (!/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(trimmed) || trimmed.length > 63) {
+          return `${label} 必須是有效的 Kubernetes DNS label`;
+        }
+        return null;
+      };
+      for (const [value, label] of [
+        [input.k8sNamespace, "k8sNamespace"],
+        [input.k8sStatefulSet, "k8sStatefulSet"],
+        [input.k8sServiceName, "k8sServiceName"],
+      ] as const) {
+        const error = dnsLabel(value, label);
+        if (error) return reply.code(400).send({ error });
+      }
     }
     const settings = WorldSettingsSchema.parse({
       ServerName: input.name,
       PublicPort: input.gamePort,
       ...input.settings,
     });
+    // k8s: 若 game-server 已運行且有實際 PalWorldSettings.ini，
+    // 從 INI 同步 settings 到 store，避免用預設值覆蓋伺服器實際設定。
+    if (input.backend === "k8s") {
+      try {
+        const { readFileInPod } = await import("./k8s-files.js");
+        const { parsePalWorldSettingsIni } = await import("./settings-ini.js");
+        const tempRec = {
+          id: "sync",
+          name: input.name,
+          backend: "k8s" as const,
+          flavor: input.flavor,
+          gamePort: input.gamePort,
+          settings,
+          createdAt: new Date().toISOString(),
+          k8sNamespace: input.k8sNamespace,
+          k8sStatefulSet: input.k8sStatefulSet,
+          k8sServiceName: input.k8sServiceName,
+        } as InstanceRecord;
+        const ini = await readFileInPod(tempRec, "Pal/Saved/Config/LinuxServer/PalWorldSettings.ini");
+        const synced = parsePalWorldSettingsIni(ini);
+        Object.assign(settings, synced);
+      } catch {
+        // game-server 未運行或 INI 不存在 — 用 caller 帶入的 settings
+      }
+    }
     const rec = store.create({
       name: input.name,
       backend: input.backend,
@@ -320,12 +386,12 @@ export function registerRoutes(
   app.put("/api/instances/:id/settings", async (req) => {
     const rec = getOr404((req.params as { id: string }).id);
     const patch = UpdateSettingsSchema.parse(req.body);
-    const updated = store.update(rec.id, {
-      settings: WorldSettingsSchema.parse({ ...rec.settings, ...patch }),
-    });
+    const nextSettings = WorldSettingsSchema.parse({ ...rec.settings, ...patch });
+    await snapshotBefore(rec, "world settings update");
     // The driver re-renders the ini on every start; pre-render for docker so
     // the bind-mounted config is already in place.
     if (rec.backend === "docker") {
+      const updated = store.update(rec.id, { settings: nextSettings });
       dockerOps.writeConfig(store.instanceDir(rec.id), updated.settings);
       return { applied: "on-next-restart", settings: updated.settings };
     }
@@ -334,7 +400,13 @@ export function registerRoutes(
     // `restartTriggered` signals the UI that the change is already live.
     if (rec.backend === "k8s") {
       const { applyEnvPatchK8s } = await import("./k8s-env-patch.js");
-      const result = await applyEnvPatchK8s(rec, updated.settings);
+      const result = await applyEnvPatchK8s(rec, patch);
+      const appliedSettings = Object.fromEntries(
+        Object.entries(patch).filter(([key]) => !result.unsupported.includes(key)),
+      );
+      const updated = store.update(rec.id, {
+        settings: WorldSettingsSchema.parse({ ...rec.settings, ...appliedSettings }),
+      });
       return {
         applied: "env-patched",
         settings: updated.settings,
@@ -342,6 +414,7 @@ export function registerRoutes(
         unsupportedKeys: result.unsupported.length > 0 ? result.unsupported : undefined,
       };
     }
+    const updated = store.update(rec.id, { settings: nextSettings });
     return { applied: "on-next-restart", settings: updated.settings };
   });
 
@@ -470,8 +543,8 @@ export function registerRoutes(
    *  瀏覽器直接開這個網址下載(token 走 query,見 auth)。目前僅 native。 */
   app.get("/api/instances/:id/export", async (req, reply) => {
     const rec = getOr404((req.params as { id: string }).id);
-    if (rec.backend !== "native") {
-      return reply.code(400).send({ error: "export is only supported by the native backend" });
+    if (rec.backend === "k8s") {
+      return reply.code(400).send({ error: "export 請透過鏡像遷移功能(k8s 走 Pod exec)" });
     }
     const stream = saves.exportArchiveStream(rec, ctxOf(rec));
     if (!stream) {
@@ -487,8 +560,8 @@ export function registerRoutes(
    *  但不複製數十 GB 的遊戲執行檔(新實例自行安裝)。目前僅 native;需先停止來源。 */
   app.post("/api/instances/:id/duplicate", async (req, reply) => {
     const rec = getOr404((req.params as { id: string }).id);
-    if (rec.backend !== "native") {
-      return reply.code(400).send({ error: "duplicate is only supported by the native backend" });
+    if (rec.backend === "k8s") {
+      return reply.code(400).send({ error: "duplicate 請透過鏡像遷移功能(k8s)" });
     }
     const { status } = await driverOf(rec).status(rec, ctxOf(rec));
     if (status === "running" || status === "restarting" || status === "installing" || isInstalling(rec.id)) {
@@ -505,10 +578,10 @@ export function registerRoutes(
     while (usedPorts.has(gamePort)) gamePort++;
 
     const settings = WorldSettingsSchema.parse({ ...rec.settings, ServerName: name, PublicPort: gamePort });
-    // 新實例一律 agent 管理(不共用來源的外部安裝目錄)。
+    // 新實例沿用來源的 backend（native 走 host FS，docker 走 bind-mount）。
     const created = store.create({
       name,
-      backend: "native",
+      backend: rec.backend,
       flavor: rec.flavor,
       gamePort,
       queryPort: store.nextQueryPort(),
@@ -573,6 +646,27 @@ export function registerRoutes(
     const body = z.object({ name: z.string(), enabled: z.boolean() }).parse(req.body);
     setLuaModEnabled(rec, ctxOf(rec), body.name, body.enabled);
     return getModsStatus(rec, ctxOf(rec));
+  });
+
+  // ── pak mods (跨平台：native/docker/k8s 皆可，UE 引擎原生載入) ──
+  app.get("/api/instances/:id/pak-mods", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const mods = await pakMods.listPakMods(rec, ctxOf(rec));
+    return { mods };
+  });
+
+  app.post("/api/instances/:id/pak-mods/toggle", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const { name, enabled } = z.object({ name: z.string(), enabled: z.boolean() }).parse(req.body);
+    await pakMods.setPakModEnabled(rec, ctxOf(rec), name, enabled);
+    return { toggled: name, enabled };
+  });
+
+  app.delete("/api/instances/:id/pak-mods", async (req, reply) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const { name } = z.object({ name: z.string() }).parse(req.query);
+    await pakMods.removePakMod(rec, ctxOf(rec), name);
+    reply.code(204);
   });
 
   // ── live server control via the game's own REST API ──
@@ -808,10 +902,51 @@ export function registerRoutes(
   app.post("/api/instances/:id/config/regenerate", async (req) => {
     const rec = getOr404((req.params as { id: string }).id);
     const { file } = z.object({ file: z.enum(["world", "engine"]) }).parse(req.body);
-    if (await isRunning(rec)) {
-      throw Object.assign(new Error("請先停止伺服器再重新生成設定檔"), { statusCode: 409 });
+    const running = await isRunning(rec);
+    if ((rec.backend === "native" && running) || (rec.backend === "k8s" && !running)) {
+      throw Object.assign(
+        new Error(rec.backend === "k8s" ? "k8s 重建設定需伺服器運行中" : "請先停止伺服器再重新生成設定檔"),
+        { statusCode: 409 },
+      );
     }
+    await snapshotBefore(rec, `regenerate ${file}`);
     return regenerateConfig(rec, ctxOf(rec), file);
+  });
+
+  // ── INI configuration snapshots ──
+  app.get("/api/instances/:id/config-backups", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    return listConfigSnapshots(ctxOf(rec));
+  });
+
+  app.post("/api/instances/:id/config-backups", async (req, reply) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const { reason } = z.object({ reason: z.string().trim().max(120).optional() }).parse(req.body ?? {});
+    const result = await createConfigSnapshot(rec, ctxOf(rec), reason ?? "manual");
+    reply.code(201);
+    return result;
+  });
+
+  app.get("/api/instances/:id/config-backups/download", async (req, reply) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const { name } = z.object({ name: z.string().min(1).max(100) }).parse(req.query);
+    const snapshot = readConfigSnapshot(ctxOf(rec), name);
+    if (snapshot.metadata.instanceId !== rec.id) {
+      throw Object.assign(new Error("設定快照不屬於此實例"), { statusCode: 404 });
+    }
+    reply.header("content-type", "application/json; charset=utf-8");
+    reply.header("content-disposition", `attachment; filename="${snapshot.id}.json"`);
+    return fs.createReadStream(configSnapshotPath(ctxOf(rec), snapshot.id));
+  });
+
+  app.post("/api/instances/:id/config-backups/restore", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const { name } = z.object({ name: z.string().min(1).max(100) }).parse(req.body);
+    const running = await isRunning(rec);
+    if ((rec.backend === "native" && running) || (rec.backend === "k8s" && !running)) {
+      throw Object.assign(new Error(rec.backend === "k8s" ? "k8s 還原設定需伺服器運行中" : "請先停止伺服器再還原設定"), { statusCode: 409 });
+    }
+    return restoreConfigSnapshot(rec, ctxOf(rec), name);
   });
 
   // ── Engine.ini performance settings ──
@@ -830,6 +965,7 @@ export function registerRoutes(
       }),
     );
     const patch = z.object(shape).strict().parse(req.body);
+    await snapshotBefore(rec, "engine settings update");
     const { status, engineSettings } = await writeEngineSettings(rec, ctxOf(rec), patch as EngineSettings);
     // store 是權威來源:每次啟動前會把它合併回 Engine.ini(伺服器關機會重寫該檔)。
     store.update(rec.id, { engineSettings });
@@ -858,6 +994,7 @@ export function registerRoutes(
     if (isInstalling(rec.id)) {
       return reply.code(409).send({ error: "更新已在進行中" });
     }
+    await snapshotBefore(rec, "server update");
     updateServer(rec, ctxOf(rec));
     reply.code(202);
     return { started: true, hint: "更新進度會顯示在日誌分頁(agent 來源)" };
@@ -867,13 +1004,13 @@ export function registerRoutes(
   app.get("/api/instances/:id/restart-policy", async (req) => {
     const rec = getOr404((req.params as { id: string }).id);
     const ctx = ctxOf(rec);
-    // native: full crash/memory/scheduled. k8s: scheduled only (STS handles
-    // crash self-heal; no per-process memory stats). docker: unsupported.
-    const supported = rec.backend !== "docker";
-    const stats = supported ? await driverOf(rec).stats(rec, ctx) : null;
+    // native: full crash/memory/scheduled. docker: scheduled + memory only
+    // (crash handled by unless-stopped policy). k8s: scheduled only.
+    const supported = true;
+    const stats = await driverOf(rec).stats(rec, ctx);
     return {
       supported,
-      reason: supported ? undefined : "自動重啟目前不支援 Docker 模式的實例",
+      reason: undefined,
       policy: supervisor.readPolicy(rec.id),
       events: supervisor.events(rec.id),
       restartsLastHour: supervisor.restartsLastHour(rec.id),
@@ -937,7 +1074,7 @@ export function registerRoutes(
 
   app.post("/api/instances/:id/saves/backup", async (req, reply) => {
     const rec = getOr404((req.params as { id: string }).id);
-    const { worldGuid } = z.object({ worldGuid: z.string().min(1).max(64) }).parse(req.body);
+    const { worldGuid } = z.object({ worldGuid: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "世界 GUID 格式不合法") }).parse(req.body);
     reply.code(201);
     return saves.createBackup(rec, ctxOf(rec), worldGuid);
   });
@@ -966,7 +1103,7 @@ export function registerRoutes(
 
   app.post("/api/instances/:id/saves/active", async (req) => {
     const rec = getOr404((req.params as { id: string }).id);
-    const { worldGuid } = z.object({ worldGuid: z.string().min(1).max(64) }).parse(req.body);
+    const { worldGuid } = z.object({ worldGuid: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "世界 GUID 格式不合法") }).parse(req.body);
     const running = await isRunning(rec);
     // native edits the ini on the host (server must be stopped); k8s writes it
     // inside the running Pod via exec (server must be up so a Pod exists).
@@ -983,30 +1120,50 @@ export function registerRoutes(
   app.delete("/api/instances/:id/saves/player", async (req, reply) => {
     const rec = getOr404((req.params as { id: string }).id);
     const { worldGuid, file } = z
-      .object({ worldGuid: z.string().min(1).max(64), file: z.string().min(1).max(100) })
+      .object({ worldGuid: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "世界 GUID 格式不合法"), file: z.string().min(1).max(100) })
       .parse(req.query);
     await saves.deletePlayerSave(rec, ctxOf(rec), worldGuid, file, await isRunning(rec));
     reply.code(204);
   });
 
-  // ── file browser (native instances; confined to the server directory) ──
+  // ── world mirror (同 agent 內 instance 間存檔+INI 鏡像遷移) ──
+  app.post("/api/instances/:id/mirror", async (req) => {
+    const srcRec = getOr404((req.params as { id: string }).id);
+    const { targetId } = z.object({ targetId: z.string().min(1).max(64) }).parse(req.body);
+    const dstRec = getOr404(targetId);
+    if (srcRec.id === dstRec.id) throw Object.assign(new Error("不能鏡像到自己"), { statusCode: 409 });
+    const result = await saves.mirrorWorld(srcRec, ctxOf(srcRec), dstRec, ctxOf(dstRec));
+    return { mirrored: true, worldGuid: result.worldGuid, targetId: dstRec.id };
+  });
+
+  // ── file browser (native server root or k8s /palworld root) ──
   const PathQuery = z.object({ path: z.string().max(500).default("") });
 
   app.get("/api/instances/:id/files", async (req) => {
     const rec = getOr404((req.params as { id: string }).id);
     const { path: rel } = PathQuery.parse(req.query);
+    if (rec.backend === "k8s") return { path: rel, entries: await listDirInPodBrowser(rec, rel) };
     return { path: rel, entries: files.listDir(files.fileRoot(rec, ctxOf(rec)), rel) };
   });
 
   app.get("/api/instances/:id/files/content", async (req) => {
     const rec = getOr404((req.params as { id: string }).id);
     const { path: rel } = PathQuery.parse(req.query);
+    if (rec.backend === "k8s") return readFileInPodBrowser(rec, rel);
     return files.readFile(files.fileRoot(rec, ctxOf(rec)), rel);
   });
 
   app.put("/api/instances/:id/files/content", async (req) => {
     const rec = getOr404((req.params as { id: string }).id);
     const body = z.object({ path: z.string().max(500), content: z.string() }).parse(req.body);
+    const configName = path.posix.basename(body.path);
+    if (configName === "PalWorldSettings.ini" || configName === "Engine.ini") {
+      await snapshotBefore(rec, `raw file edit: ${configName}`);
+    }
+    if (rec.backend === "k8s") {
+      await writeFileInPodBrowser(rec, body.path, body.content);
+      return { saved: body.path, applied: "on-next-restart" };
+    }
     files.writeFile(files.fileRoot(rec, ctxOf(rec)), body.path, body.content);
     return { saved: body.path, applied: "on-next-restart" };
   });
@@ -1014,6 +1171,11 @@ export function registerRoutes(
   app.post("/api/instances/:id/files/dir", async (req, reply) => {
     const rec = getOr404((req.params as { id: string }).id);
     const body = z.object({ path: z.string().min(1).max(500) }).parse(req.body);
+    if (rec.backend === "k8s") {
+      await makeDirInPodBrowser(rec, body.path);
+      reply.code(201);
+      return { created: body.path };
+    }
     files.makeDir(files.fileRoot(rec, ctxOf(rec)), body.path);
     reply.code(201);
     return { created: body.path };
@@ -1022,6 +1184,11 @@ export function registerRoutes(
   app.delete("/api/instances/:id/files", async (req, reply) => {
     const rec = getOr404((req.params as { id: string }).id);
     const { path: rel } = z.object({ path: z.string().min(1).max(500) }).parse(req.query);
+    if (rec.backend === "k8s") {
+      await deletePathInPodBrowser(rec, rel);
+      reply.code(204);
+      return;
+    }
     files.deletePath(files.fileRoot(rec, ctxOf(rec)), rel);
     reply.code(204);
   });
@@ -1031,6 +1198,18 @@ export function registerRoutes(
   app.put("/api/instances/:id/files/upload", async (req, reply) => {
     const rec = getOr404((req.params as { id: string }).id);
     const { path: rel } = z.object({ path: z.string().min(1).max(500) }).parse(req.query);
+    const configName = path.posix.basename(rel);
+    if (configName === "PalWorldSettings.ini" || configName === "Engine.ini") {
+      await snapshotBefore(rec, `raw file upload: ${configName}`);
+    }
+    if (rec.backend === "k8s") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req.raw) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const content = Buffer.concat(chunks);
+      await uploadFileInPodBrowser(rec, rel, content);
+      reply.code(201);
+      return { uploaded: rel, size: content.length };
+    }
     const target = files.uploadTarget(files.fileRoot(rec, ctxOf(rec)), rel);
     await pipeline(req.raw, fs.createWriteStream(target));
     reply.code(201);

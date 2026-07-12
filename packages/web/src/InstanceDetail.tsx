@@ -283,8 +283,9 @@ export function InstanceDetailPage({
           onSave={saveSettings}
           client={client}
           instanceId={detail.id}
-          canEditRaw={detail.backend === "native"}
-          running={detail.status === "running"}
+          canEditRaw={true}
+          running={detail.status === "running" && detail.backend === "native"}
+          restoreAllowed={detail.backend === "k8s" ? detail.status === "running" : detail.status !== "running"}
         />
       )}
       {tab === "engine" && (
@@ -335,7 +336,7 @@ function OverviewTab({
   const serverPath = detail.effectiveServerDir ?? detail.serverDir;
   const rows: [string, React.ReactNode][] = [
     [t("狀態"), t(STATUS_LABELS[detail.status])],
-    [t("運行方式"), detail.backend === "native" ? t("原生") : t("Docker 容器")],
+    [t("運行方式"), detail.backend === "native" ? t("原生") : detail.backend === "docker" ? t("Docker 容器") : t("Kubernetes Pod")],
     [
       t("類型"),
       enhancements && enhancements.length > 0 ? t("強化({list})", { list: enhancements.join(" + ") }) : t("原味"),
@@ -343,7 +344,7 @@ function OverviewTab({
     [t("遊戲埠(UDP)"), String(detail.gamePort)],
     ["REST API", detail.settings.RESTAPIEnabled ? t("啟用({port})", { port: Number(detail.settings.RESTAPIPort) }) : t("停用")],
     ["RCON", detail.settings.RCONEnabled ? t("啟用({port})", { port: Number(detail.settings.RCONPort) }) : t("停用")],
-    [detail.backend === "native" ? t("行程 PID") : t("容器 ID"), detail.runtimeId ? detail.runtimeId.slice(0, 12) : "—"],
+    [detail.backend === "native" ? t("行程 PID") : detail.backend === "docker" ? t("容器 ID") : t("Pod 名稱"), detail.runtimeId ? detail.runtimeId.slice(0, 12) : "—"],
     // 路徑可能很長:中間省略、可點擊複製完整路徑,別讓它把整張卡片撐爆。
     [t("伺服器目錄"), serverPath ? <CopyPath value={serverPath} className="font-mono text-[13px]" /> : t("agent 管理")],
     [t("建立時間"), new Date(detail.createdAt).toLocaleString()],

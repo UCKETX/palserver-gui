@@ -1,7 +1,7 @@
-import { FiCoffee, FiExternalLink, FiFileText, FiHeart, FiX } from "react-icons/fi";
+import { FiCoffee, FiExternalLink, FiFileText, FiHeart, FiX, FiYoutube } from "react-icons/fi";
 import { usePromoConfig } from "./promoConfig";
 import { useI18n } from "./i18n";
-import { Overlay, btn, card } from "./ui";
+import { Overlay, btnSponsor, card } from "./ui";
 
 /**
  * 感謝名單彈窗:開發人員/核心團隊 + 捐贈名單。名單內容走 promo-config.json
@@ -48,13 +48,41 @@ export function CreditsModal({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
+        {(promo.credits.ambassadors ?? []).length > 0 && (
+          <div className="flex flex-col gap-2 border-t border-line pt-3">
+            <h3 className="text-sm font-extrabold">{t("推廣大使")}</h3>
+            {(promo.credits.ambassadors ?? []).map((a) =>
+              a.url ? (
+                <a
+                  key={a.name}
+                  href={a.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center justify-between gap-2 rounded-xl border-2 border-line bg-card-soft px-3 py-2 transition hover:-translate-y-px hover:border-pal"
+                >
+                  <span>
+                    <span className="block text-sm font-extrabold">{a.name}</span>
+                    <span className="block text-xs text-ink-muted">{t(a.role)}</span>
+                  </span>
+                  <FiYoutube className="size-4 shrink-0 text-ink-muted" />
+                </a>
+              ) : (
+                <div key={a.name} className="rounded-xl border-2 border-line bg-card-soft px-3 py-2">
+                  <span className="block text-sm font-extrabold">{a.name}</span>
+                  <span className="block text-xs text-ink-muted">{t(a.role)}</span>
+                </div>
+              ),
+            )}
+          </div>
+        )}
+
         <div className="border-t border-line pt-3">
           <h3 className="mb-2 text-sm font-extrabold">{t("捐贈名單")}</h3>
           <p className="mb-2 text-[13px] text-ink-muted">
             {t("感謝每一位支持 palserver GUI 的贊助者,完整名單請見:")}
           </p>
           <a
-            className={`${btn} inline-flex items-center gap-1.5`}
+            className={`${btnSponsor} inline-flex items-center gap-1.5`}
             href={promo.credits.donate}
             target="_blank"
             rel="noreferrer"

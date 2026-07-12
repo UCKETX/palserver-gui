@@ -1,7 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { PdPal, PdItemSlot, PdRestStatus, PlayerDetail } from "@palserver/shared";
+import type {
+  PdPal,
+  PdItemSlot,
+  PdGuild,
+  PdGuildList,
+  PdGuildDetail,
+  PdPlayerList,
+  PdPlayerSummary,
+  PdRestStatus,
+  PlayerDetail,
+  PlayerProgression,
+  PlayerTechs,
+} from "@palserver/shared";
 import type { DriverContext } from "./driver.js";
 import type { InstanceRecord } from "./store.js";
 import { serverRoot } from "./native.js";
@@ -59,29 +71,47 @@ async function ensureToken(rec: InstanceRecord, dir: string): Promise<string> {
 
 export function getPdRestStatus(rec: InstanceRecord, ctx: DriverContext): PdRestStatus {
   if (rec.backend !== "native") {
-    return { installed: false, configExists: false, enabled: false, hasToken: false, reason: "玩家細節僅支援原生模式的實例" };
+    return { installed: false, configExists: false, enabled: false, hasToken: false, port: 17993, reason: "玩家細節僅支援原生模式的實例" };
   }
   const dir = pdDir(rec, ctx);
   if (!dir) {
-    return { installed: false, configExists: false, enabled: false, hasToken: false, reason: "尚未安裝 PalDefender" };
+    return { installed: false, configExists: false, enabled: false, hasToken: false, port: 17993, reason: "尚未安裝 PalDefender" };
   }
   const configFile = path.join(dir, "RESTAPI", "RESTConfig.json");
   const configExists = fs.existsSync(configFile);
+  const { enabled, port } = restConfig(dir);
   if (!configExists) {
     return {
-      installed: true, configExists: false, enabled: false, hasToken: false,
+      installed: true, configExists: false, enabled: false, hasToken: false, port,
       reason: "PalDefender 尚未生成 REST 設定 — 啟動一次伺服器即會產生",
     };
   }
-  const { enabled } = restConfig(dir);
   if (!enabled) {
     return {
-      installed: true, configExists: true, enabled: false, hasToken: false,
+      installed: true, configExists: true, enabled: false, hasToken: false, port,
       reason: "PalDefender REST API 未啟用 — 啟用後即可查看玩家的帕魯與背包",
     };
   }
   const hasToken = fs.existsSync(path.join(dir, "RESTAPI", "Tokens", TOKEN_FILE));
-  return { installed: true, configExists: true, enabled: true, hasToken };
+  return { installed: true, configExists: true, enabled: true, hasToken, port };
+}
+
+/** Set Port in RESTConfig.json (preserving the rest of the file). */
+export function setPdRestPort(rec: InstanceRecord, ctx: DriverContext, port: number): void {
+  const dir = pdDir(rec, ctx);
+  if (!dir) throw Object.assign(new Error("尚未安裝 PalDefender"), { statusCode: 409 });
+  const file = path.join(dir, "RESTAPI", "RESTConfig.json");
+  if (!fs.existsSync(file)) {
+    throw Object.assign(new Error("找不到 RESTConfig.json — 請先啟動一次伺服器"), { statusCode: 409 });
+  }
+  let cfg: Record<string, unknown>;
+  try {
+    cfg = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    throw Object.assign(new Error("RESTConfig.json 格式損壞"), { statusCode: 409 });
+  }
+  cfg.Port = port;
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 4));
 }
 
 /** Set Enabled in RESTConfig.json (preserving the rest of the file). */
@@ -122,7 +152,9 @@ export async function provisionPdToken(
 const PD_ERROR_MESSAGES: Record<string, string> = {
   INVALID_TOKEN: "存取權杖尚未生效 — 請重啟伺服器一次(或確認 RCON 已啟用,讓 agent 能自動載入權杖)",
   MISSING_PERMISSION: "存取權杖權限不足",
-  PLAYER_NOT_FOUND: "此玩家目前不在線上 — PalDefender 只能查詢在線玩家的帕魯與背包",
+  // PalDefender 1.8.0 起 /player、/pals、/items 都支援離線玩家,所以查不到通常代表這個
+  // 玩家從未加入過,或 PalDefender 版本過舊(1.8 之前只能查在線)。
+  PLAYER_NOT_FOUND: "找不到這個玩家 —— 可能從未加入過此伺服器,或你的 PalDefender 版本過舊(需 1.8.0 以上才能查詢離線玩家,請更新 PalDefender)。",
   PLAYER_ACCOUNT_NOT_FOUND: "找到玩家但無法載入其存檔資料",
   REQUEST_TIMEOUT: "PalDefender 回應逾時,請稍後再試",
   REQUEST_FAILED: "PalDefender 處理請求時發生錯誤",
@@ -130,13 +162,23 @@ const PD_ERROR_MESSAGES: Record<string, string> = {
 
 class PdRestError extends Error {}
 
-async function pdFetch<T>(rec: InstanceRecord, dir: string, endpoint: string): Promise<T> {
+async function pdFetch<T>(
+  rec: InstanceRecord,
+  dir: string,
+  endpoint: string,
+  body?: unknown,
+): Promise<T> {
   const { port } = restConfig(dir);
   const token = await ensureToken(rec, dir);
   let res: Response;
   try {
     res = await fetch(`http://127.0.0.1:${port}/v1/pdapi${endpoint}`, {
-      headers: { Authorization: `Bearer ${token}` },
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(8000),
     });
   } catch {
@@ -191,6 +233,231 @@ function collectItems(inventory: Record<string, unknown> | undefined): PdItemSlo
   return out;
 }
 
+/** 統一玩家名冊(PalDefender 1.8+ /players,含離線玩家)。 */
+export async function getPdPlayers(rec: InstanceRecord, ctx: DriverContext): Promise<PdPlayerList> {
+  const status = getPdRestStatus(rec, ctx);
+  if (!status.enabled) {
+    return { available: false, reason: status.reason, onlineCount: 0, totalCount: 0, players: [] };
+  }
+  const dir = pdDir(rec, ctx)!;
+  try {
+    const res = await pdFetch<{ Meta?: Record<string, unknown>; Players?: Record<string, unknown>[] }>(
+      rec,
+      dir,
+      "/players",
+    );
+    const players: PdPlayerSummary[] = (res.Players ?? []).map((raw) => {
+      const p = (raw ?? {}) as Record<string, unknown>;
+      const world = (p.WorldLocation ?? {}) as Record<string, unknown>;
+      const wx = Number(world.x);
+      const wy = Number(world.y);
+      return {
+        name: String(p.Name ?? ""),
+        userId: String(p.UserId ?? ""),
+        playerUid: String(p.PlayerUID ?? ""),
+        guildName: String(p.GuildName ?? ""),
+        online: String(p.Status ?? "").toLowerCase() === "online",
+        ip: String(p.IP ?? ""),
+        worldX: Number.isFinite(wx) ? wx : undefined,
+        worldY: Number.isFinite(wy) ? wy : undefined,
+      };
+    });
+    return {
+      available: true,
+      onlineCount: Number(res.Meta?.OnlineCount ?? players.filter((p) => p.online).length),
+      totalCount: Number(res.Meta?.PlayerCount ?? players.length),
+      players,
+    };
+  } catch (err) {
+    return {
+      available: false,
+      reason: err instanceof Error ? err.message : String(err),
+      onlineCount: 0,
+      totalCount: 0,
+      players: [],
+    };
+  }
+}
+
+/** 公會 + 據點(PalDefender /guilds)。整個功能是贊助者限定:非贊助者(detailed=false)
+ * 直接拿不到任何公會資料。前端拿據點的 world_pos 走 savToMap 畫到地圖。 */
+export async function getPdGuilds(
+  rec: InstanceRecord,
+  ctx: DriverContext,
+  detailed: boolean,
+): Promise<PdGuildList> {
+  if (!detailed) return { available: true, detailed: false, guilds: [] };
+  const status = getPdRestStatus(rec, ctx);
+  if (!status.enabled) {
+    return { available: false, detailed: true, reason: status.reason, guilds: [] };
+  }
+  const dir = pdDir(rec, ctx)!;
+  try {
+    const res = await pdFetch<{ Guilds?: Record<string, Record<string, unknown>> }>(rec, dir, "/guilds");
+    const guilds: PdGuild[] = Object.entries(res.Guilds ?? {}).map(([id, raw]) => {
+      const g = (raw ?? {}) as Record<string, unknown>;
+      const admin = (g.admin ?? {}) as Record<string, unknown>;
+      const camps = Array.isArray(g.camps) ? (g.camps as Record<string, unknown>[]) : [];
+      return {
+        id,
+        name: String(g.name ?? ""),
+        level: Number(g.Level ?? 0),
+        adminName: String(admin.name ?? ""),
+        memberCount: Number(g.member_count ?? (Array.isArray(g.members) ? g.members.length : 0)),
+        members: Array.isArray(g.members) ? g.members.map(String) : [],
+        bases: camps
+          .map((c) => {
+            const world = ((c ?? {}).world_pos ?? {}) as Record<string, unknown>;
+            return { id: String((c ?? {}).id ?? ""), worldX: Number(world.x), worldY: Number(world.y) };
+          })
+          .filter((b) => Number.isFinite(b.worldX) && Number.isFinite(b.worldY)),
+      };
+    });
+    return { available: true, detailed: true, guilds };
+  } catch (err) {
+    return { available: false, detailed: true, reason: err instanceof Error ? err.message : String(err), guilds: [] };
+  }
+}
+
+/** 單一公會詳情(PalDefender /guild/{id}):成員名單 + 據點(含等級/狀態)。贊助者功能。 */
+export async function getPdGuild(
+  rec: InstanceRecord,
+  ctx: DriverContext,
+  guildId: string,
+): Promise<PdGuildDetail> {
+  const empty = (reason?: string): PdGuildDetail => ({
+    available: false,
+    reason,
+    id: guildId,
+    name: "",
+    level: 0,
+    adminName: "",
+    memberCount: 0,
+    members: [],
+    camps: [],
+  });
+  const status = getPdRestStatus(rec, ctx);
+  if (!status.enabled) return empty(status.reason);
+  const dir = pdDir(rec, ctx)!;
+  try {
+    const res = await pdFetch<{ Guild?: Record<string, unknown> }>(
+      rec,
+      dir,
+      `/guild/${encodeURIComponent(guildId)}`,
+    );
+    const g = (res.Guild ?? {}) as Record<string, unknown>;
+    const admin = (g.admin ?? {}) as Record<string, unknown>;
+    const rawMembers = Array.isArray(g.members) ? (g.members as Record<string, unknown>[]) : [];
+    const rawCamps = Array.isArray(g.camps) ? (g.camps as Record<string, unknown>[]) : [];
+    return {
+      available: true,
+      id: guildId,
+      name: String(g.name ?? ""),
+      level: Number(g.Level ?? 0),
+      adminName: String(admin.name ?? ""),
+      memberCount: Number(g.member_count ?? rawMembers.length),
+      members: rawMembers.map((m) => ({
+        playerUid: String((m ?? {}).player_uid ?? ""),
+        name: String((m ?? {}).player_name ?? ""),
+        status: String((m ?? {}).status ?? ""),
+      })),
+      camps: rawCamps.map((c) => {
+        const world = ((c ?? {}).world_pos ?? {}) as Record<string, unknown>;
+        return {
+          id: String((c ?? {}).id ?? ""),
+          level: Number((c ?? {}).level ?? 0),
+          worldX: Number(world.x),
+          worldY: Number(world.y),
+          state: String((c ?? {}).state ?? ""),
+        };
+      }),
+    };
+  } catch (err) {
+    return empty(err instanceof Error ? err.message : String(err));
+  }
+}
+
+/** 已解鎖科技(/techs);取不到就回 null,不擋玩家詳情主體。 */
+async function fetchTechs(rec: InstanceRecord, dir: string, identifier: string): Promise<PlayerTechs | null> {
+  try {
+    const res = await pdFetch<{ Meta?: Record<string, unknown>; Techs?: { Unlocked?: unknown[] } }>(
+      rec,
+      dir,
+      `/techs/${encodeURIComponent(identifier)}`,
+    );
+    return {
+      unlocked: (res.Techs?.Unlocked ?? []).map(String),
+      unlockedCount: Number(res.Meta?.UnlockedCount ?? (res.Techs?.Unlocked ?? []).length),
+      totalCount: Number(res.Meta?.TotalCount ?? 0),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 進度概要(/progression);取不到就回 null。 */
+async function fetchProgression(
+  rec: InstanceRecord,
+  dir: string,
+  identifier: string,
+): Promise<PlayerProgression | null> {
+  try {
+    const res = await pdFetch<{ Progression?: Record<string, Record<string, unknown>> }>(
+      rec,
+      dir,
+      `/progression/${encodeURIComponent(identifier)}`,
+    );
+    const prog = res.Progression ?? {};
+    const player = prog.Player ?? {};
+    const currencies = prog.Currencies ?? {};
+    const bosses = prog.Bosses ?? {};
+    const captures = prog.Captures ?? {};
+    const countKeys = (o: unknown) => (o && typeof o === "object" ? Object.keys(o).length : 0);
+    return {
+      level: Number(player.level ?? 0),
+      exp: Number(player.exp ?? 0),
+      unusedStatusPoints: Number(player.unusedStatusPoints ?? 0),
+      technologyPoints: Number(currencies.technologyPoints ?? 0),
+      ancientTechnologyPoints: Number(currencies.ancientTechnologyPoints ?? 0),
+      bossesDefeated: Number(bosses.totalBossDefeatCount ?? 0),
+      palsCaptured: Number(captures.tribeCaptureCount ?? countKeys(captures.palCaptureCounts)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 給玩家一顆(客製)帕魯蛋 —— 走 PalDefender REST /give/paleggs/{player},
+ * 因為 RCON 的 giveegg_j 沒有目標玩家參數。PalTemplate 用呼叫端已寫好的範本檔名
+ * (含 .json),完整詞條 / 體質 / 靈魂都保留。回傳實際給了幾顆。
+ */
+export async function givePalEgg(
+  rec: InstanceRecord,
+  ctx: DriverContext,
+  userId: string,
+  eggId: string,
+  templateFile: string,
+  level?: number,
+): Promise<number> {
+  const status = getPdRestStatus(rec, ctx);
+  if (!status.enabled) {
+    throw Object.assign(new Error(`帕魯蛋需要 PalDefender REST API:${status.reason}`), {
+      statusCode: 409,
+    });
+  }
+  const dir = pdDir(rec, ctx)!;
+  const egg: Record<string, unknown> = { EggID: eggId, PalTemplate: templateFile };
+  if (level != null) egg.Level = level;
+  const res = await pdFetch<{ Granted?: { PalEggs?: number } }>(
+    rec,
+    dir,
+    `/give/paleggs/${encodeURIComponent(userId)}`,
+    { PalEggs: [egg] },
+  );
+  return Number(res.Granted?.PalEggs ?? 0);
+}
+
 export async function getPlayerDetail(
   rec: InstanceRecord,
   ctx: DriverContext,
@@ -209,15 +476,20 @@ export async function getPlayerDetail(
       teamCount: 0,
       palboxCount: 0,
       items: [],
+      techs: null,
+      progression: null,
     };
   }
   const dir = pdDir(rec, ctx)!;
 
   try {
-    const [player, palsRes, itemsRes] = await Promise.all([
+    // 科技/進度是加分項:單獨失敗(端點不存在/舊版)不該擋掉帕魯與背包,故用 best-effort。
+    const [player, palsRes, itemsRes, techs, progression] = await Promise.all([
       pdFetch<{ Player?: Record<string, unknown> }>(rec, dir, `/player/${encodeURIComponent(identifier)}`),
       pdFetch<{ Meta?: Record<string, unknown>; Pals?: Record<string, unknown> }>(rec, dir, `/pals/${encodeURIComponent(identifier)}`),
       pdFetch<{ Inventory?: Record<string, unknown> }>(rec, dir, `/items/${encodeURIComponent(identifier)}`),
+      fetchTechs(rec, dir, identifier),
+      fetchProgression(rec, dir, identifier),
     ]);
 
     const p = player.Player ?? {};
@@ -235,6 +507,8 @@ export async function getPlayerDetail(
       teamCount: Number(palsRes.Meta?.TeamCount ?? 0),
       palboxCount: Number(palsRes.Meta?.PalboxCount ?? 0),
       items: collectItems(itemsRes.Inventory as Record<string, unknown>),
+      techs,
+      progression,
     };
   } catch (err) {
     return {
@@ -248,6 +522,8 @@ export async function getPlayerDetail(
       teamCount: 0,
       palboxCount: 0,
       items: [],
+      techs: null,
+      progression: null,
     };
   }
 }

@@ -1,21 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GiSheep, GiEggClutch } from "react-icons/gi";
 import { FiDownload, FiHeart, FiHelpCircle, FiPlus, FiSettings, FiAlertTriangle } from "react-icons/fi";
-import type { InstanceSummary } from "@palserver/shared";
+import type { Backend, InstanceSummary } from "@palserver/shared";
 import { AgentClient, loadConnection, saveConnection, type Connection } from "./api";
 import { usePromoConfig } from "./promoConfig";
+import { MapTab } from "./MapTab";
 import { ConnectFlow } from "./ConnectFlow";
 import { SettingsModal } from "./SettingsModal";
 import { CreditsModal } from "./CreditsModal";
 import { InstanceDetailPage } from "./InstanceDetail";
 import { Mascot } from "./Mascot";
 import { AnnouncementPopup } from "./AnnouncementModal";
-import { SiteFooter } from "./SiteFooter";
+import { OPEN_SETTINGS_EVENT, SiteFooter } from "./SiteFooter";
 import { ThemeToggle } from "./theme";
 import { LangSelect, useI18n } from "./i18n";
-import { Overlay, StatusBadge, btn, btnGhost, card, errorCls, inputCls, labelCls } from "./ui";
+import { Overlay, Select, StatusBadge, btn, btnGhost, card, errorCls, inputCls, labelCls } from "./ui";
 
 export default function App() {
+  // 全螢幕地圖是前端的另一個入口(/map?instance=<id>),從主介面地圖的外連按鈕開新分頁。
+  // 這裡在最前面攔截,直接渲染獨立的地圖頁,不套主介面的外殼。
+  if (window.location.pathname.replace(/\/+$/, "") === "/map") return <MapPage />;
+
   const [conn, setConn] = useState<Connection | null>(() => {
     // 網址帶 ?setup= 時強制重新配對:忽略可能已過期的舊連線,交給 ConnectFlow
     // 用連結裡的配對碼換一把新 token。否則沿用上次存的連線。
@@ -40,9 +45,29 @@ export default function App() {
           }}
         />
       )}
-      <SiteFooter />
+      <SiteFooter conn={conn} />
     </>
   );
+}
+
+/** 全螢幕地圖獨立頁(/map?instance=<id>)。沿用主介面存下的連線,直接把某個實例的
+ *  線上地圖鋪滿整個視窗;沒有連線或沒帶 instance 時提示回主介面開啟。 */
+function MapPage() {
+  const { t } = useI18n();
+  const conn = loadConnection();
+  const instanceId = new URLSearchParams(window.location.search).get("instance");
+  const client = useRef<AgentClient | null>(conn ? new AgentClient(conn, () => {}) : null).current;
+
+  if (!client || !instanceId) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 p-6 text-center">
+        <p className="text-lg font-extrabold">{t("無法載入地圖")}</p>
+        <p className="text-[13px] text-ink-muted">{t("請從主介面的線上地圖開啟全螢幕地圖。")}</p>
+        <a className={btn} href="/">{t("回主介面")}</a>
+      </div>
+    );
+  }
+  return <MapTab client={client} instanceId={instanceId} fullscreen />;
 }
 
 function Shell({ conn, onDisconnect }: { conn: Connection; onDisconnect: () => void }) {
@@ -55,6 +80,13 @@ function Shell({ conn, onDisconnect }: { conn: Connection; onDisconnect: () => v
   const [showSettings, setShowSettings] = useState(false);
   const [showCredits, setShowCredits] = useState(false);
 
+  // 左下角「有新版本」小提醒點下去 → 打開設定視窗(裡頭有 GUI 更新區塊)。
+  useEffect(() => {
+    const open = () => setShowSettings(true);
+    window.addEventListener(OPEN_SETTINGS_EVENT, open);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, open);
+  }, []);
+
   return (
     // data-content-root:左下角的 SiteFooter 靠它判斷自己有沒有蓋到內容。
     <div data-content-root className="mx-auto max-w-[1200px] p-6">
@@ -64,7 +96,6 @@ function Shell({ conn, onDisconnect }: { conn: Connection; onDisconnect: () => v
           <h1 className="text-[22px] font-extrabold tracking-wide">palserver GUI</h1>
         </button>
         <div className="flex items-center gap-2.5">
-          <span className="hidden text-[13px] text-ink-muted sm:inline">{conn.url}</span>
           <LangSelect />
           <ThemeToggle />
           <a
@@ -213,20 +244,36 @@ function CreateDialog({
 }) {
   const { t } = useI18n();
   const [name, setName] = useState("");
-  const [backend, setBackend] = useState<"native" | "docker">("native");
+  const [backend, setBackend] = useState<"native" | "docker" | "k8s">("native");
   const [serverDir, setServerDir] = useState("");
   const [gamePort, setGamePort] = useState(8211);
   const [maxPlayers, setMaxPlayers] = useState(32);
   const [serverPassword, setServerPassword] = useState("");
+  const [k8sNamespace, setK8sNamespace] = useState("");
+  const [k8sStatefulSet, setK8sStatefulSet] = useState("");
+  const [k8sServiceName, setK8sServiceName] = useState("");
+  const [dockerImage, setDockerImage] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [platform, setPlatform] = useState<string | null>(null);
-  const isMac = platform === "darwin";
+  const [availableBackends, setAvailableBackends] = useState<Backend[]>(["native"]);
+  const [advancedMode, setAdvancedMode] = useState(false);
+  // k8s 是把伺服器跑在叢集裡(agent 只是遙控),所以 agent 這台是不是 macOS 無所謂。
+  const isMac = platform === "darwin" && backend !== "k8s";
+  const k8sIncomplete = backend === "k8s" && (!k8sNamespace.trim() || !k8sStatefulSet.trim());
 
   // agent 在 macOS 時,主機無法實際執行 Palworld 伺服器(SteamCMD 32-bit 在
   // Rosetta 下不可用、PalServer 存檔即崩潰),不論 native 或 Docker 都一樣。
   useEffect(() => {
-    client.info().then((i) => setPlatform(i.platform)).catch(() => {});
+    client.info().then((i) => {
+      setPlatform(i.platform);
+      if (i.availableBackends && i.availableBackends.length > 0) {
+        setAvailableBackends(i.availableBackends);
+        if (!i.availableBackends.includes(backend)) {
+          setBackend("native");
+        }
+      }
+    }).catch(() => {});
   }, [client]);
 
   const submit = async (e: React.FormEvent) => {
@@ -240,6 +287,10 @@ function CreateDialog({
         flavor: "vanilla",
         gamePort,
         serverDir: backend === "native" && serverDir.trim() ? serverDir.trim() : undefined,
+        dockerImage: backend === "docker" && dockerImage.trim() ? dockerImage.trim() : undefined,
+        k8sNamespace: backend === "k8s" ? k8sNamespace.trim() : undefined,
+        k8sStatefulSet: backend === "k8s" ? k8sStatefulSet.trim() : undefined,
+        k8sServiceName: backend === "k8s" && k8sServiceName.trim() ? k8sServiceName.trim() : undefined,
         settings: { ServerPlayerMaxNum: maxPlayers, ServerPassword: serverPassword },
       });
       onCreated();
@@ -278,15 +329,75 @@ function CreateDialog({
         </label>
         <label className={labelCls}>
           {t("運行方式")}
-          <select
-            className={inputCls}
-            value={backend}
-            onChange={(e) => setBackend(e.target.value as "native" | "docker")}
-          >
-            <option value="native">{t("原生(直接在這台主機上運行,推薦)")}</option>
-            <option value="docker">{t("Docker 容器(beta)")}</option>
-          </select>
+          <Select value={backend} onChange={(e) => setBackend(e.target.value as "native" | "docker" | "k8s")}>
+            <option value="native" disabled={!availableBackends.includes("native")}>{t("原生(直接在這台主機上運行,推薦)")}</option>
+            <option value="docker" disabled={!availableBackends.includes("docker")}>{t("Docker 容器(beta)")}</option>
+            {advancedMode && (
+              <option value="k8s" disabled={!availableBackends.includes("k8s")}>{t("Kubernetes(遙控叢集內的 StatefulSet)")}</option>
+            )}
+          </Select>
         </label>
+        {!advancedMode && (
+          <label className="flex items-center gap-2 text-xs text-ink-muted cursor-pointer">
+            <input
+              type="checkbox"
+              checked={advancedMode}
+              onChange={(e) => setAdvancedMode(e.target.checked)}
+            />
+            {t("顯示進階選項(Kubernetes)")}
+          </label>
+        )}
+        {backend === "docker" && (
+          <label className={labelCls}>
+            {t("自訂鏡像(選填)")}
+            <input
+              className={inputCls}
+              value={dockerImage}
+              onChange={(e) => setDockerImage(e.target.value)}
+              placeholder={t("留空=內建映像;或填 ghcr.io/…/palworld:tag")}
+              maxLength={200}
+            />
+            <span className="text-xs text-ink-muted">
+              {t("沿用你已在 Docker 部署的其他帕魯鏡像。鏡像需已存在於本機(先 docker pull)。")}
+            </span>
+          </label>
+        )}
+        {backend === "k8s" && (
+          <>
+            <p className="rounded-xl border-2 border-pal/30 bg-pal/5 px-3 py-2 text-xs text-ink-muted">
+              {t("k8s 模式不會幫你部署伺服器,而是遙控叢集裡「已存在」的 PalServer StatefulSet:啟動/停止會把副本數在 1 / 0 之間切換,存檔備份等透過 kubectl exec 進 Pod 操作。agent 會依序用 PALSERVER_KUBECONFIG、Pod 內 ServiceAccount、或 ~/.kube/config 連上叢集。")}
+            </p>
+            <label className={labelCls}>
+              {t("命名空間(Namespace)")}
+              <input
+                className={`${inputCls} font-mono`}
+                value={k8sNamespace}
+                onChange={(e) => setK8sNamespace(e.target.value)}
+                placeholder="palworld"
+                required
+              />
+            </label>
+            <label className={labelCls}>
+              {t("StatefulSet 名稱")}
+              <input
+                className={`${inputCls} font-mono`}
+                value={k8sStatefulSet}
+                onChange={(e) => setK8sStatefulSet(e.target.value)}
+                placeholder="palworld-server"
+                required
+              />
+            </label>
+            <label className={labelCls}>
+              {t("Service 名稱(選填,用來顯示連線位址)")}
+              <input
+                className={`${inputCls} font-mono`}
+                value={k8sServiceName}
+                onChange={(e) => setK8sServiceName(e.target.value)}
+                placeholder="palworld-server"
+              />
+            </label>
+          </>
+        )}
         {backend === "native" && (
           <label className={labelCls}>
             {t("伺服器路徑(選填)")}
@@ -347,7 +458,7 @@ function CreateDialog({
         )}
         {error && <p className={errorCls}>{t(error)}</p>}
         <div className="mt-1 flex gap-2">
-          <button className={btn} disabled={busy}>
+          <button className={btn} disabled={busy || k8sIncomplete}>
             {busy ? t("建立中…") : t("建立")}
           </button>
           <button type="button" className={btnGhost} onClick={onClose}>

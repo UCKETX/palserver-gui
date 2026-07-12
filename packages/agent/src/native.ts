@@ -8,6 +8,7 @@ import type { InstallError, InstanceStats, InstanceStatus } from "@palserver/sha
 import type { DriverContext, ServerDriver } from "./driver.js";
 import type { InstanceRecord } from "./store.js";
 import { renderPalWorldSettingsIni } from "./settings-ini.js";
+import { mergeEnginePatch } from "./engine-ini-merge.js";
 import { rest } from "./restapi.js";
 import { DATA_DIR } from "./env.js";
 
@@ -39,15 +40,39 @@ export function classifyServerDir(dir: string): "adopt" | "install" | "not-a-ser
 const pidFile = (ctx: DriverContext) => path.join(ctx.instanceDir, "server.pid");
 const logFile = (ctx: DriverContext) => path.join(ctx.instanceDir, "server.log");
 
-function readPid(ctx: DriverContext): number | null {
+/**
+ * pid 檔內容:PID + 行程「建立時間」當身分指紋。只存數字不夠 —— Windows 很快
+ * 就回收 PID,一台崩潰後留下的陳舊 pid 檔,號碼可能已被別台的 PalServer 重用,
+ * 誤把鄰居當成自己(狀態張冠李戴、甚至 stop 時 taskkill 砍到別台)。所以用前必須
+ * 比對建立時間確認「這個 PID 真的是這台實例當初開的那個行程」。 */
+interface PidRecord {
+  pid: number;
+  /** OS 回報的行程建立時間;舊格式(純數字)沒有,為 null 時退回舊行為。 */
+  startedAt: string | null;
+}
+
+function readPidRecord(ctx: DriverContext): PidRecord | null {
   try {
-    const pid = Number(fs.readFileSync(pidFile(ctx), "utf8").trim());
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
+    const raw = fs.readFileSync(pidFile(ctx), "utf8").trim();
+    if (raw.startsWith("{")) {
+      const o = JSON.parse(raw) as { pid?: unknown; startedAt?: unknown };
+      const pid = Number(o.pid);
+      if (!Number.isInteger(pid) || pid <= 0) return null;
+      return { pid, startedAt: typeof o.startedAt === "string" ? o.startedAt : null };
+    }
+    // 舊格式:pid 檔只有一個數字。
+    const pid = Number(raw);
+    return Number.isInteger(pid) && pid > 0 ? { pid, startedAt: null } : null;
   } catch {
     return null;
   }
 }
 
+function writePidRecord(ctx: DriverContext, record: PidRecord): void {
+  fs.writeFileSync(pidFile(ctx), JSON.stringify(record));
+}
+
+/** 這個 PID 號碼目前存不存在(便宜的快速檢查,不驗身分)。 */
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -55,6 +80,54 @@ function isAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+/** OS 回報某 PID 的身分(建立時間 + 映像名);行程不存在時回 null。 */
+async function processIdentity(pid: number): Promise<{ startedAt: string; image: string } | null> {
+  try {
+    if (IS_WIN) {
+      const { stdout } = await execFileP(
+        "powershell",
+        [
+          "-NoProfile",
+          "-Command",
+          `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($p) { "$($p.CreationDate.ToString('o'))|$($p.Name)" }`,
+        ],
+        { windowsHide: true },
+      );
+      const line = stdout.trim();
+      if (!line) return null;
+      const [startedAt, image] = line.split("|");
+      return { startedAt: startedAt ?? "", image: image ?? "" };
+    }
+    const { stdout } = await execFileP("ps", ["-p", String(pid), "-o", "lstart="]);
+    const startedAt = stdout.trim();
+    if (!startedAt) return null;
+    let image = "";
+    try {
+      image = (await execFileP("ps", ["-p", String(pid), "-o", "comm="])).stdout.trim();
+    } catch {
+      /* image 只在 Windows 拿來多擋一層,拿不到不影響 */
+    }
+    return { startedAt, image };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 這台實例的伺服器是否真的在跑。先用便宜的 isAlive 篩掉「PID 根本不存在」,
+ * 存在時再比對建立時間確認不是別台重用同一個 PID 號碼的行程。 */
+async function checkAlive(ctx: DriverContext): Promise<{ alive: boolean; pid: number | null }> {
+  const record = readPidRecord(ctx);
+  if (!record) return { alive: false, pid: null };
+  if (!isAlive(record.pid)) return { alive: false, pid: record.pid }; // 號碼不在 → 已結束
+  if (record.startedAt === null) return { alive: true, pid: record.pid }; // 舊 pid 檔,無從驗證
+  const id = await processIdentity(record.pid);
+  if (!id) return { alive: false, pid: record.pid };
+  // 建立時間對不上 = 這個 PID 已被別的行程重用,不是我們的。
+  if (id.startedAt !== record.startedAt) return { alive: false, pid: record.pid };
+  return { alive: true, pid: record.pid };
 }
 
 async function killTree(pid: number): Promise<void> {
@@ -227,6 +300,60 @@ function writeIni(rec: InstanceRecord, ctx: DriverContext): void {
   const configDir = path.join(serverRoot(rec, ctx), "Pal", "Saved", "Config", CONFIG_PLATFORM_DIR);
   fs.mkdirSync(configDir, { recursive: true });
   fs.writeFileSync(path.join(configDir, "PalWorldSettings.ini"), renderPalWorldSettingsIni(rec.settings));
+  applyEngineIni(configDir, rec);
+}
+
+/**
+ * 每次啟動前重寫 Engine.ini:把 store 裡的受管理微調 + 唯一的 Steam 查詢埠合併回檔案。
+ * 為什麼要每次重套:伺服器關機時 UE 會把 Engine.ini 重寫回它自己的預設,所以使用者
+ * 存的微調在一輪 start→stop 後就沒了。這裡在開機前一刻把它們補回去,保證這一輪生效;
+ * store 才是權威來源,檔案只是拋棄式的套用結果。合併皆就地進行,不覆蓋未受管理的區塊。
+ */
+function applyEngineIni(configDir: string, rec: InstanceRecord): void {
+  if (!rec.engineSettings && !rec.queryPort) return;
+  const file = path.join(configDir, "Engine.ini");
+  let raw = "";
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch {
+    // Engine.ini 尚未存在,從空白建立。
+  }
+  if (rec.engineSettings && Object.keys(rec.engineSettings).length) {
+    raw = mergeEnginePatch(raw, rec.engineSettings);
+  }
+  // 查詢埠不是受管理的 Engine 微調 key,用通用 ini setter 單獨寫入 [OnlineSubsystemSteam]。
+  if (rec.queryPort) {
+    raw = setIniKey(raw, "OnlineSubsystemSteam", "GameServerQueryPort", String(rec.queryPort));
+  }
+  fs.writeFileSync(file, raw);
+}
+
+/** 在指定 [section] 底下設定 key=value:key 已存在就替換該行,section 存在就插入其下,
+ * 都沒有就把整個區塊補到檔尾。刻意不解析成物件,以免破壞其他區塊的排版與註解。 */
+function setIniKey(raw: string, section: string, key: string, value: string): string {
+  const lines = raw.split(/\r?\n/);
+  const header = `[${section}]`;
+  const keyRe = new RegExp(`^\\s*${key}\\s*=`, "i");
+  let sectionAt = -1;
+  let inSection = false;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (/^\[.+\]$/.test(trimmed)) {
+      inSection = trimmed === header;
+      if (inSection) sectionAt = i;
+      continue;
+    }
+    if (inSection && keyRe.test(lines[i])) {
+      lines[i] = `${key}=${value}`;
+      return lines.join("\n");
+    }
+  }
+  if (sectionAt >= 0) {
+    lines.splice(sectionAt + 1, 0, `${key}=${value}`);
+    return lines.join("\n");
+  }
+  const prefix = raw.trim() ? `${raw.replace(/\s*$/, "")}\n\n` : "";
+  return `${prefix}[${section}]\n${key}=${value}\n`;
 }
 
 /** Instances with a server download in flight (install/update runs in the
@@ -281,18 +408,68 @@ export function updateServer(rec: InstanceRecord, ctx: DriverContext): void {
   })();
 }
 
+/**
+ * 把伺服器檔案從目前的 serverRoot 實際搬到 newServerDir(改路徑時用)。
+ * 同磁碟用 rename 瞬間完成;跨磁碟(常見:C槽搬到D槽)改用非同步複製再刪除,
+ * 不阻塞事件迴圈。搬移期間沿用「安裝中」狀態擋住啟動/重複操作;搬完才呼叫
+ * onMoved 更新記錄(把 serverDir 指到新位置)。失敗則記到 installErrors、
+ * 不更新記錄 —— 舊檔案原封不動,半成品會清掉。newServerDir 傳 undefined = 搬回
+ * agent 管理的資料夾。呼叫端須先確認伺服器已停止、且目標為空/不存在。
+ */
+export function moveServerFiles(
+  rec: InstanceRecord,
+  ctx: DriverContext,
+  newServerDir: string | undefined,
+  onMoved: () => void,
+): void {
+  if (installing.has(rec.id)) return;
+  const fromRoot = serverRoot(rec, ctx);
+  const toRoot = newServerDir ?? path.join(ctx.instanceDir, "server");
+  installing.add(rec.id);
+  installErrors.delete(rec.id);
+  const appendLog = (line: string) => fs.appendFileSync(logFile(ctx), line + "\n");
+  void (async () => {
+    try {
+      appendLog(`[palserver] 搬移伺服器檔案:${fromRoot} → ${toRoot}`);
+      fs.mkdirSync(path.dirname(toRoot), { recursive: true });
+      try {
+        fs.renameSync(fromRoot, toRoot); // 同磁碟:瞬間完成
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "EXDEV") throw e;
+        // 跨磁碟:複製到新位置再刪掉舊的(非同步,不卡住 agent)。
+        appendLog("[palserver] 跨磁碟搬移,改用複製 —— 檔案多時需要一些時間,請耐心等候…");
+        try {
+          await fs.promises.cp(fromRoot, toRoot, { recursive: true });
+        } catch (copyErr) {
+          // 複製失敗:清掉半成品,舊檔案仍在原位,記錄不變。
+          await fs.promises.rm(toRoot, { recursive: true, force: true }).catch(() => {});
+          throw copyErr;
+        }
+        await fs.promises.rm(fromRoot, { recursive: true, force: true });
+      }
+      onMoved();
+      appendLog("[palserver] 搬移完成");
+    } catch (err) {
+      installErrors.set(rec.id, classifyInstallError(err));
+      appendLog(`[palserver] 搬移失敗:${err instanceof Error ? err.message : err}`);
+    } finally {
+      installing.delete(rec.id);
+    }
+  })();
+}
+
 async function getNativeStatus(
   rec: InstanceRecord,
   ctx: DriverContext,
 ): Promise<{ status: InstanceStatus; runtimeId: string | null }> {
   if (installing.has(rec.id)) return { status: "installing", runtimeId: null };
-  const pid = readPid(ctx);
-  if (pid !== null && isAlive(pid)) return { status: "running", runtimeId: String(pid) };
+  const { alive, pid } = await checkAlive(ctx);
+  if (alive && pid !== null) return { status: "running", runtimeId: String(pid) };
   if (pid !== null) return { status: "exited", runtimeId: null };
   return { status: "created", runtimeId: null };
 }
 
-function spawnServer(rec: InstanceRecord, ctx: DriverContext): void {
+async function spawnServer(rec: InstanceRecord, ctx: DriverContext): Promise<void> {
   writeIni(rec, ctx);
   const launcher = path.join(serverRoot(rec, ctx), SERVER_LAUNCHER);
   // DepotDownloader (and adopted installs copied from elsewhere) don't
@@ -302,7 +479,12 @@ function spawnServer(rec: InstanceRecord, ctx: DriverContext): void {
   const out = fs.openSync(logFile(ctx), "a");
   const child = spawn(
     launcher,
-    [`-port=${rec.gamePort}`, "-publiclobby"],
+    [
+      `-port=${rec.gamePort}`,
+      // 每台唯一的 Steam 查詢埠;不帶的話全部搶 27015,第二台就死在 ::bind。
+      ...(rec.queryPort ? [`-queryport=${rec.queryPort}`] : []),
+      "-publiclobby",
+    ],
     {
       cwd: serverRoot(rec, ctx),
       detached: true, // survives agent restarts; we track it via the pid file
@@ -312,8 +494,10 @@ function spawnServer(rec: InstanceRecord, ctx: DriverContext): void {
   );
   fs.closeSync(out);
   if (!child.pid) throw new Error("failed to spawn PalServer");
-  fs.writeFileSync(pidFile(ctx), String(child.pid));
   child.unref();
+  // 記下 PID + 建立時間當身分指紋,之後 isAlive/停止前都靠它辨認,避免 PID 重用誤殺。
+  const id = await processIdentity(child.pid).catch(() => null);
+  writePidRecord(ctx, { pid: child.pid, startedAt: id?.startedAt ?? null });
 }
 
 export const nativeDriver: ServerDriver = {
@@ -330,7 +514,7 @@ export const nativeDriver: ServerDriver = {
     if (alreadyInstalled) {
       // Fast path: spawn synchronously so errors surface in the response.
       await ensureInstalled(rec, ctx, appendLog); // validates adopted dirs
-      spawnServer(rec, ctx);
+      await spawnServer(rec, ctx);
       installErrors.delete(rec.id); // 成功啟動,清掉上次的安裝失敗
       return;
     }
@@ -342,7 +526,7 @@ export const nativeDriver: ServerDriver = {
     void (async () => {
       try {
         await ensureInstalled(rec, ctx, appendLog);
-        spawnServer(rec, ctx);
+        await spawnServer(rec, ctx);
       } catch (err) {
         const info = classifyInstallError(err);
         installErrors.set(rec.id, info);
@@ -358,27 +542,47 @@ export const nativeDriver: ServerDriver = {
   },
 
   async stop(rec, ctx) {
-    const pid = readPid(ctx);
-    if (pid === null || !isAlive(pid)) return;
+    const { alive, pid } = await checkAlive(ctx);
+    // 沒在跑(或 pid 檔的號碼已被別的行程重用)→ 只清掉 pid 檔,絕不 taskkill。
+    // 這正是「動一台卻關掉另一台」的根因:陳舊 pid 檔 + Windows PID 重用。
+    if (!alive || pid === null) {
+      fs.rmSync(pidFile(ctx), { force: true });
+      return;
+    }
 
     if (await requestGracefulShutdown(rec)) {
+      // 等它自己收 —— 這期間用便宜的 isAlive 即可:行程還活著就不可能被重用。
       for (let i = 0; i < 20 && isAlive(pid); i++) {
         await new Promise((r) => setTimeout(r, 500));
       }
     }
-    if (isAlive(pid)) await killTree(pid);
+    // 真的要硬砍前,再驗一次身分 + 確認映像名是 PalServer,避免這半秒內 PID 剛好被重用。
+    if (isAlive(pid)) {
+      const id = await processIdentity(pid);
+      const record = readPidRecord(ctx);
+      const stillOurs = !!id && (record?.startedAt == null || id.startedAt === record.startedAt);
+      const isPalServer = !IS_WIN || /palserver/i.test(id?.image ?? "");
+      if (stillOurs && isPalServer) await killTree(pid);
+    }
     fs.rmSync(pidFile(ctx), { force: true });
   },
 
   async remove(rec, ctx) {
     await this.stop(rec, ctx);
-    // Agent-managed installs and saves stay on disk; deleting world data
-    // must remain an explicit, separate action.
+    // 真正刪除:agent 自管的安裝與存檔連同 instanceDir 一起刪(由 route 統一刪除
+    // ctx.instanceDir)。若伺服器檔在 agent 自行安裝/搬移過去的外部目錄,那也是我們
+    // 建立的、一併刪除;但「認領」的既有安裝(serverDirManaged=false)是使用者自己
+    // 原本就有的目錄,絕不刪。
+    if (rec.serverDir && rec.serverDirManaged) {
+      fs.rmSync(rec.serverDir, { recursive: true, force: true });
+    }
   },
 
   async stats(_rec, ctx) {
-    const pid = readPid(ctx);
-    if (pid === null || !isAlive(pid)) return null;
+    // 用 checkAlive 而非裸 pid:PID 被別台重用時別回報鄰居的 CPU/記憶體。
+    const live = await checkAlive(ctx);
+    if (!live.alive || live.pid === null) return null;
+    const pid = live.pid;
     // PalServer.exe is a thin launcher; the actual server is a child process
     // (PalServer-Win64-Shipping-Cmd.exe), so aggregate the whole tree.
     const pids = [pid, ...(await listDescendants(pid))];
@@ -443,6 +647,21 @@ function palDefenderLogDir(rec: InstanceRecord, ctx: DriverContext): string | nu
     if (fs.existsSync(dir)) return dir;
   }
   return null;
+}
+
+/** Last few non-empty lines of PalDefender's newest log — a hint for why it
+ * aborted startup, surfaced in the "startup failure" restart event. Empty when
+ * there's no log dir/file. */
+export function newestPalDefenderLogLines(rec: InstanceRecord, ctx: DriverContext, n = 3): string[] {
+  const dir = palDefenderLogDir(rec, ctx);
+  if (!dir) return [];
+  const file = newestFile(dir);
+  if (!file) return [];
+  try {
+    return fs.readFileSync(file, "utf8").split(/\r?\n/).filter((l) => l.trim()).slice(-n);
+  } catch {
+    return [];
+  }
 }
 
 function newestFile(dir: string): string | null {

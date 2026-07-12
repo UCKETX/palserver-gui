@@ -1,52 +1,126 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiCrosshair, FiImage, FiRefreshCw, FiRepeat, FiX } from "react-icons/fi";
-import { MAP_BOUND, savToMap, type LiveStatus, type RestPlayer } from "@palserver/shared";
+import { FiRefreshCw, FiMap, FiX, FiHome, FiUsers, FiStar, FiMoon, FiMapPin, FiExternalLink } from "react-icons/fi";
+import * as L from "leaflet";
+import "leaflet/dist/leaflet.css";
+import {
+  savToMap,
+  type LiveStatus,
+  type RestPlayer,
+  type PdGuild,
+  type PdGuildDetail,
+  type PdPlayerSummary,
+} from "@palserver/shared";
 import type { AgentClient } from "./api";
+import { useGameData, palIconUrl, type GameData } from "./gameData";
+import { PlayerDetailModal } from "./PlayerDetailModal";
 import { t, useI18n } from "./i18n";
-import { btn, btnGhost, card, errorCls, inputCls } from "./ui";
+import { Overlay, btn, btnGhost, card, errorCls } from "./ui";
 
 /**
- * Live player map. The world map image is a Pocketpair asset, so we don't
- * ship one — the user supplies their own (URL or uploaded file, kept in
- * localStorage) and we overlay players on the game's [-1000, 1000] map square.
- * Without a background image the grid alone still places players correctly.
+ * Live player map on the official Palworld world map (palworld.wiki.gg's
+ * "Palpagos Islands World Map", which already includes Sakurajima etc.).
+ *
+ * Rendering is Leaflet with CRS.Simple: the world map coordinate square is the
+ * CRS, so a player at savToMap(x,y) → LatLng(mapY, mapX) lands deterministically
+ * — no manual calibration or flip toggles. The image is anchored by the exact
+ * map-coordinate bounds the wiki's DataMaps publishes for that image, so the
+ * whole thing is correct by construction.
  */
-const BG_KEY = "palserver.mapBackground";
-const FLIP_Y_KEY = "palserver.mapFlipY";
-const FLIP_X_KEY = "palserver.mapFlipX";
-const CALIB_KEY = "palserver.mapCalibration";
-const SIZE = 2 * MAP_BOUND; // svg viewBox is the map square itself
+const MAP_IMAGE = "/palworld-full-map.jpg";
 
-/** How the background image is laid over the coordinate square. Map images
- * from different sources (and different game versions — Sakurajima, Feybreak…)
- * don't all frame the square identically, so the user can nudge/zoom it. */
-interface Calibration {
-  scale: number;
-  offsetX: number;
-  offsetY: number;
+/**
+ * Full world map (Palpagos + Sakurajima + Feybreak), stitched from palworld.gg's
+ * map tiles. It covers the game's full land-texture bounds, world
+ * X∈[-1099400, 349400], Y∈[-724400, 724400]. Converted through savToMap
+ * (mapX=(worldY-158000)/459, mapY=(worldX+123888)/459) that is, in our map coord
+ * system, mapX∈[-1922.44, 1233.99], mapY∈[-2125.30, 1031.13]. CRS.Simple uses
+ * [lat,lng] = [mapY (north), mapX (east)] → [[south, west], [north, east]].
+ * Verified: Mt Obsidian, the snow island and Sakurajima all land in-region.
+ */
+const IMAGE_BOUNDS = L.latLngBounds([-2125.3, -1922.44], [1031.13, 1233.99]);
+
+const escapeHtml = (s: string) =>
+  s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c);
+
+/** A distinct, stable colour per guild (so a guild's bases and members match). */
+function guildColor(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return `hsl(${hash % 360} 70% 52%)`;
 }
-const DEFAULT_CALIBRATION: Calibration = { scale: 1, offsetX: 0, offsetY: 0 };
 
-function loadCalibration(): Calibration {
-  try {
-    return { ...DEFAULT_CALIBRATION, ...JSON.parse(localStorage.getItem(CALIB_KEY) ?? "{}") };
-  } catch {
-    return DEFAULT_CALIBRATION;
-  }
+/** Connection-quality colour from ping (ms): green / amber / red. */
+function pingColor(ping: number): string {
+  if (ping < 80) return "#4fb968";
+  if (ping < 150) return "#e0a53f";
+  return "#e05b5b";
 }
 
-export function MapTab({ client, instanceId }: { client: AgentClient; instanceId: string }) {
-  useI18n();
+/** How close (in map units, ±1000 span) an online player must be to a base of
+ * a *different* guild to flag a possible raid. */
+const RAID_RADIUS = 70;
+
+/** Static landmarks (from paldb.cc's map data; ipos is already in our map coord
+ * system). type → colour + i18n label key. */
+interface Landmark {
+  type: string;
+  /** Name per interface language (from paldb's per-locale map data). */
+  name: { en: string; zh: string; ja: string };
+  x: number;
+  y: number;
+  lv?: number;
+}
+const LANDMARK_STYLE: Record<string, { icon: string; size: number; label: string }> = {
+  "Fast Travel": { icon: "/game-data/landmark-icons/fasttravel.png", size: 26, label: "快速旅行" },
+  Tower: { icon: "/game-data/landmark-icons/tower.png", size: 30, label: "頭目塔" },
+  Dungeon: { icon: "/game-data/landmark-icons/dungeon.png", size: 22, label: "地牢" },
+};
+
+/** Same deterministic "random Pal" avatar as the player list (PlayerAvatar):
+ * hash the userId and pick a Pal that has artwork. Returns its icon URL. */
+function avatarIconUrl(seed: string, gameData: GameData | null): string | null {
+  const withIcons = gameData?.pals.filter((p) => p.icon) ?? [];
+  if (!withIcons.length) return null;
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  const pal = withIcons[hash % withIcons.length];
+  return pal.icon ? palIconUrl(pal.icon) : null;
+}
+
+export function MapTab({
+  client,
+  instanceId,
+  fullscreen = false,
+}: {
+  client: AgentClient;
+  instanceId: string;
+  /** 全螢幕模式(/map 獨立頁):地圖直接鋪滿視窗,不套外殼、不需「開啟地圖」入口。 */
+  fullscreen?: boolean;
+}) {
+  const { lang } = useI18n();
+  const gameData = useGameData();
   const [live, setLive] = useState<LiveStatus | null>(null);
+  const [guilds, setGuilds] = useState<PdGuild[]>([]);
+  const [pdPlayers, setPdPlayers] = useState<PdPlayerSummary[]>([]);
+  const [guildsUnlocked, setGuildsUnlocked] = useState(false);
+  const [guildDetailId, setGuildDetailId] = useState<string | null>(null);
+  const [playerDetail, setPlayerDetail] = useState<{ id: string; label: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [background, setBackground] = useState(() => localStorage.getItem(BG_KEY) ?? "");
-  const [flipX, setFlipX] = useState(() => localStorage.getItem(FLIP_X_KEY) === "1");
-  const [flipY, setFlipY] = useState(() => localStorage.getItem(FLIP_Y_KEY) === "1");
-  const [calib, setCalibState] = useState<Calibration>(loadCalibration);
-  const [showCalib, setShowCalib] = useState(false);
-  const [urlDraft, setUrlDraft] = useState("");
-  const [hovered, setHovered] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [open, setOpen] = useState(fullscreen);
+  const [showPlayers, setShowPlayers] = useState(true);
+  const [showOffline, setShowOffline] = useState(false);
+  const [showBases, setShowBases] = useState(true);
+  const [showLandmarks, setShowLandmarks] = useState(false);
+  const [landmarks, setLandmarks] = useState<Landmark[]>([]);
+  const [guildHint, setGuildHint] = useState(false);
+
+  // Static landmark set (bundled), loaded once.
+  useEffect(() => {
+    fetch("/game-data/landmarks.json")
+      .then((r) => (r.ok ? (r.json() as Promise<Landmark[]>) : []))
+      .then((d) => setLandmarks(Array.isArray(d) ? d : []))
+      .catch(() => setLandmarks([]));
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -55,6 +129,20 @@ export function MapTab({ client, instanceId }: { client: AgentClient; instanceId
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
+    // 公會據點是贊助者限定:非贊助者這裡回空陣列(detailed=false)。開關照樣顯示,
+    // 只是標上星星表示要贊助才有。
+    client
+      .guilds(instanceId)
+      .then((g) => {
+        setGuilds(g.available ? g.guilds : []);
+        setGuildsUnlocked(g.detailed);
+      })
+      .catch(() => setGuilds([]));
+    // PalDefender 名冊:用來把在線玩家對應到公會(userId 對得上遊戲 REST)。
+    client
+      .palDefenderPlayers(instanceId)
+      .then((r) => setPdPlayers(r.available ? r.players : []))
+      .catch(() => setPdPlayers([]));
   }, [client, instanceId]);
 
   useEffect(() => {
@@ -63,43 +151,157 @@ export function MapTab({ client, instanceId }: { client: AgentClient; instanceId
     return () => clearInterval(timer);
   }, [refresh]);
 
-  const saveBackground = (value: string) => {
-    setBackground(value);
-    if (value) localStorage.setItem(BG_KEY, value);
-    else localStorage.removeItem(BG_KEY);
-  };
+  const baseCount = guilds.reduce((s, g) => s + g.bases.length, 0);
+  const offlineCount = pdPlayers.filter(
+    (p) => !p.online && p.worldX != null && p.worldY != null,
+  ).length;
+  const summary = live?.available
+    ? t("在線玩家 {n} 人", { n: live.players.length }) + (baseCount > 0 ? ` · ${t("{n} 個公會據點", { n: baseCount })}` : "")
+    : (live?.reason ?? t("伺服器未在運作,地圖無法顯示玩家。"));
 
-  const uploadBackground = (file: File | undefined) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => saveBackground(String(reader.result));
-    reader.readAsDataURL(file);
-  };
+  // 地圖面板本體:彈窗與全螢幕頁共用。全螢幕時鋪滿容器、去掉卡片外框與關閉鈕。
+  const mapPanel = live?.available ? (
+    <div
+      className={
+        fullscreen
+          ? "flex h-full w-full flex-col gap-2 p-3"
+          : "flex h-[min(88vh,92vw)] w-[min(88vh,92vw)] max-w-full flex-col gap-2 rounded-(--radius-cute) border-2 border-line bg-card p-3 shadow-(--shadow-cute)"
+      }
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            className={`${btnGhost} inline-flex items-center gap-1.5 ${showPlayers ? "border-pal text-pal" : "opacity-60"}`}
+            onClick={() => setShowPlayers((v) => !v)}
+          >
+            <FiUsers className="size-4" /> {t("玩家")}
+          </button>
+          {offlineCount > 0 && (
+            <button
+              className={`${btnGhost} inline-flex items-center gap-1.5 ${showOffline ? "border-pal text-pal" : "opacity-60"}`}
+              onClick={() => setShowOffline((v) => !v)}
+            >
+              <FiMoon className="size-4" /> {t("離線玩家")}
+            </button>
+          )}
+          {landmarks.length > 0 &&
+            (guildsUnlocked ? (
+              <button
+                className={`${btnGhost} inline-flex items-center gap-1.5 ${showLandmarks ? "border-pal text-pal" : "opacity-60"}`}
+                onClick={() => setShowLandmarks((v) => !v)}
+              >
+                <FiMapPin className="size-4" /> {t("地標")}
+                <FiStar className="size-3.5 text-pal" />
+              </button>
+            ) : (
+              <button
+                className={`${btnGhost} inline-flex items-center gap-1.5 opacity-70`}
+                title={t("此功能為贊助者專屬功能,可在設定頁輸入贊助者識別碼解鎖。")}
+                onClick={() => setGuildHint((v) => !v)}
+              >
+                <FiMapPin className="size-4" /> {t("地標")}
+                <FiStar className="size-3.5 text-pal" />
+              </button>
+            ))}
+          {guildsUnlocked ? (
+            <button
+              className={`${btnGhost} inline-flex items-center gap-1.5 ${showBases ? "border-pal text-pal" : "opacity-60"}`}
+              onClick={() => setShowBases((v) => !v)}
+            >
+              <FiHome className="size-4" /> {t("公會據點")}
+              <FiStar className="size-3.5 text-pal" />
+            </button>
+          ) : (
+            <button
+              className={`${btnGhost} inline-flex items-center gap-1.5 opacity-70`}
+              title={t("公會據點是贊助者專屬功能,可在設定頁輸入贊助者識別碼解鎖。")}
+              onClick={() => setGuildHint((v) => !v)}
+            >
+              <FiHome className="size-4" /> {t("公會據點")}
+              <FiStar className="size-3.5 text-pal" />
+            </button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          {!fullscreen && (
+            <button
+              className={btnGhost}
+              onClick={() =>
+                window.open(`/map?instance=${encodeURIComponent(instanceId)}`, "_blank", "noopener")
+              }
+              aria-label={t("在新分頁開啟全螢幕地圖")}
+              title={t("在新分頁開啟全螢幕地圖")}
+            >
+              <FiExternalLink className="size-4" />
+            </button>
+          )}
+          <button className={btnGhost} onClick={refresh} aria-label={t("重新整理")}>
+            <FiRefreshCw className="size-4" />
+          </button>
+          {!fullscreen && (
+            <button className={`${btnGhost} inline-flex items-center gap-1.5`} onClick={() => setOpen(false)}>
+              <FiX className="size-4" /> {t("關閉")}
+            </button>
+          )}
+        </div>
+      </div>
+      {guildHint && !guildsUnlocked && (
+        <p className="rounded-xl bg-sun/15 px-3 py-2 text-[13px] font-bold text-sun">
+          {t("此功能為贊助者專屬功能,可在設定頁輸入贊助者識別碼解鎖。")}
+        </p>
+      )}
+      <div className="min-h-0 flex-1 overflow-hidden rounded-xl">
+        <PlayerMap
+          players={live.players}
+          guilds={guilds}
+          pdPlayers={pdPlayers}
+          landmarks={landmarks}
+          lang={lang}
+          showPlayers={showPlayers}
+          showOffline={showOffline}
+          showBases={showBases}
+          showLandmarks={showLandmarks}
+          gameData={gameData}
+          onGuildClick={setGuildDetailId}
+          onPlayerClick={(id, label) => setPlayerDetail({ id, label })}
+        />
+      </div>
+    </div>
+  ) : null;
 
-  const toggleFlipY = () => {
-    const next = !flipY;
-    setFlipY(next);
-    localStorage.setItem(FLIP_Y_KEY, next ? "1" : "0");
-  };
+  const modals = (
+    <>
+      {guildDetailId && (
+        <GuildDetailModal
+          client={client}
+          instanceId={instanceId}
+          guildId={guildDetailId}
+          onClose={() => setGuildDetailId(null)}
+        />
+      )}
+      {playerDetail && (
+        <PlayerDetailModal
+          client={client}
+          instanceId={instanceId}
+          identifier={playerDetail.id}
+          displayLabel={playerDetail.label}
+          onClose={() => setPlayerDetail(null)}
+        />
+      )}
+    </>
+  );
 
-  const toggleFlipX = () => {
-    const next = !flipX;
-    setFlipX(next);
-    localStorage.setItem(FLIP_X_KEY, next ? "1" : "0");
-  };
-
-  const setCalibration = (patch: Partial<Calibration>) => {
-    const next = { ...calib, ...patch };
-    setCalibState(next);
-    localStorage.setItem(CALIB_KEY, JSON.stringify(next));
-  };
-
-  if (!live) return <p className="text-ink-muted">{error ?? t("載入中…")}</p>;
-  if (!live.available) {
+  if (fullscreen) {
     return (
-      <div className="rounded-(--radius-cute) border-2 border-dashed border-line px-6 py-12 text-center text-ink-muted">
-        <p className="font-bold">{t("無法連線到伺服器的 REST API")}</p>
-        <p className="mt-1 text-[13px]">{live.reason}</p>
+      <div className="fixed inset-0 flex flex-col bg-bg">
+        {error && <p className={`${errorCls} m-3`}>{error}</p>}
+        {mapPanel ?? (
+          <div className="flex flex-1 items-center justify-center p-6 text-center text-ink-muted">
+            {summary}
+          </div>
+        )}
+        {modals}
       </div>
     );
   }
@@ -108,264 +310,385 @@ export function MapTab({ client, instanceId }: { client: AgentClient; instanceId
     <div className="flex flex-col gap-3">
       {error && <p className={errorCls}>{error}</p>}
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[13px] font-bold text-ink-muted">
-          {t("在線玩家 {n} 人", { n: live.players.length })}{background ? "" : ` · ${t("尚未設定地圖底圖")}`}
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <button className={btnGhost} onClick={refresh} aria-label={t("重新整理")}>
-            <FiRefreshCw className="size-4" />
-          </button>
-          <button
-            className={`${btnGhost} inline-flex items-center gap-1.5 ${flipY ? "border-pal text-pal" : ""}`}
-            onClick={toggleFlipY}
-            title={t("若玩家位置南北顛倒,按此翻轉")}
-          >
-            <FiRepeat className="size-4" /> {t("翻轉南北")}
-          </button>
-          <button
-            className={`${btnGhost} inline-flex items-center gap-1.5 ${flipX ? "border-pal text-pal" : ""}`}
-            onClick={toggleFlipX}
-            title={t("若玩家位置東西顛倒,按此翻轉")}
-          >
-            <FiRepeat className="size-4 rotate-90" /> {t("翻轉東西")}
-          </button>
-          <button
-            className={`${btnGhost} inline-flex items-center gap-1.5`}
-            onClick={() => fileRef.current?.click()}
-          >
-            <FiImage className="size-4" /> {t("上傳底圖")}
-          </button>
-          {background && (
-            <>
-              <button
-                className={`${btnGhost} inline-flex items-center gap-1.5 ${showCalib ? "border-pal text-pal" : ""}`}
-                onClick={() => setShowCalib((v) => !v)}
-              >
-                <FiCrosshair className="size-4" /> {t("校正底圖")}
-              </button>
-              <button
-                className={`${btnGhost} inline-flex items-center gap-1.5 text-berry hover:border-berry`}
-                onClick={() => saveBackground("")}
-              >
-                <FiX className="size-4" /> {t("移除底圖")}
-              </button>
-            </>
-          )}
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => uploadBackground(e.target.files?.[0])}
-          />
-        </div>
-      </div>
-
-      {!background && (
-        <div className={`${card} flex flex-wrap items-center gap-2`}>
-          <p className="min-w-52 flex-1 text-[13px] text-ink-muted">
-            {t("貼上地圖圖片網址,或用「上傳底圖」選擇你自己的世界地圖截圖(圖片需為整張方形世界地圖)。")}
+      {/* 分頁只放入口;地圖在方形彈窗裡開(大小=地圖本身)。 */}
+      <div className={`${card} flex flex-wrap items-center justify-between gap-3`}>
+        <div className="min-w-0">
+          <p className="inline-flex items-center gap-2 text-sm font-extrabold">
+            <FiMap className="size-4 text-pal" /> {t("線上地圖")}
           </p>
-          <input
-            className={`${inputCls} min-w-52 flex-1`}
-            value={urlDraft}
-            onChange={(e) => setUrlDraft(e.target.value)}
-            placeholder="https://…/palworld-map.png"
-          />
-          <button className={btn} onClick={() => saveBackground(urlDraft.trim())} disabled={!urlDraft.trim()}>
-            {t("套用")}
-          </button>
+          <p className="mt-0.5 text-[13px] text-ink-muted">{summary}</p>
         </div>
-      )}
-
-      {background && showCalib && (
-        <div className={`${card} flex flex-col gap-3`}>
-          <p className="text-[13px] text-ink-muted">
-            {t("調整底圖直到地形與玩家實際位置吻合(不同來源、不同遊戲版本的地圖裁切範圍不一樣)。")}
-          </p>
-          <Slider
-            label={t("縮放")}
-            value={calib.scale}
-            min={0.5}
-            max={2}
-            step={0.005}
-            format={(v) => `${(v * 100).toFixed(1)}%`}
-            onChange={(scale) => setCalibration({ scale })}
-          />
-          <Slider
-            label={t("水平位移(東西)")}
-            value={calib.offsetX}
-            min={-MAP_BOUND}
-            max={MAP_BOUND}
-            step={5}
-            format={(v) => String(Math.round(v))}
-            onChange={(offsetX) => setCalibration({ offsetX })}
-          />
-          <Slider
-            label={t("垂直位移(南北)")}
-            value={calib.offsetY}
-            min={-MAP_BOUND}
-            max={MAP_BOUND}
-            step={5}
-            format={(v) => String(Math.round(v))}
-            onChange={(offsetY) => setCalibration({ offsetY })}
-          />
-          <div>
-            <button className={btnGhost} onClick={() => setCalibration(DEFAULT_CALIBRATION)}>
-              {t("重置校正")}
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className={`${card} overflow-hidden p-2`}>
-        <svg
-          viewBox={`${-MAP_BOUND} ${-MAP_BOUND} ${SIZE} ${SIZE}`}
-          className="aspect-square w-full rounded-xl bg-card-soft"
+        <button
+          className={`${btn} inline-flex items-center gap-1.5`}
+          onClick={() => setOpen(true)}
+          disabled={!live?.available}
         >
-          {background && (
-            <image
-              href={background}
-              x={-MAP_BOUND * calib.scale + calib.offsetX}
-              y={-MAP_BOUND * calib.scale + calib.offsetY}
-              width={SIZE * calib.scale}
-              height={SIZE * calib.scale}
-              preserveAspectRatio="none"
-            />
-          )}
-          <Grid />
-          {live.players.map((player) => (
-            <PlayerMarker
-              key={player.userId}
-              player={player}
-              flipX={flipX}
-              flipY={flipY}
-              hovered={hovered === player.userId}
-              onHover={setHovered}
-            />
-          ))}
-        </svg>
+          <FiMap className="size-4" /> {t("開啟地圖")}
+        </button>
       </div>
 
-      <p className="text-[13px] text-ink-muted">
-        {t("座標為遊戲內地圖座標(範圍 ±{bound},x 向東、y 向北,北方朝上)。底圖方向若與遊戲不同,可用「翻轉南北 / 翻轉東西」校正。", { bound: MAP_BOUND })}
-      </p>
+      {open && mapPanel && <Overlay onClose={() => setOpen(false)}>{mapPanel}</Overlay>}
+
+      {modals}
     </div>
   );
 }
 
-function Slider({
-  label,
-  value,
-  min,
-  max,
-  step,
-  format,
-  onChange,
+/** 公會詳情彈窗(贊助者):成員名單 + 據點,取自 PalDefender /guild/{id}。 */
+function GuildDetailModal({
+  client,
+  instanceId,
+  guildId,
+  onClose,
 }: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  format: (v: number) => string;
-  onChange: (v: number) => void;
+  client: AgentClient;
+  instanceId: string;
+  guildId: string;
+  onClose: () => void;
 }) {
-  return (
-    <div className="flex flex-wrap items-center gap-3">
-      <span className="w-32 text-[13px] font-bold text-ink-muted">{label}</span>
-      <input
-        type="range"
-        className="min-w-40 flex-1 accent-(--color-pal)"
-        value={value}
-        min={min}
-        max={max}
-        step={step}
-        onChange={(e) => onChange(Number(e.target.value))}
-      />
-      <span className="w-16 text-right text-[13px] font-bold">{format(value)}</span>
-    </div>
-  );
-}
+  useI18n();
+  const [detail, setDetail] = useState<PdGuildDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-function Grid() {
-  const lines = [];
-  for (let v = -MAP_BOUND; v <= MAP_BOUND; v += 250) {
-    const major = v === 0;
-    lines.push(
-      <line
-        key={`h${v}`}
-        x1={-MAP_BOUND}
-        y1={v}
-        x2={MAP_BOUND}
-        y2={v}
-        stroke="currentColor"
-        strokeWidth={major ? 3 : 1}
-        opacity={major ? 0.35 : 0.15}
-      />,
-      <line
-        key={`v${v}`}
-        x1={v}
-        y1={-MAP_BOUND}
-        x2={v}
-        y2={MAP_BOUND}
-        stroke="currentColor"
-        strokeWidth={major ? 3 : 1}
-        opacity={major ? 0.35 : 0.15}
-      />,
-    );
-  }
-  return <g className="text-ink-muted">{lines}</g>;
-}
+  useEffect(() => {
+    client
+      .guild(instanceId, guildId)
+      .then(setDetail)
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  }, [client, instanceId, guildId]);
 
-function PlayerMarker({
-  player,
-  flipX,
-  flipY,
-  hovered,
-  onHover,
-}: {
-  player: RestPlayer;
-  flipX: boolean;
-  flipY: boolean;
-  hovered: boolean;
-  onHover: (id: string | null) => void;
-}) {
-  const map = savToMap(player.location_x, player.location_y);
-  // SVG's y grows downward while map y grows north, so negate to put north up.
-  const x = flipX ? -map.x : map.x;
-  const y = flipY ? map.y : -map.y;
   return (
-    <g
-      transform={`translate(${x} ${y})`}
-      onMouseEnter={() => onHover(player.userId)}
-      onMouseLeave={() => onHover(null)}
-      className="cursor-pointer"
-    >
-      <circle r={hovered ? 26 : 18} className="fill-pal" stroke="white" strokeWidth={6} />
-      <text
-        y={-38}
-        textAnchor="middle"
-        className="fill-ink"
-        style={{ fontSize: 44, fontWeight: 800, paintOrder: "stroke" }}
-        stroke="white"
-        strokeWidth={10}
+    <Overlay onClose={onClose}>
+      <div
+        className={`${card} flex max-h-[85vh] w-[560px] max-w-full flex-col gap-4 overflow-y-auto`}
+        onClick={(e) => e.stopPropagation()}
       >
-        {player.name}
-      </text>
-      {hovered && (
-        <text
-          y={62}
-          textAnchor="middle"
-          className="fill-ink-muted"
-          style={{ fontSize: 34, fontWeight: 700, paintOrder: "stroke" }}
-          stroke="white"
-          strokeWidth={8}
-        >
-          {Math.round(map.x)}, {Math.round(map.y)} · Lv.{player.level}
-        </text>
-      )}
-    </g>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="inline-flex items-center gap-2 truncate text-lg font-extrabold">
+            <FiHome className="size-5 text-pal" /> {detail?.name || t("公會詳情")}
+          </h2>
+          <button className={btnGhost} onClick={onClose}>
+            <FiX className="inline size-4" /> {t("關閉")}
+          </button>
+        </div>
+
+        {error && <p className={errorCls}>{error}</p>}
+        {!detail && !error && <p className="text-ink-muted">{t("載入中…")}</p>}
+        {detail && !detail.available && <p className={errorCls}>{detail.reason ?? t("讀取失敗")}</p>}
+
+        {detail?.available && (
+          <>
+            <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
+              <Info label={t("等級")} value={`Lv.${detail.level}`} />
+              <Info label={t("會長")} value={detail.adminName || "—"} />
+              <Info label={t("成員數")} value={String(detail.memberCount)} />
+            </div>
+
+            <div>
+              <h3 className="mb-1 text-sm font-extrabold text-ink-muted">
+                {t("成員")}({detail.members.length})
+              </h3>
+              <div className="flex flex-col divide-y divide-line">
+                {detail.members.map((m) => (
+                  <div key={m.playerUid} className="flex items-center justify-between gap-2 py-1.5 text-sm">
+                    <span className="truncate font-bold">{m.name || "—"}</span>
+                    <span
+                      className={`shrink-0 text-xs font-bold ${
+                        m.status.toLowerCase() === "online" ? "text-grass" : "text-ink-muted"
+                      }`}
+                    >
+                      {m.status.toLowerCase() === "online" ? t("在線") : t("離線")}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <h3 className="mb-1 text-sm font-extrabold text-ink-muted">
+                {t("據點")}({detail.camps.length})
+              </h3>
+              <div className="flex flex-col divide-y divide-line">
+                {detail.camps.map((c) => {
+                  const m = savToMap(c.worldX, c.worldY);
+                  return (
+                    <div key={c.id} className="flex items-center justify-between gap-2 py-1.5 text-sm">
+                      <span className="font-bold">
+                        Lv.{c.level}
+                        {c.state ? <span className="ml-2 text-xs font-normal text-ink-muted">{c.state}</span> : null}
+                      </span>
+                      <span className="shrink-0 text-xs text-ink-muted">
+                        {Math.round(m.x)}, {Math.round(m.y)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </Overlay>
   );
+}
+
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs text-ink-muted">{label}</p>
+      <p className="font-bold break-all">{value}</p>
+    </div>
+  );
+}
+
+/** Leaflet CRS.Simple map + avatar markers for players and base markers for
+ * guilds (both from savToMap, so they share the players' coordinate frame). */
+function PlayerMap({
+  players,
+  guilds,
+  pdPlayers,
+  landmarks,
+  lang,
+  showPlayers,
+  showOffline,
+  showBases,
+  showLandmarks,
+  gameData,
+  onGuildClick,
+  onPlayerClick,
+}: {
+  players: RestPlayer[];
+  guilds: PdGuild[];
+  /** PalDefender /players roster — matches live players to their guild, and
+   * (when showOffline) provides offline players' last-saved positions. */
+  pdPlayers: PdPlayerSummary[];
+  landmarks: Landmark[];
+  lang: "zh" | "en" | "ja";
+  showPlayers: boolean;
+  showOffline: boolean;
+  showBases: boolean;
+  showLandmarks: boolean;
+  gameData: GameData | null;
+  onGuildClick?: (guildId: string) => void;
+  /** Open the full player-detail view (same as the player list). */
+  onPlayerClick?: (userId: string, name: string) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markersRef = useRef<L.LayerGroup | null>(null);
+  const onGuildClickRef = useRef(onGuildClick);
+  onGuildClickRef.current = onGuildClick;
+  const onPlayerClickRef = useRef(onPlayerClick);
+  onPlayerClickRef.current = onPlayerClick;
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || mapRef.current) return;
+    const map = L.map(el, {
+      crs: L.CRS.Simple,
+      attributionControl: false,
+      zoomSnap: 0.25,
+      maxZoom: 4,
+    });
+    map.setView(IMAGE_BOUNDS.getCenter(), -2); // provisional view; applySize refits properly
+    el.style.background = "transparent"; // let the card bg show past the image instead of Leaflet's grey
+    L.imageOverlay(MAP_IMAGE, IMAGE_BOUNDS).addTo(map);
+    map.setMaxBounds(IMAGE_BOUNDS.pad(0.3));
+    markersRef.current = L.layerGroup().addTo(map);
+    mapRef.current = map;
+
+    // The square container's height comes from layout and may be 0 on the first
+    // run, which makes fitBounds/min-zoom wrong. Compute both against the real
+    // size (via ResizeObserver), and set min-zoom a level below the full-map fit
+    // so you can always zoom all the way out. Refit the view only once.
+    let fitted = false;
+    const applySize = () => {
+      map.invalidateSize();
+      if (map.getSize().y === 0) return;
+      map.setMinZoom(map.getBoundsZoom(IMAGE_BOUNDS) - 1);
+      if (!fitted) {
+        map.fitBounds(IMAGE_BOUNDS);
+        fitted = true;
+      }
+    };
+    const ro = new ResizeObserver(applySize);
+    ro.observe(el);
+    applySize();
+
+    return () => {
+      ro.disconnect();
+      map.remove();
+      mapRef.current = null;
+      markersRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const group = markersRef.current;
+    if (!group) return;
+    group.clearLayers();
+    const SIZE = 40;
+
+    // Match each live player to their guild. The game REST player ids
+    // (playerId/userId) don't line up with PalDefender's guild-member PlayerUIDs,
+    // so match via PalDefender /players instead — it carries both the userId that
+    // matches the game REST player AND the guild name. Fall back to the member
+    // UID list only if we have no /players record.
+    const guildByName = new Map(guilds.map((g) => [g.name, g] as const));
+    const guildNameById = new Map<string, string>();
+    for (const pp of pdPlayers) {
+      if (!pp.guildName) continue;
+      if (pp.userId) guildNameById.set(pp.userId, pp.guildName);
+      if (pp.playerUid) guildNameById.set(pp.playerUid, pp.guildName);
+    }
+    const guildByMember = new Map<string, PdGuild>();
+    for (const g of guilds) for (const uid of g.members) guildByMember.set(uid, g);
+    const guildOf = (p: RestPlayer): PdGuild | undefined => {
+      const gn = guildNameById.get(p.userId) ?? guildNameById.get(p.playerId);
+      return (gn ? guildByName.get(gn) : undefined) ?? guildByMember.get(p.playerId) ?? guildByMember.get(p.userId);
+    };
+
+    // All bases in map coords, for the raid-proximity check. (Independent of the
+    // base-marker toggle — a player near an enemy base is flagged regardless.)
+    const allBases = guilds.flatMap((g) =>
+      g.bases.map((b) => ({ ...savToMap(b.worldX, b.worldY), guildId: g.id, guildName: g.name })),
+    );
+    /** Name of a *different* guild whose base this point sits near, else null. */
+    const enemyBaseNear = (px: number, py: number, ownGuildId?: string): string | null => {
+      for (const b of allBases) {
+        if (b.guildId === ownGuildId) continue;
+        if (Math.hypot(b.x - px, b.y - py) < RAID_RADIUS) return b.guildName;
+      }
+      return null;
+    };
+
+    // Static landmarks (fast travel / towers / dungeons) as the bottom layer,
+    // each with its own game compass icon.
+    if (showLandmarks) {
+      for (const lm of landmarks) {
+        const style = LANDMARK_STYLE[lm.type];
+        if (!style) continue;
+        const icon = L.icon({
+          iconUrl: style.icon,
+          iconSize: [style.size, style.size],
+          iconAnchor: [style.size / 2, style.size / 2],
+          className: "pmap-landmark",
+        });
+        L.marker([lm.y, lm.x], { icon })
+          .bindTooltip(
+            `<div style="font-weight:800">${escapeHtml(lm.name[lang] || lm.name.en)}</div>` +
+              `<div>${t(style.label)}${lm.lv ? ` · Lv.${lm.lv}` : ""}</div>`,
+            { direction: "top", className: "pmap-detail" },
+          )
+          .addTo(group);
+      }
+    }
+
+    // Guild bases first (under players). world_pos → savToMap, same frame.
+    // The whole guild feature is sponsor-only, so if we have any guild data the
+    // viewer is a sponsor — bases are always coloured, named, and clickable.
+    if (showBases) {
+      for (const g of guilds) {
+        const color = guildColor(g.id);
+        for (const b of g.bases) {
+          const { x, y } = savToMap(b.worldX, b.worldY);
+          const icon = L.divIcon({
+            className: "pmap-base-wrap",
+            iconSize: [26, 26],
+            iconAnchor: [13, 13],
+            tooltipAnchor: [0, -13],
+            html:
+              `<span class="pmap-base" style="background:${color}">` +
+              `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>` +
+              `</span>`,
+          });
+          const marker = L.marker([y, x], { icon });
+          marker.bindTooltip(
+            `<div style="font-weight:800">${escapeHtml(g.name || "—")}</div>` +
+              `<div>${t("公會據點")} · Lv.${g.level} · ${t("{n} 名成員", { n: g.memberCount })}</div>`,
+            { direction: "top", className: "pmap-detail" },
+          );
+          marker.on("click", () => onGuildClickRef.current?.(g.id));
+          marker.addTo(group);
+        }
+      }
+    }
+
+    // Offline players at their last-saved position (dimmed avatars). Skip anyone
+    // currently online (they're drawn live below) and anyone without a position.
+    if (showOffline) {
+      const onlineIds = new Set<string>();
+      for (const p of players) {
+        onlineIds.add(p.userId);
+        onlineIds.add(p.playerId);
+      }
+      for (const pp of pdPlayers) {
+        if (pp.online || pp.worldX == null || pp.worldY == null) continue;
+        if (onlineIds.has(pp.userId) || onlineIds.has(pp.playerUid)) continue;
+        const { x, y } = savToMap(pp.worldX, pp.worldY);
+        const iconUrl = avatarIconUrl(pp.userId, gameData);
+        const guild = pp.guildName ? guildByName.get(pp.guildName) : undefined;
+        const ring = guild ? guildColor(guild.id) : "#8a94a3";
+        const icon = L.divIcon({
+          className: "pmap-avatar-wrap",
+          iconSize: [SIZE, SIZE],
+          iconAnchor: [SIZE / 2, SIZE / 2],
+          tooltipAnchor: [0, -SIZE / 2],
+          html: `<span class="pmap-avatar pmap-offline" style="width:${SIZE}px;height:${SIZE}px;border-color:${ring}">${
+            iconUrl ? `<img src="${escapeHtml(iconUrl)}" alt="" />` : ""
+          }</span>`,
+        });
+        const marker = L.marker([y, x], { icon, riseOnHover: true });
+        marker.bindTooltip(
+          `<div style="font-weight:800">${escapeHtml(pp.name || "—")}</div>` +
+            (pp.guildName ? `<div style="color:${ring}">${escapeHtml(pp.guildName)}</div>` : "") +
+            `<div>${t("離線")} · ${t("最後位置")} ${Math.round(x)}, ${Math.round(y)}</div>`,
+          { direction: "top", className: "pmap-detail" },
+        );
+        marker.on("click", () => onPlayerClickRef.current?.(pp.userId, pp.name));
+        marker.addTo(group);
+      }
+    }
+
+    if (showPlayers)
+      for (const p of players) {
+        const { x, y } = savToMap(p.location_x, p.location_y);
+        const iconUrl = avatarIconUrl(p.userId, gameData);
+        const guild = guildOf(p);
+        // Only flag a raid when we actually know the player's guild — otherwise
+        // an unmatched player would be "near" every base, including their own.
+        const raidingGuild = guild ? enemyBaseNear(x, y, guild.id) : null;
+        const ring = guild ? guildColor(guild.id) : "#ffffff";
+        const png = pingColor(p.ping);
+        // A round Pal-avatar pin (same random Pal as the player list), built as a
+        // div-icon so it can hold an <img>. Border = guild colour; a corner dot
+        // shows connection quality (ping); a red halo flags a possible raid
+        // (standing near another guild's base). Details show on hover.
+        const icon = L.divIcon({
+          className: "pmap-avatar-wrap",
+          iconSize: [SIZE, SIZE],
+          iconAnchor: [SIZE / 2, SIZE / 2],
+          tooltipAnchor: [0, -SIZE / 2],
+          html:
+            `<span class="pmap-avatar${raidingGuild ? " pmap-raid" : ""}" style="width:${SIZE}px;height:${SIZE}px;border-color:${ring}">` +
+            (iconUrl ? `<img src="${escapeHtml(iconUrl)}" alt="" />` : "") +
+            `<i class="pmap-ping" style="background:${png}"></i>` +
+            `</span>`,
+        });
+        const marker = L.marker([y, x], { icon, riseOnHover: true });
+        marker.bindTooltip(
+          `<div style="font-weight:800">${escapeHtml(p.name || "—")}</div>` +
+            (guild ? `<div style="color:${ring}">${escapeHtml(guild.name)}</div>` : "") +
+            `<div>${t("座標")} ${Math.round(x)}, ${Math.round(y)} · Lv.${p.level} · ${Math.round(p.ping)}ms</div>` +
+            (raidingGuild
+              ? `<div style="color:#e05b5b;font-weight:700">${t("靠近他人據點:{name}", { name: escapeHtml(raidingGuild) })}</div>`
+              : ""),
+          { direction: "top", className: "pmap-detail" },
+        );
+        marker.on("click", () => onPlayerClickRef.current?.(p.userId, p.name));
+        group.addLayer(marker);
+      }
+  }, [players, guilds, pdPlayers, landmarks, lang, showPlayers, showOffline, showBases, showLandmarks, gameData]);
+
+  return <div ref={containerRef} className="h-full w-full rounded-xl bg-card-soft" />;
 }

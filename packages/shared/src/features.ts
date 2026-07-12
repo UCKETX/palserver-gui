@@ -15,6 +15,8 @@ export interface EarlyAccessFeature {
 
 export const EARLY_ACCESS_FEATURES: EarlyAccessFeature[] = [
   { id: "custom-pal", label: "自訂帕魯(詞條 / 體質 / 星星)", until: "2026-12-31" },
+  { id: "guild-map", label: "地圖公會詳情(名稱 / 成員 / 據點)", until: "2027-12-31" },
+  { id: "pal-stats", label: "帕魯物種數值編輯器(PalSchema:HP / 攻防 / 首領)", until: "2027-12-31" },
 ];
 
 /** 這個功能現在是否已對所有人免費(不在目錄裡的一律視為免費)。 */
@@ -43,11 +45,17 @@ export interface LicenseStatus {
   checkedAt: string | null;
 }
 
-/** 統一的功能可用性判斷:已免費 OR(識別碼有效且包含此功能)。 */
+/**
+ * 統一的功能可用性判斷:已免費 OR 有有效贊助授權。
+ *
+ * 目前只有單一贊助層級,識別碼的 `features` 清單僅供顯示 —— 有效贊助者一律解鎖
+ * 全部早鳥功能(這樣新增功能不必重發碼 / 改 worker)。若日後要做分層,再把
+ * `lic.features.includes(id)` 的判斷加回來即可。
+ */
 export function hasFeature(
   id: string,
   lic: Pick<LicenseStatus, "valid" | "features">,
   now: Date = new Date(),
 ): boolean {
-  return featureFreeNow(id, now) || (lic.valid && lic.features.includes(id));
+  return featureFreeNow(id, now) || lic.valid;
 }

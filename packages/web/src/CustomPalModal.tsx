@@ -1,19 +1,47 @@
 import { useEffect, useMemo, useState } from "react";
 import { FiStar, FiLock, FiX, FiExternalLink } from "react-icons/fi";
 import { GiEggClutch } from "react-icons/gi";
-import type { CustomPalInput, KnownPlayer } from "@palserver/shared";
+import { hasFeature, type CustomPalInput, type KnownPlayer } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { EntityPicker } from "./EntityPicker";
-import { useGameData, palIconUrl, itemIconUrl } from "./gameData";
+import { MultiPicker } from "./MultiPicker";
+import { PlayerPicker } from "./PlayerPicker";
+import { useGameData, palIconUrl, itemIconUrl, type GameEntity } from "./gameData";
 import { t, useI18n } from "./i18n";
 import { Overlay, btn, card, errorCls, inputCls } from "./ui";
 
-/** 逗號/空白分隔 -> 去空白陣列。 */
-const splitIds = (s: string) =>
-  s
-    .split(/[,\s]+/)
-    .map((x) => x.trim())
-    .filter(Boolean);
+/** 主動技元素配色(沒對到的就用中性灰)。 */
+const ELEMENT_COLOR: Record<string, string> = {
+  Normal: "#b8b8b8",
+  Fire: "#ef6a6a",
+  Water: "#5aa9e6",
+  Electricity: "#e8c34a",
+  Grass: "#6fbf73",
+  Dark: "#8a6fbf",
+  Dragon: "#a06fbf",
+  Ground: "#c08a5a",
+  Ice: "#6fd0d6",
+};
+
+/** chip / 選單列前面的小標:主動技=元素色點,詞條=等級徽章。 */
+const skillMeta = (e: GameEntity) => (
+  <span
+    className="size-2.5 shrink-0 rounded-full"
+    style={{ background: ELEMENT_COLOR[e.element ?? "Normal"] ?? "#b8b8b8" }}
+    title={e.element}
+  />
+);
+const passiveMeta = (e: GameEntity) => {
+  if (e.rank == null) return null;
+  const bad = e.rank < 0;
+  return (
+    <span
+      className={`shrink-0 rounded px-1 text-[10px] font-bold ${bad ? "bg-berry/15 text-berry" : "bg-grass/15 text-grass"}`}
+    >
+      {bad ? e.rank : `+${e.rank}`}
+    </span>
+  );
+};
 
 /** 數字輸入:空字串 -> undefined(交給 PalDefender 預設)。 */
 function numOrUndef(v: string): number | undefined {
@@ -29,10 +57,16 @@ function numOrUndef(v: string): number | undefined {
 export function CustomPalModal({
   client,
   instanceId,
+  mode,
+  initialUserId,
   onClose,
 }: {
   client: AgentClient;
   instanceId: string;
+  /** pal = givepal_j(給玩家);egg = giveegg_j(給帕魯蛋)。由開啟的那條指令決定。 */
+  mode: "pal" | "egg";
+  /** 預填目標玩家(從玩家詳情「玩家操作」跳來時帶入)。 */
+  initialUserId?: string;
   onClose: () => void;
 }) {
   useI18n();
@@ -40,16 +74,15 @@ export function CustomPalModal({
   const [entitled, setEntitled] = useState<boolean | null>(null);
   const [players, setPlayers] = useState<KnownPlayer[]>([]);
 
-  const [mode, setMode] = useState<"pal" | "egg">("pal");
-  const [userId, setUserId] = useState("");
+  const [userId, setUserId] = useState(initialUserId ?? "");
   const [eggId, setEggId] = useState("");
   const [palId, setPalId] = useState("");
   const [nickname, setNickname] = useState("");
   const [gender, setGender] = useState<"" | "None" | "Male" | "Female">("");
   const [level, setLevel] = useState("");
   const [stars, setStars] = useState("");
-  const [passives, setPassives] = useState("");
-  const [skills, setSkills] = useState("");
+  const [passives, setPassives] = useState<string[]>([]);
+  const [skills, setSkills] = useState<string[]>([]);
   const [iv, setIv] = useState({ health: "", attackMelee: "", attackShot: "", defense: "" });
   const [souls, setSouls] = useState({ health: "", attack: "", defense: "", craftSpeed: "" });
 
@@ -60,7 +93,7 @@ export function CustomPalModal({
   useEffect(() => {
     client
       .license()
-      .then((l) => setEntitled(l.features.includes("custom-pal")))
+      .then((l) => setEntitled(hasFeature("custom-pal", l)))
       .catch(() => setEntitled(false));
     client.knownPlayers(instanceId).then(setPlayers).catch(() => setPlayers([]));
   }, [client, instanceId]);
@@ -70,7 +103,8 @@ export function CustomPalModal({
     () =>
       !locked &&
       palId.trim() !== "" &&
-      (mode === "egg" ? eggId.trim() !== "" : userId.trim() !== "") &&
+      userId.trim() !== "" &&
+      (mode !== "egg" || eggId.trim() !== "") &&
       !busy,
     [locked, mode, eggId, userId, palId, busy],
   );
@@ -82,13 +116,14 @@ export function CustomPalModal({
     const input: CustomPalInput = {
       mode,
       palId: palId.trim(),
-      ...(mode === "egg" ? { eggId: eggId.trim() } : { userId: userId.trim() }),
+      userId: userId.trim(),
+      ...(mode === "egg" ? { eggId: eggId.trim() } : {}),
       ...(nickname.trim() ? { nickname: nickname.trim() } : {}),
       ...(gender ? { gender } : {}),
       ...(numOrUndef(level) != null ? { level: numOrUndef(level) } : {}),
       ...(numOrUndef(stars) != null ? { condensedPals: numOrUndef(stars) } : {}),
-      ...(splitIds(passives).length ? { passives: splitIds(passives).slice(0, 8) } : {}),
-      ...(splitIds(skills).length ? { activeSkills: splitIds(skills).slice(0, 3) } : {}),
+      ...(passives.length ? { passives: passives.slice(0, 8) } : {}),
+      ...(skills.length ? { activeSkills: skills.slice(0, 3) } : {}),
       ivs: {
         health: numOrUndef(iv.health),
         attackMelee: numOrUndef(iv.attackMelee),
@@ -135,7 +170,8 @@ export function CustomPalModal({
       >
         <div className="flex shrink-0 items-center justify-between">
           <h2 className="inline-flex items-center gap-2 text-lg font-extrabold">
-            <GiEggClutch className="size-5 text-pal" /> {t("自訂帕魯")}
+            <GiEggClutch className="size-5 text-pal" />{" "}
+            {mode === "egg" ? t("自訂帕魯蛋") : t("自訂帕魯")}
             <span className="inline-flex items-center gap-1 rounded-full bg-pal/10 px-2 py-0.5 text-xs font-bold text-pal">
               <FiStar className="size-3" /> {t("贊助者")}
             </span>
@@ -162,30 +198,18 @@ export function CustomPalModal({
 
         {/* 表單:未解鎖時整組變灰、不可操作 */}
         <div className={locked ? "pointer-events-none flex flex-col gap-3 opacity-55" : "flex flex-col gap-3"}>
-          {/* 給予方式:直接給帕魯,或給一顆帕魯蛋 */}
-          <div className="flex items-center gap-2 text-xs font-bold text-ink-muted">
-            {t("給予方式")}
-            <div className="inline-flex overflow-hidden rounded-lg border-2 border-line">
-              {(["pal", "egg"] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  className={`px-3 py-1 transition ${mode === m ? "bg-pal/15 text-pal" : "text-ink-muted hover:text-ink"}`}
-                  onClick={() => setMode(m)}
-                >
-                  {m === "pal" ? t("帕魯") : t("帕魯蛋")}
-                </button>
-              ))}
-            </div>
-          </div>
-
           <div className="grid gap-2 sm:grid-cols-2">
-            {mode === "egg" ? (
+            {/* 兩種模式都要指定玩家(egg 走 REST /give/paleggs/{userId})。 */}
+            <label className="flex min-w-0 flex-col gap-1 text-xs font-bold text-ink-muted">
+              {t("目標玩家")}
+              <PlayerPicker roster={players} value={userId} onChange={setUserId} />
+            </label>
+            {mode === "egg" && (
               <label className="flex min-w-0 flex-col gap-1 text-xs font-bold text-ink-muted">
                 {t("蛋 ID")}
                 {gameData ? (
                   <EntityPicker
-                    catalog={gameData.items}
+                    catalog={gameData.eggs}
                     iconUrl={itemIconUrl}
                     value={eggId}
                     onChange={setEggId}
@@ -197,27 +221,6 @@ export function CustomPalModal({
                     value={eggId}
                     placeholder="PalEgg_Ice_01"
                     onChange={(e) => setEggId(e.target.value)}
-                  />
-                )}
-              </label>
-            ) : (
-              <label className="flex min-w-0 flex-col gap-1 text-xs font-bold text-ink-muted">
-                {t("目標玩家")}
-                {players.length > 0 ? (
-                  <select className={inputCls} value={userId} onChange={(e) => setUserId(e.target.value)}>
-                    <option value="">{t("選擇玩家…")}</option>
-                    {players.map((p) => (
-                      <option key={p.userId} value={p.userId}>
-                        {(p.name || p.accountName || p.userId) + (p.online ? " ●" : "")}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    className={inputCls}
-                    value={userId}
-                    placeholder="steam_7650..."
-                    onChange={(e) => setUserId(e.target.value)}
                   />
                 )}
               </label>
@@ -255,24 +258,28 @@ export function CustomPalModal({
             {numField(t("等級"), level, setLevel, 100)}
           </div>
 
-          <label className="flex min-w-0 flex-col gap-1 text-xs font-bold text-ink-muted">
-            {t("詞條 / 被動(ID,逗號分隔,最多 8)")}
-            <input
-              className={inputCls}
+          <div className="flex min-w-0 flex-col gap-1 text-xs font-bold text-ink-muted">
+            {t("詞條 / 被動(最多 8)")}
+            <MultiPicker
+              catalog={gameData?.passives ?? []}
               value={passives}
-              placeholder="Legend, CraftSpeed_up3"
-              onChange={(e) => setPassives(e.target.value)}
+              onChange={setPassives}
+              max={8}
+              placeholder={t("搜尋詞條名稱或輸入 ID…")}
+              renderMeta={passiveMeta}
             />
-          </label>
-          <label className="flex min-w-0 flex-col gap-1 text-xs font-bold text-ink-muted">
-            {t("主動技(ID,逗號分隔,最多 3)")}
-            <input
-              className={inputCls}
+          </div>
+          <div className="flex min-w-0 flex-col gap-1 text-xs font-bold text-ink-muted">
+            {t("主動技(最多 3)")}
+            <MultiPicker
+              catalog={gameData?.activeSkills ?? []}
               value={skills}
-              placeholder="SandTornado, RockLance"
-              onChange={(e) => setSkills(e.target.value)}
+              onChange={setSkills}
+              max={3}
+              placeholder={t("搜尋主動技名稱或輸入 ID…")}
+              renderMeta={skillMeta}
             />
-          </label>
+          </div>
 
           <div>
             <p className="mb-1 text-xs font-bold text-ink-muted">{t("體質 / IV(0–255)")}</p>

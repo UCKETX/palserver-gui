@@ -37,9 +37,9 @@ export function CopyPath({ value, className = "" }: { value: string; className?:
         {tail && <span className="shrink-0">{tail}</span>}
       </span>
       {copied ? (
-        <FiCheck className="size-3.5 shrink-0 text-grass" />
+        <FiCheck className="size-4 shrink-0 text-grass" />
       ) : (
-        <FiCopy className="size-3.5 shrink-0 text-ink-muted opacity-60" />
+        <FiCopy className="size-4 shrink-0 text-ink-muted" />
       )}
     </button>
   );

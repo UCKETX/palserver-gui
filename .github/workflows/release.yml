@@ -78,6 +78,8 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
+      # 需要 checkout 才能讀到 RELEASE_NOTES.md(發布內文來源)。
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -93,33 +95,6 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
-          # 新手友善的下載指引 —— generate_release_notes 產生的變更紀錄會接在這段後面。
-          body: |
-            ## 下載哪一個?
-
-            大部分人只要看你電腦對應的那一列就好。解壓縮後**雙擊 `palserver-agent`**,
-            瀏覽器會自動打開管理介面,不用先裝 Node、不用 Docker、不用打指令。
-
-            | 你的電腦 | 下載這個 | 說明 |
-            | --- | --- | --- |
-            | **Windows** | **`palserver-agent-windows.zip`** | 最多人用,雙擊即可 |
-            | **Linux** | `palserver-agent-linux.zip` | 同上 |
-            | **macOS** | `palserver-agent-macos.zip` | Mac 不能實際開帕魯伺服器(限制),只能拿來管理別台遠端主機 |
-
-            > 這三個都是「合一版」:免安裝執行檔 **+** 網頁介面,一個檔案搞定,適合自己開服。
-
-            <details>
-            <summary>其他檔案是什麼?(進階,新手可以直接略過)</summary>
-
-            - **`palserver-web.zip`** — 只有「網頁介面」、不含 agent。要把管理網頁自己架到公開網站(例如 Zeabur)給大家線上用時才需要。
-            - **`*.tar.gz`** — 內容和對應的 `.zip` 一樣,但這是給 agent「一鍵自我更新」讀的格式。**手動下載請用 `.zip`。**
-            - **`SHA256SUMS.txt`** — 檔案校驗碼,自我更新時會自動比對防止下載損毀,一般玩家可以忽略。
-            </details>
-
-            ---
-
-            首次安裝會下載較大的帕魯伺服器檔案、需要一點時間,屬正常現象。
-            安裝與連線教學見 [玩家版指南](https://github.com/io-software-ai/palserver-gui/blob/main/docs/INSTALL.zh-TW.md);有問題歡迎到 [Discord](https://discord.gg/sgMMdUZd3V) 找我們。
-
-            > 免費開源,僅限非商業使用(PolyForm Noncommercial)。
+          # 發布內文(更新日誌 + 貢獻者感謝 + 下載教學)維護在 repo 根目錄的
+          # RELEASE_NOTES.md,每次發版前先更新它;這裡原樣採用,不自動附 commit 清單。
+          body_path: RELEASE_NOTES.md

@@ -9,8 +9,8 @@ import { card } from "./ui";
 const HISTORY = 60;
 
 interface Sample {
-  cpu: number; // 佔單核的百分比
-  memPct: number; // 記憶體用量佔上限
+  cpu: number | null; // 佔單核的百分比；null 代表尚未取得有效取樣
+  memPct: number | null; // 記憶體用量佔上限；null 代表沒有有限上限
   fps: number | null; // 伺服器 FPS(需 REST API)
 }
 
@@ -56,12 +56,15 @@ export function PerformanceTab({
       }
       const fps = l?.metrics?.serverfps ?? null;
       if (s) {
+        const cpuPercent = knownCpuSample(s.cpuPercent) ? s.cpuPercent : null;
         setHistory((prev) =>
           [
             ...prev,
             {
-              cpu: s.cpuPercent,
-              memPct: s.memoryLimitBytes ? s.memoryBytes / s.memoryLimitBytes : 0,
+              cpu: cpuPercent,
+              memPct: hasFiniteLimit(s.memoryLimitBytes)
+                ? clampRatio(s.memoryBytes / s.memoryLimitBytes)
+                : null,
               fps,
             },
           ].slice(-HISTORY),
@@ -86,8 +89,11 @@ export function PerformanceTab({
   }
 
   const metrics = live?.metrics ?? null;
-  const cores = stats?.cpuCores ?? 1;
-  const cpuOfTotal = stats ? stats.cpuPercent / (cores * 100) : 0; // 佔總算力
+  const cores = stats && Number.isFinite(stats.cpuCores) && stats.cpuCores > 0 ? stats.cpuCores : 1;
+  const cpuPercent = stats && knownCpuSample(stats.cpuPercent) ? stats.cpuPercent : null;
+  const cpuOfTotal = cpuPercent == null ? null : clampRatio(cpuPercent / (cores * 100)); // 佔總算力
+  const memoryLimit = stats?.memoryLimitBytes ?? 0;
+  const memoryRatio = stats && hasFiniteLimit(memoryLimit) ? clampRatio(stats.memoryBytes / memoryLimit) : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -96,14 +102,14 @@ export function PerformanceTab({
         <Stat
           icon={<FiCpu className="size-4" />}
           label="CPU"
-          value={stats ? `${stats.cpuPercent.toFixed(0)}%` : "—"}
-          sub={stats ? t("共 {cores} 核 · 佔總算力 {pct}%", { cores, pct: (cpuOfTotal * 100).toFixed(0) }) : undefined}
+          value={cpuPercent == null ? "—" : `${cpuPercent.toFixed(0)}%`}
+          sub={cpuOfTotal == null ? undefined : t("共 {cores} 核 · 佔總算力 {pct}%", { cores, pct: (cpuOfTotal * 100).toFixed(0) })}
         />
         <Stat
           icon={<FiHardDrive className="size-4" />}
           label={t("記憶體")}
           value={stats ? fmtBytes(stats.memoryBytes) : "—"}
-          sub={stats ? `／ ${fmtBytes(stats.memoryLimitBytes)}` : undefined}
+          sub={stats && hasFiniteLimit(memoryLimit) ? `／ ${fmtBytes(memoryLimit)}` : undefined}
         />
         <Stat
           icon={<FiZap className="size-4" />}
@@ -128,13 +134,13 @@ export function PerformanceTab({
           <>
             <Meter
               label={t("CPU（佔總算力）")}
-              text={`${(cpuOfTotal * 100).toFixed(1)}%`}
-              ratio={Math.min(cpuOfTotal, 1)}
+              text={cpuOfTotal == null ? "—" : `${(cpuOfTotal * 100).toFixed(1)}%`}
+              ratio={cpuOfTotal}
             />
             <Meter
               label={t("記憶體")}
-              text={`${fmtBytes(stats.memoryBytes)} / ${fmtBytes(stats.memoryLimitBytes)}`}
-              ratio={stats.memoryLimitBytes ? stats.memoryBytes / stats.memoryLimitBytes : 0}
+              text={hasFiniteLimit(memoryLimit) ? `${fmtBytes(stats.memoryBytes)} / ${fmtBytes(memoryLimit)}` : fmtBytes(stats.memoryBytes)}
+              ratio={memoryRatio}
             />
           </>
         ) : (
@@ -153,14 +159,14 @@ export function PerformanceTab({
             title={t("CPU 佔總算力")}
             unit="%"
             color="#F4A64D"
-            values={history.map((h) => h.cpu / (cores * 100) * 100)}
+            values={history.map((h) => (h.cpu == null ? null : clampRatio(h.cpu / (cores * 100)) * 100))}
             max={100}
           />
           <Trend
             title={t("記憶體使用率")}
             unit="%"
             color="#7BB0E8"
-            values={history.map((h) => h.memPct * 100)}
+            values={history.map((h) => (h.memPct == null ? null : h.memPct * 100))}
             max={100}
           />
           {metrics && (
@@ -168,8 +174,8 @@ export function PerformanceTab({
               title={t("伺服器 FPS")}
               unit=""
               color="#8FCf8F"
-              values={history.map((h) => h.fps ?? 0)}
-              max={Math.max(60, ...history.map((h) => h.fps ?? 0))}
+              values={history.map((h) => h.fps)}
+              max={Math.max(60, ...history.flatMap((h) => (h.fps == null ? [] : [h.fps])))}
             />
           )}
         </div>
@@ -227,7 +233,7 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-function Meter({ label, text, ratio }: { label: string; text: string; ratio: number }) {
+function Meter({ label, text, ratio }: { label: string; text: string; ratio: number | null }) {
   return (
     <div>
       <div className="mb-1 flex justify-between text-sm">
@@ -235,7 +241,7 @@ function Meter({ label, text, ratio }: { label: string; text: string; ratio: num
         <span className="font-bold">{text}</span>
       </div>
       <div className="h-3 overflow-hidden rounded-full bg-card-soft">
-        <div className="h-full rounded-full bg-pal transition-all" style={{ width: `${ratio * 100}%` }} />
+        <div className="h-full rounded-full bg-pal transition-all" style={{ width: ratio == null ? "0%" : `${ratio * 100}%` }} />
       </div>
     </div>
   );
@@ -252,34 +258,49 @@ function Trend({
   title: string;
   unit: string;
   color: string;
-  values: number[];
+  values: Array<number | null>;
   max: number;
 }) {
   const W = 260;
   const H = 64;
-  const last = values.length ? values[values.length - 1] : 0;
+  const knownValues = values.filter((v): v is number => v != null && Number.isFinite(v));
+  const last = knownValues.length ? knownValues[knownValues.length - 1] : null;
   const safeMax = max > 0 ? max : 1;
   const pts = values.map((v, i) => {
+    if (v == null || !Number.isFinite(v)) return null;
     const x = values.length > 1 ? (i / (values.length - 1)) * W : 0;
-    const y = H - Math.min(v / safeMax, 1) * (H - 4) - 2;
+    const y = H - Math.max(0, Math.min(v / safeMax, 1)) * (H - 4) - 2;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   });
-  const area = values.length > 1 ? `0,${H} ${pts.join(" ")} ${W},${H}` : "";
+  const segments: string[][] = [];
+  let segment: string[] = [];
+  for (const point of pts) {
+    if (point == null) {
+      if (segment.length) segments.push(segment);
+      segment = [];
+    } else {
+      segment.push(point);
+    }
+  }
+  if (segment.length) segments.push(segment);
+  const area = values.length > 1 && pts.every((point) => point != null) ? `0,${H} ${pts.join(" ")} ${W},${H}` : "";
 
   return (
     <div>
       <div className="mb-1 flex items-baseline justify-between">
         <span className="text-xs font-bold text-ink-muted">{title}</span>
         <span className="text-sm font-extrabold" style={{ color }}>
-          {last.toFixed(unit === "%" ? 0 : 0)}
-          {unit}
+          {last == null ? "—" : last.toFixed(unit === "%" ? 0 : 0)}
+          {last == null ? "" : unit}
         </span>
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} className="h-16 w-full" preserveAspectRatio="none">
-        {values.length > 1 && (
+        {segments.some((points) => points.length > 1) && (
           <>
-            <polygon points={area} fill={color} opacity="0.12" />
-            <polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+            {area && <polygon points={area} fill={color} opacity="0.12" />}
+            {segments.map((points, index) => (
+              <polyline key={index} points={points.join(" ")} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+            ))}
           </>
         )}
       </svg>
@@ -289,6 +310,18 @@ function Trend({
 
 function fmtBytes(n: number): string {
   return n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(1)} GB` : `${Math.round(n / (1 << 20))} MB`;
+}
+
+function knownCpuSample(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function hasFiniteLimit(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
+function clampRatio(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.min(value, 1)) : 0;
 }
 
 function fmtDuration(sec: number): string {

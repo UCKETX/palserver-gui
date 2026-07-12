@@ -1,7 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { FiArrowUpCircle } from "react-icons/fi";
+import type { AgentUpdateStatus } from "@palserver/shared";
+import { AgentClient, type Connection } from "./api";
 import { PrivacyModal } from "./PrivacyModal";
-import { usePromoConfig } from "./promoConfig";
 import { t, useI18n } from "./i18n";
+
+/** 點左下角「有新版本」小提醒時發出;由 App 的 Shell 接住並打開設定視窗。 */
+export const OPEN_SETTINGS_EVENT = "palserver:open-settings";
 
 /**
  * 網站左下角的署名與版本號。低調固定在角落,不干擾操作
@@ -10,12 +15,32 @@ import { t, useI18n } from "./i18n";
  * 視窗縮小到會蓋住內容時就自動隱藏 —— 用實際的矩形交疊判斷(見 useClearOfContent),
  * 而不是猜一個斷點。
  */
-export function SiteFooter() {
+export function SiteFooter({ conn }: { conn: Connection | null }) {
   useI18n();
-  const { faq } = usePromoConfig();
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [update, setUpdate] = useState<AgentUpdateStatus | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const clear = useClearOfContent(ref);
+
+  // 連線後抓一次 GUI 更新狀態:版本號直接顯示 agent 回報的當前版本(自我更新後會
+  // 跟著變),有新版時在角落給個小提醒。updateStatus() 走 agent 快取,不會每次打 GitHub。
+  const client = useMemo(() => (conn ? new AgentClient(conn, () => {}) : null), [conn]);
+  useEffect(() => {
+    if (!client) {
+      setUpdate(null);
+      return;
+    }
+    let alive = true;
+    client
+      .updateStatus()
+      .then((s) => alive && setUpdate(s))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [client]);
+
+  const version = update?.currentVersion ?? __APP_VERSION__;
 
   return (
     <>
@@ -36,15 +61,19 @@ export function SiteFooter() {
           {t("由 Dalufish 用愛製作")}
         </a>
         <div className="mt-0.5 flex items-center gap-2">
-          <span className="font-mono opacity-80">{__APP_VERSION__}</span>
-          <a
-            className="pointer-events-auto underline-offset-2 transition hover:text-pal hover:underline"
-            href={faq}
-            target="_blank"
-            rel="noreferrer"
-          >
-            {t("常見問題")}
-          </a>
+          <span className="font-mono opacity-80">{version}</span>
+          {update?.updateAvailable && (
+            <button
+              className="pointer-events-auto inline-flex items-center gap-1 rounded-full bg-pal/15 px-1.5 py-0.5 font-bold text-pal transition hover:bg-pal/25"
+              onClick={() => window.dispatchEvent(new Event(OPEN_SETTINGS_EVENT))}
+              title={t("有新版本")}
+            >
+              <FiArrowUpCircle className="size-3" /> {t("有新版本")}
+              {update.latestVersion && (
+                <span className="font-mono font-normal opacity-90">{update.latestVersion}</span>
+              )}
+            </button>
+          )}
           <button
             className="pointer-events-auto underline-offset-2 transition hover:text-pal hover:underline"
             onClick={() => setShowPrivacy(true)}

@@ -12,6 +12,7 @@ const REASON_LABELS: Record<string, string> = {
   memory: "記憶體",
   crash: "崩潰",
   manual: "手動",
+  "startup-failure": "啟動失敗",
 };
 
 /** Automatic-restart policy: scheduled, memory threshold, crash recovery. */
@@ -45,7 +46,7 @@ export function RestartCard({ client, instanceId }: { client: AgentClient; insta
   if (!status.supported) {
     return (
       <div className={card}>
-        <h3 className="text-sm font-extrabold text-ink-muted">{t("自動重啟")}</h3>
+        <h3 className="text-sm font-extrabold text-ink-muted">{t("伺服器重啟")}</h3>
         <p className="mt-1 text-[13px] text-ink-muted">{status.reason}</p>
       </div>
     );
@@ -58,7 +59,7 @@ export function RestartCard({ client, instanceId }: { client: AgentClient; insta
     setError(null);
     try {
       await client.updateRestartPolicy(instanceId, draft);
-      setNotice(t("已儲存自動重啟設定"));
+      setNotice(t("已儲存伺服器重啟設定"));
       setTimeout(() => setNotice(null), 3000);
       await refresh();
     } catch (err) {
@@ -74,7 +75,7 @@ export function RestartCard({ client, instanceId }: { client: AgentClient; insta
     <div className={`${card} flex flex-col gap-4`}>
       <div className="flex items-center justify-between gap-3">
         <h3 className="inline-flex items-center gap-2 text-sm font-extrabold">
-          <FiRefreshCw className="size-4 text-pal" /> {t("自動重啟")}
+          <FiRefreshCw className="size-4 text-pal" /> {t("伺服器重啟")}
         </h3>
         <span className="text-xs text-ink-muted">
           {status.memoryMB !== null && `${t("目前記憶體")} ${status.memoryMB} MB · `}
@@ -202,7 +203,7 @@ export function RestartCard({ client, instanceId }: { client: AgentClient; insta
         </p>
       </Section>
 
-      <Field label={t("計畫性重啟前的預告秒數(0 = 不預告)")}>
+      <Field label={t("停止 / 重啟前的預告秒數(0 = 不預告)")}>
         <input
           className={`${inputCls} max-w-40`}
           type="number"
@@ -213,7 +214,7 @@ export function RestartCard({ client, instanceId }: { client: AgentClient; insta
         />
       </Field>
       <p className="-mt-2 text-xs text-ink-muted">
-        {t("會透過 REST API 廣播給線上玩家,並在重啟前先存檔。崩潰重啟不預告(伺服器已經不在了)。")}
+        {t("計畫性重啟以及你手動按停止 / 重啟時,都會先在遊戲聊天室倒數公告這麼多秒(手動用介面語言),並在重啟前先存檔。崩潰重啟不預告(伺服器已經不在了)。")}
       </p>
 
       <div className="flex gap-2">

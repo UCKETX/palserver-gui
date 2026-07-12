@@ -6,6 +6,8 @@ import type {
   BackupSchedule,
   ConfigHealth,
   ConnectionInfo,
+  ConfigSnapshotInfo,
+  ConfigSnapshotList,
   CreateInstanceInput,
   CustomPalInput,
   DirEntry,
@@ -25,6 +27,12 @@ import type {
   ModsStatus,
   PalDefenderConfig,
   PalDefenderConfigStatus,
+  PalSchemaStatus,
+  PalStatsStatus,
+  PalStatValues,
+  PdGuildList,
+  PdGuildDetail,
+  PdPlayerList,
   PdRestStatus,
   PlayerDetail,
   PresenceEvent,
@@ -47,6 +55,19 @@ export interface TelemetryStatus {
   /** true = 被 PALSERVER_TELEMETRY=0 強制停用,GUI 開關無效。 */
   envDisabled: boolean;
   installId: string;
+}
+
+export interface ConfigSnapshotResult {
+  supported: boolean;
+  reason?: string;
+  snapshot?: ConfigSnapshotInfo;
+}
+
+export interface ConfigSnapshotRestoreResult {
+  supported: boolean;
+  reason?: string;
+  snapshot?: ConfigSnapshotInfo;
+  safetySnapshot?: ConfigSnapshotInfo;
 }
 
 const STORAGE_KEY = "palserver.connection";
@@ -186,8 +207,17 @@ export class AgentClient {
     return this.request("/api/instances", { method: "POST", body: JSON.stringify(input) });
   }
 
-  action(id: string, action: "start" | "stop" | "restart"): Promise<InstanceSummary> {
-    return this.request(`/api/instances/${id}/${action}`, { method: "POST" });
+  /** announceTemplate(含 {n} 佔位)只用於 stop/restart:agent 會用它在遊戲聊天室
+   * 倒數公告(語言由呼叫端決定),秒數取自該實例伺服器重啟設定的 announceSeconds。 */
+  action(
+    id: string,
+    action: "start" | "stop" | "restart",
+    announceTemplate?: string,
+  ): Promise<InstanceSummary> {
+    return this.request(`/api/instances/${id}/${action}`, {
+      method: "POST",
+      body: announceTemplate ? JSON.stringify({ announceTemplate }) : undefined,
+    });
   }
 
   deleteInstance(id: string): Promise<void> {
@@ -204,8 +234,9 @@ export class AgentClient {
     });
   }
 
-  /** 修改伺服器路徑(僅 native)。空字串 = 回到 agent 管理的資料夾。 */
-  updateServerDir(id: string, serverDir: string): Promise<{ serverDir: string | null }> {
+  /** 修改伺服器路徑(僅 native):把現有伺服器檔案搬到新位置。空字串 = 搬回 agent
+   *  管理的資料夾。跨磁碟搬移在背景進行,回傳 { moving: true },實例會短暫顯示「安裝中」。 */
+  updateServerDir(id: string, serverDir: string): Promise<{ serverDir?: string | null; moving?: boolean }> {
     return this.request(`/api/instances/${id}/server-dir`, {
       method: "PUT",
       body: JSON.stringify({ serverDir }),
@@ -331,6 +362,19 @@ export class AgentClient {
     return this.request(`/api/instances/${id}/save`, { method: "POST", body: "{}" });
   }
 
+  /** PalDefender 統一玩家名冊(含離線,需 1.8+)。 */
+  palDefenderPlayers(id: string): Promise<PdPlayerList> {
+    return this.request(`/api/instances/${id}/paldefender-players`);
+  }
+
+  guilds(id: string): Promise<PdGuildList> {
+    return this.request(`/api/instances/${id}/guilds`);
+  }
+
+  guild(id: string, guildId: string): Promise<PdGuildDetail> {
+    return this.request(`/api/instances/${id}/guilds/${encodeURIComponent(guildId)}`);
+  }
+
   palDefenderRest(id: string): Promise<PdRestStatus> {
     return this.request(`/api/instances/${id}/paldefender-rest`);
   }
@@ -339,6 +383,13 @@ export class AgentClient {
     return this.request(`/api/instances/${id}/paldefender-rest/enabled`, {
       method: "PUT",
       body: JSON.stringify({ enabled }),
+    });
+  }
+
+  setPalDefenderRestPort(id: string, port: number): Promise<PdRestStatus> {
+    return this.request(`/api/instances/${id}/paldefender-rest/port`, {
+      method: "PUT",
+      body: JSON.stringify({ port }),
     });
   }
 
@@ -360,8 +411,60 @@ export class AgentClient {
     });
   }
 
+  /** PalSchema(帕魯物種數值編輯器,贊助者先行版 pal-stats)安裝狀態。 */
+  palSchema(id: string): Promise<PalSchemaStatus> {
+    return this.request(`/api/instances/${id}/palschema`);
+  }
+
+  /** 安裝需先停伺服器(執行中回 409);非贊助者回 403。 */
+  installPalSchema(id: string): Promise<{ installed: string; version: string; applied: string }> {
+    return this.request(`/api/instances/${id}/palschema/install`, { method: "POST" });
+  }
+
+  uninstallPalSchema(id: string): Promise<{ removed: string }> {
+    return this.request(`/api/instances/${id}/palschema/uninstall`, { method: "POST" });
+  }
+
+  /** 物種數值(PalSchema DataTable patch)目前狀態 + 各 row 已寫入的值。 */
+  palStats(id: string): Promise<PalStatsStatus> {
+    return this.request(`/api/instances/${id}/pal-stats`);
+  }
+
+  /** 只需送有填的欄位;values 會與該 row 既有內容合併寫入。 */
+  updatePalStats(id: string, row: string, values: PalStatValues): Promise<PalStatsStatus> {
+    return this.request(`/api/instances/${id}/pal-stats`, {
+      method: "PUT",
+      body: JSON.stringify({ row, values }),
+    });
+  }
+
   configHealth(id: string): Promise<ConfigHealth> {
     return this.request(`/api/instances/${id}/config-health`);
+  }
+
+  listConfigBackups(id: string): Promise<ConfigSnapshotList> {
+    return this.request(`/api/instances/${id}/config-backups`);
+  }
+
+  createConfigBackup(id: string, reason?: string): Promise<ConfigSnapshotResult> {
+    return this.request(`/api/instances/${id}/config-backups`, {
+      method: "POST",
+      body: JSON.stringify(reason?.trim() ? { reason: reason.trim() } : {}),
+    });
+  }
+
+  configBackupDownloadUrl(id: string, name: string): string {
+    const url = new URL(`${this.conn.url}/api/instances/${encodeURIComponent(id)}/config-backups/download`);
+    url.searchParams.set("name", name);
+    url.searchParams.set("token", this.conn.token);
+    return url.toString();
+  }
+
+  restoreConfigBackup(id: string, name: string): Promise<ConfigSnapshotRestoreResult> {
+    return this.request(`/api/instances/${id}/config-backups/restore`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
   }
 
   regenerateConfig(id: string, file: "world" | "engine"): Promise<{ path: string; backedUp: boolean }> {
@@ -446,6 +549,33 @@ export class AgentClient {
   deletePlayerSave(id: string, worldGuid: string, file: string): Promise<void> {
     const q = new URLSearchParams({ worldGuid, file });
     return this.request(`/api/instances/${id}/saves/player?${q}`, { method: "DELETE" });
+  }
+
+  /** 鏡像遷移：把此實例的存檔+INI+GameUserSettings 複製到目標實例。 */
+  mirrorWorld(id: string, targetId: string): Promise<{ mirrored: boolean; worldGuid: string; targetId: string }> {
+    return this.request(`/api/instances/${id}/mirror`, {
+      method: "POST",
+      body: JSON.stringify({ targetId }),
+    });
+  }
+
+  /** Pak mod 列表（跨平台）。 */
+  listPakMods(id: string): Promise<{ mods: { name: string; size: number; enabled: boolean }[] }> {
+    return this.request(`/api/instances/${id}/pak-mods`);
+  }
+
+  /** 啟停 pak mod。 */
+  togglePakMod(id: string, name: string, enabled: boolean): Promise<{ toggled: string; enabled: boolean }> {
+    return this.request(`/api/instances/${id}/pak-mods/toggle`, {
+      method: "POST",
+      body: JSON.stringify({ name, enabled }),
+    });
+  }
+
+  /** 移除 pak mod。 */
+  removePakMod(id: string, name: string): Promise<void> {
+    const q = new URLSearchParams({ name });
+    return this.request(`/api/instances/${id}/pak-mods?${q}`, { method: "DELETE" });
   }
 
   updateBackupSchedule(id: string, patch: Partial<BackupSchedule>): Promise<BackupSchedule> {

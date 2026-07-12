@@ -26,6 +26,7 @@ import { RestartSupervisor } from "./supervisor.js";
 import { fetchLatest } from "./version.js";
 import { isInstalling, nativeDriver } from "./native.js";
 import { dockerDriver } from "./docker.js";
+import { k8sDriver } from "./k8s.js";
 import { registerRoutes } from "./routes.js";
 import { announceBoot, trackPlayers } from "./telemetry.js";
 import { cleanupOldBinaries, startUpdateChecker, type UpdateOps } from "./self-update.js";
@@ -112,6 +113,16 @@ if (webDist) {
       if (filePath.endsWith(".html")) res.setHeader("Cache-Control", "no-cache");
     },
   });
+  // SPA fallback:前端有自己的路由(例如 /map 全螢幕地圖),直接打這種網址時
+  // 靜態檔找不到 —— 回 index.html 讓前端接手,不要 404。API 與非 GET 照舊 404。
+  app.setNotFoundHandler((req, reply) => {
+    if (req.method !== "GET" || req.url.startsWith("/api/")) {
+      reply.code(404).send({ error: "Not found" });
+      return;
+    }
+    reply.header("Cache-Control", "no-cache");
+    return reply.sendFile("index.html");
+  });
 }
 
 app.setErrorHandler((err: Error & { statusCode?: number }, _req, reply) => {
@@ -147,12 +158,12 @@ announceBoot();
 trackPlayers(store.list().flatMap((rec) => presence.knownPlayers(rec.id).map((p) => p.userId)));
 
 const scheduler = new BackupScheduler(store, (rec) =>
-  rec.backend === "native" ? nativeDriver : dockerDriver,
+  rec.backend === "native" ? nativeDriver : rec.backend === "k8s" ? k8sDriver : dockerDriver,
 );
 scheduler.start();
 
 const supervisor = new RestartSupervisor(store, (rec) =>
-  rec.backend === "native" ? nativeDriver : dockerDriver,
+  rec.backend === "native" ? nativeDriver : rec.backend === "k8s" ? k8sDriver : dockerDriver,
 );
 supervisor.start();
 

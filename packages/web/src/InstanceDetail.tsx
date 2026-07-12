@@ -10,6 +10,7 @@ import type { AgentClient } from "./api";
 import { SettingsEditor } from "./SettingsEditor";
 import { ModsTab } from "./ModsTab";
 import { PalDefenderTab } from "./PalDefenderTab";
+import { PalStatsTab } from "./PalStatsTab";
 import { PlayersTab } from "./PlayersTab";
 import { MapTab } from "./MapTab";
 import { ConsoleTab } from "./ConsoleTab";
@@ -20,6 +21,7 @@ import { ConnectionCard } from "./ConnectionCard";
 import { MigrationCard } from "./MigrationCard";
 import { InstanceSettingsTab } from "./InstanceSettingsTab";
 import { CopyPath } from "./CopyPath";
+import { SHOW_SPONSOR_FEATURES } from "./flags";
 import { PerformanceTab } from "./PerformanceTab";
 import { EngineTab } from "./EngineTab";
 import { maskSteamIdsInText } from "./SteamId";
@@ -36,6 +38,7 @@ type Tab =
   | "engine"
   | "mods"
   | "paldefender"
+  | "palstats"
   | "saves"
   | "restart"
   | "instance"
@@ -49,8 +52,9 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "engine", label: "引擎微調" },
   { id: "mods", label: "模組" },
   { id: "paldefender", label: "PalDefender" },
+  { id: "palstats", label: "物種數值" },
   { id: "saves", label: "存檔備份" },
-  { id: "restart", label: "自動重啟" },
+  { id: "restart", label: "伺服器重啟" },
   { id: "instance", label: "設定" },
   { id: "logs", label: "日誌" },
 ];
@@ -73,6 +77,8 @@ export function InstanceDetailPage({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [palDefender, setPalDefender] = useState(false);
+  // 非 null 時代表正在倒數(數字為剩餘秒數),用來鎖按鈕與顯示提示。
+  const [countdown, setCountdown] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -98,11 +104,38 @@ export function InstanceDetailPage({
   }, [refresh]);
 
   const act = async (action: "start" | "stop" | "restart") => {
+    // 手動停止/重啟時,agent 端會依「伺服器重啟設定」裡的倒數秒數,在遊戲聊天室倒數公告
+    // 再執行;公告訊息用 GUI 介面語言的模板({n} 由 agent 代入剩餘秒數)。前端只負責把
+    // 模板傳過去,並用讀到的秒數跑一個純顯示用的本地倒數。
+    const isDowntime = (action === "stop" || action === "restart") && detail?.status === "running";
+    let timer: ReturnType<typeof setInterval> | undefined;
     try {
-      await client.action(instanceId, action);
+      const template = !isDowntime
+        ? undefined
+        : action === "stop"
+          ? t("伺服器將在 {n} 秒後停止")
+          : t("伺服器將在 {n} 秒後重新啟動");
+      if (isDowntime) {
+        const seconds = await client
+          .restartPolicy(instanceId)
+          .then((p) => p.policy.announceSeconds)
+          .catch(() => 0);
+        if (seconds > 0) {
+          const startedAt = Date.now();
+          setCountdown(seconds);
+          timer = setInterval(() => {
+            const left = seconds - Math.floor((Date.now() - startedAt) / 1000);
+            setCountdown(left > 0 ? left : 0);
+          }, 500);
+        }
+      }
+      await client.action(instanceId, action, template);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (timer) clearInterval(timer);
+      setCountdown(null);
     }
   };
 
@@ -142,16 +175,24 @@ export function InstanceDetailPage({
             <button
               className={`${btn} inline-flex items-center gap-1.5`}
               onClick={() => act("start")}
-              disabled={detail.status === "installing"}
+              disabled={detail.status === "installing" || countdown !== null}
             >
               <FiPlay className="size-4" /> {detail.status === "installing" ? t("安裝中…") : t("啟動")}
             </button>
           ) : (
-            <button className={`${btn} inline-flex items-center gap-1.5`} onClick={() => act("stop")}>
+            <button
+              className={`${btn} inline-flex items-center gap-1.5`}
+              onClick={() => act("stop")}
+              disabled={countdown !== null}
+            >
               <FiSquare className="size-4" /> {t("停止")}
             </button>
           )}
-          <button className={`${btnGhost} inline-flex items-center gap-1.5`} onClick={() => act("restart")}>
+          <button
+            className={`${btnGhost} inline-flex items-center gap-1.5`}
+            onClick={() => act("restart")}
+            disabled={countdown !== null}
+          >
             <FiRefreshCw className="size-4" /> {t("重啟")}
           </button>
           <button
@@ -164,6 +205,12 @@ export function InstanceDetailPage({
           </button>
         </div>
       </div>
+
+      {countdown !== null && (
+        <p className="rounded-xl bg-sun/15 px-3 py-2 text-[13px] font-bold text-sun">
+          {t("已在遊戲聊天室公告,{n} 秒後執行…", { n: countdown })}
+        </p>
+      )}
 
       {showConsole && (
         <Overlay onClose={() => setShowConsole(false)}>
@@ -205,7 +252,9 @@ export function InstanceDetailPage({
       )}
 
       <div className="flex flex-wrap gap-x-2 gap-y-1 border-b-2 border-line">
-        {TABS.filter((t) => t.id !== "paldefender" || palDefender).map((t) => (
+        {TABS.filter((t) => t.id !== "paldefender" || palDefender)
+          .filter((t) => t.id !== "palstats" || SHOW_SPONSOR_FEATURES)
+          .map((t) => (
           <button
             key={t.id}
             data-tab={t.id}
@@ -225,7 +274,13 @@ export function InstanceDetailPage({
       {tab === "performance" && (
         <PerformanceTab client={client} instanceId={detail.id} running={detail.status === "running"} />
       )}
-      {tab === "players" && <PlayersTab client={client} instanceId={detail.id} />}
+      {tab === "players" && (
+        <PlayersTab
+          client={client}
+          instanceId={detail.id}
+          onGoToPalDefender={palDefender ? () => setTab("paldefender") : undefined}
+        />
+      )}
       {tab === "map" && <MapTab client={client} instanceId={detail.id} />}
       {tab === "settings" && (
         <SettingsEditor
@@ -234,8 +289,9 @@ export function InstanceDetailPage({
           onSave={saveSettings}
           client={client}
           instanceId={detail.id}
-          canEditRaw={detail.backend === "native"}
-          running={detail.status === "running"}
+          canEditRaw={true}
+          running={detail.status === "running" && detail.backend === "native"}
+          restoreAllowed={detail.backend === "k8s" ? detail.status === "running" : detail.status !== "running"}
         />
       )}
       {tab === "engine" && (
@@ -247,6 +303,7 @@ export function InstanceDetailPage({
       {tab === "paldefender" && (
         <PalDefenderTab client={client} instanceId={detail.id} running={detail.status === "running"} />
       )}
+      {tab === "palstats" && <PalStatsTab client={client} instanceId={detail.id} />}
       {tab === "saves" && (
         <SavesTab client={client} instanceId={detail.id} running={detail.status === "running"} />
       )}
@@ -286,7 +343,7 @@ function OverviewTab({
   const serverPath = detail.effectiveServerDir ?? detail.serverDir;
   const rows: [string, React.ReactNode][] = [
     [t("狀態"), t(STATUS_LABELS[detail.status])],
-    [t("運行方式"), detail.backend === "native" ? t("原生") : t("Docker 容器")],
+    [t("運行方式"), detail.backend === "native" ? t("原生") : detail.backend === "docker" ? t("Docker 容器") : t("Kubernetes Pod")],
     [
       t("類型"),
       enhancements && enhancements.length > 0 ? t("強化({list})", { list: enhancements.join(" + ") }) : t("原味"),
@@ -294,7 +351,7 @@ function OverviewTab({
     [t("遊戲埠(UDP)"), String(detail.gamePort)],
     ["REST API", detail.settings.RESTAPIEnabled ? t("啟用({port})", { port: Number(detail.settings.RESTAPIPort) }) : t("停用")],
     ["RCON", detail.settings.RCONEnabled ? t("啟用({port})", { port: Number(detail.settings.RCONPort) }) : t("停用")],
-    [detail.backend === "native" ? t("行程 PID") : t("容器 ID"), detail.runtimeId ? detail.runtimeId.slice(0, 12) : "—"],
+    [detail.backend === "native" ? t("行程 PID") : detail.backend === "docker" ? t("容器 ID") : t("Pod 名稱"), detail.runtimeId ? detail.runtimeId.slice(0, 12) : "—"],
     // 路徑可能很長:中間省略、可點擊複製完整路徑,別讓它把整張卡片撐爆。
     [t("伺服器目錄"), serverPath ? <CopyPath value={serverPath} className="font-mono text-[13px]" /> : t("agent 管理")],
     [t("建立時間"), new Date(detail.createdAt).toLocaleString()],

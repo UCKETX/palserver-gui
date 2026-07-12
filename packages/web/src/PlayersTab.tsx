@@ -13,6 +13,7 @@ import {
 import { SteamId } from "./SteamId";
 import { useGameData, palIconUrl, type GameData } from "./gameData";
 import { PlayerDetailModal } from "./PlayerDetailModal";
+import { PlayerActionsMenu } from "./PlayerActionsMenu";
 
 /** A stable avatar per player: hash the id to pick a Pal, so the same player
  * always shows the same face. Palworld has no player portraits, so a Pal
@@ -58,7 +59,16 @@ const EMPTY_MODERATION: ModerationLists = {
   bans: [],
 };
 
-export function PlayersTab({ client, instanceId }: { client: AgentClient; instanceId: string }) {
+export function PlayersTab({
+  client,
+  instanceId,
+  onGoToPalDefender,
+}: {
+  client: AgentClient;
+  instanceId: string;
+  /** Jump to the PalDefender tab (for setting up the REST API from a modal). */
+  onGoToPalDefender?: () => void;
+}) {
   useI18n(); // 語言切換時重繪(含 fmtUptime 等模組層字串)
   const gameData = useGameData();
   const [live, setLive] = useState<LiveStatus | null>(null);
@@ -158,6 +168,8 @@ export function PlayersTab({ client, instanceId }: { client: AgentClient; instan
         <KnownPlayersCard
           known={known}
           gameData={gameData}
+          client={client}
+          instanceId={instanceId}
           onOpen={(id, label) => setDetailFor({ id, label })}
         />
         <PresenceTimeline events={events} />
@@ -168,6 +180,7 @@ export function PlayersTab({ client, instanceId }: { client: AgentClient; instan
             identifier={detailFor.id}
             displayLabel={detailFor.label}
             onClose={() => setDetailFor(null)}
+            onGoToPalDefender={onGoToPalDefender}
           />
         )}
       </div>
@@ -264,7 +277,13 @@ export function PlayersTab({ client, instanceId }: { client: AgentClient; instan
                   </p>
                 </div>
                 <p className="hidden text-xs text-ink-muted sm:block">{p.ip}</p>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <PlayerActionsMenu
+                    client={client}
+                    instanceId={instanceId}
+                    userId={p.userId}
+                    displayLabel={p.name}
+                  />
                   <button
                     className={`${btnGhost} inline-flex items-center gap-1.5`}
                     onClick={() => playerAction(p, "kick")}
@@ -308,6 +327,8 @@ export function PlayersTab({ client, instanceId }: { client: AgentClient; instan
       <KnownPlayersCard
         known={known}
         gameData={gameData}
+        client={client}
+        instanceId={instanceId}
         onOpen={(id, label) => setDetailFor({ id, label })}
       />
       <ModerationCard
@@ -325,6 +346,7 @@ export function PlayersTab({ client, instanceId }: { client: AgentClient; instan
           identifier={detailFor.id}
           displayLabel={detailFor.label}
           onClose={() => setDetailFor(null)}
+          onGoToPalDefender={onGoToPalDefender}
         />
       )}
     </div>
@@ -340,57 +362,72 @@ const fmtPlaytime = (seconds: number) => {
 
 const fmtWhen = (iso: string) => new Date(iso).toLocaleString();
 
-/** Everyone the agent has ever seen here — the roster that outlives logouts. */
+/** 離線玩家名冊:在線玩家已經有獨立的「在線玩家」卡片,這裡只列離線的,不重複。
+ * 名單來源:agent 有開 PalDefender REST 時走它的名冊(含存檔內所有離線玩家),否則用
+ * agent 自己記錄的。有 agent 歷史(首見時間)的才顯示等級 / 遊玩時長等統計。 */
 function KnownPlayersCard({
   known,
   gameData,
+  client,
+  instanceId,
   onOpen,
 }: {
   known: KnownPlayer[];
   gameData: GameData | null;
+  client: AgentClient;
+  instanceId: string;
   onOpen: (id: string, label: string) => void;
 }) {
   const offline = known.filter((p) => !p.online);
   return (
     <div className={`${card} p-0`}>
       <h3 className="border-b-2 border-line px-5 py-3 text-sm font-extrabold text-ink-muted">
-        {t("歷史玩家")}({known.length})
+        {t("離線玩家")}({offline.length})
       </h3>
-      {known.length === 0 ? (
+      {offline.length === 0 ? (
         <p className="px-5 py-8 text-center text-[13px] text-ink-muted">
-          {t("尚未記錄到任何玩家。agent 每 15 秒會記錄一次在線狀態。")}
+          {t("目前沒有離線玩家。agent 每 15 秒會記錄一次在線狀態。")}
         </p>
       ) : (
         <div className="flex flex-col divide-y divide-line">
-          {known.map((p) => (
-            <div key={p.userId} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3">
-              <button onClick={() => onOpen(p.userId, p.name)} title={t("查看帕魯與背包")} className="transition hover:opacity-80">
-                <PlayerAvatar seed={p.userId} gameData={gameData} size={36} />
-              </button>
-              <div className="min-w-40 flex-1">
-                <p className="flex items-center gap-2 text-sm font-extrabold">
-                  {p.name}
-                  {p.online ? (
-                    <span className="inline-flex items-center gap-1 rounded-full border-[1.5px] border-grass/40 bg-grass/15 px-2 py-0.5 text-xs font-bold text-grass">
-                      <span className="size-1.5 rounded-full bg-current" /> {t("在線")}
-                    </span>
-                  ) : (
-                    <span className="text-xs font-bold text-ink-muted">{t("離線")}</span>
+          {offline.map((p) => {
+            const hasHistory = !!p.firstSeen; // agent 記錄過(PalDefender-only 玩家沒有)
+            return (
+              <div key={p.userId} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3">
+                <button onClick={() => onOpen(p.userId, p.name)} title={t("查看帕魯與背包")} className="transition hover:opacity-80">
+                  <PlayerAvatar seed={p.userId} gameData={gameData} size={36} />
+                </button>
+                <div className="min-w-40 flex-1">
+                  <p className="flex flex-wrap items-center gap-2 text-sm font-extrabold">
+                    <button className="transition hover:text-pal" onClick={() => onOpen(p.userId, p.name)}>
+                      {p.name || "—"}
+                    </button>
+                    {p.guildName && <span className="text-xs font-normal text-ink-muted">· {p.guildName}</span>}
+                  </p>
+                  {hasHistory && (
+                    <p className="text-xs text-ink-muted">
+                      Lv.{p.lastLevel} · {t("遊玩")} {fmtPlaytime(p.playtimeSeconds)} · {t("{n} 次連線", { n: p.sessions })}
+                    </p>
                   )}
-                </p>
-                <p className="text-xs text-ink-muted">
-                  Lv.{p.lastLevel} · {t("遊玩")} {fmtPlaytime(p.playtimeSeconds)} · {t("{n} 次連線", { n: p.sessions })}
-                </p>
-                <p className="mt-0.5">
-                  <SteamId userId={p.userId} />
-                </p>
+                  <p className="mt-0.5">
+                    <SteamId userId={p.userId} />
+                  </p>
+                </div>
+                {hasHistory && (
+                  <div className="text-right text-xs text-ink-muted">
+                    <p>{t("最後上線")} {fmtWhen(p.lastSeen)}</p>
+                    <p>{t("首次出現")} {fmtWhen(p.firstSeen)}</p>
+                  </div>
+                )}
+                <PlayerActionsMenu
+                  client={client}
+                  instanceId={instanceId}
+                  userId={p.userId}
+                  displayLabel={p.name || p.userId}
+                />
               </div>
-              <div className="text-right text-xs text-ink-muted">
-                <p>{t("最後上線")} {fmtWhen(p.lastSeen)}</p>
-                <p>{t("首次出現")} {fmtWhen(p.firstSeen)}</p>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
       {offline.length > 0 && (

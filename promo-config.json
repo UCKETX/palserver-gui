@@ -36,6 +36,9 @@
       { "name": "LilaS", "role": "核心團隊維護者・資安", "url": "https://lilas-tw.com/" },
       { "name": "咖啡", "role": "核心團隊維護者", "url": "" }
     ],
+    "ambassadors": [
+      { "name": "捷克", "role": "推廣大使", "url": "https://www.youtube.com/@PXJ" }
+    ],
     "donate": "https://buymeacoffee.com/dalufish"
   }
 }

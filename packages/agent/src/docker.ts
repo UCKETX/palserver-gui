@@ -72,15 +72,19 @@ export async function createContainer(
     bindings["8212/tcp"] = [{ HostPort: "0" }];
   }
 
+  // 自訂鏡像優先(沿用已部署的其他帕魯鏡像);否則用內建 vanilla/modded 映像。
+  const image = rec.dockerImage?.trim() || IMAGES[rec.flavor];
   const imageExists = await docker
-    .getImage(IMAGES[rec.flavor])
+    .getImage(image)
     .inspect()
     .then(() => true)
     .catch(() => false);
   if (!imageExists) {
     const err = new Error(
-      `server image "${IMAGES[rec.flavor]}" not found — build it first: ` +
-        `docker build -t ${IMAGES[rec.flavor]} images/${rec.flavor}`,
+      rec.dockerImage?.trim()
+        ? `找不到自訂鏡像 "${image}" — 請先 docker pull 該鏡像,或確認名稱/標籤正確`
+        : `server image "${image}" not found — build it first: ` +
+            `docker build -t ${image} images/${rec.flavor}`,
     ) as Error & { statusCode: number };
     err.statusCode = 409;
     throw err;
@@ -88,7 +92,7 @@ export async function createContainer(
 
   const container = await docker.createContainer({
     name: containerName(rec),
-    Image: IMAGES[rec.flavor],
+    Image: image,
     Labels: { [INSTANCE_LABEL]: rec.id },
     ExposedPorts: ports,
     HostConfig: {
@@ -188,6 +192,42 @@ export async function streamLogs(
 }
 
 import type { ServerDriver } from "./driver.js";
+
+/** Run a command inside the instance's Docker container and return stdout. */
+export async function execInContainer(
+  rec: InstanceRecord,
+  command: string[],
+): Promise<string> {
+  const container = await findContainer(rec);
+  if (!container) throw Object.assign(new Error("找不到容器"), { statusCode: 409 });
+  const exec = await container.exec({
+    Cmd: command,
+    AttachStdout: true,
+    AttachStderr: true,
+  });
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const chunks: Buffer[] = [];
+  stdout.on("data", (c) => chunks.push(Buffer.from(c)));
+  await new Promise<void>((resolve, reject) => {
+    exec.start({ hijack: true, stdin: false }, (err, stream) => {
+      if (err) return reject(err);
+      if (!stream) return reject(new Error("exec stream is null"));
+      docker.modem.demuxStream(stream, stdout, stderr);
+      stream.on("end", resolve);
+      stream.on("error", reject);
+    });
+  });
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** List files in a directory inside the container. */
+export async function listInContainer(
+  rec: InstanceRecord,
+  dirPath: string,
+): Promise<string> {
+  return execInContainer(rec, ["ls", "-1", dirPath]).then((s) => s.trim());
+}
 
 export const dockerDriver: ServerDriver = {
   status: (rec) => getStatus(rec),

@@ -19,10 +19,14 @@ function badRequest(message: string, statusCode = 400): Error & { statusCode: nu
 
 /** The directory an instance's file browser is confined to. */
 export function fileRoot(rec: InstanceRecord, ctx: DriverContext): string {
-  if (rec.backend !== "native") {
-    throw badRequest("檔案管理目前僅支援原生模式的實例", 409);
+  if (rec.backend === "k8s") {
+    throw badRequest("k8s 走 Pod exec 路徑,不應到 fileRoot", 409);
   }
-  const root = serverRoot(rec, ctx);
+  // docker: bind-mount 把 Pal/Saved 映射到 ${instanceDir}/saved
+  // native: 完整伺服器目錄
+  const root = rec.backend === "docker"
+    ? path.join(ctx.instanceDir, "saved")
+    : serverRoot(rec, ctx);
   if (!fs.existsSync(root)) {
     throw badRequest("伺服器尚未安裝 — 先啟動一次讓 agent 下載伺服器", 409);
   }

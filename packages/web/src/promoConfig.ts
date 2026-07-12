@@ -25,9 +25,11 @@ export interface PromoConfig {
     radmin: { site: string; tutorial: string };
     tailscale: { site: string; tutorial: string };
   };
-  /** 感謝名單(header 右上角彈窗):開發人員 + 捐贈名單連結。 */
+  /** 感謝名單(header 右上角彈窗):開發人員 + 推廣大使 + 捐贈名單連結。 */
   credits: {
     developers: { name: string; role: string; url?: string }[];
+    /** 推廣大使(YouTuber / 社群推廣者);舊版遠端設定可能沒有這欄。 */
+    ambassadors?: { name: string; role: string; url?: string }[];
     donate: string;
   };
 }
@@ -78,6 +80,7 @@ const DEFAULT: PromoConfig = {
       { name: "LilaS", role: "核心團隊維護者・資安", url: "https://lilas-tw.com/" },
       { name: "咖啡", role: "核心團隊維護者" },
     ],
+    ambassadors: [{ name: "捷克", role: "推廣大使", url: "https://www.youtube.com/@PXJ" }],
     donate: "https://buymeacoffee.com/dalufish",
   },
 };

@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
-import { FiX, FiCopy, FiCheck, FiRefreshCw, FiSmartphone, FiKey, FiWifi, FiTrash2, FiStar } from "react-icons/fi";
+import { FiX, FiCopy, FiCheck, FiRefreshCw, FiSmartphone, FiKey, FiWifi, FiTrash2, FiStar, FiEye, FiEyeOff, FiSun } from "react-icons/fi";
 import type { LicenseStatus } from "@palserver/shared";
 import type { AgentClient, Connection, TelemetryStatus } from "./api";
 import { copyText } from "./clipboard";
 import { PrivacyModal } from "./PrivacyModal";
 import { UpdateCard } from "./UpdateCard";
 import { useI18n } from "./i18n";
+import { SHOW_SPONSOR_FEATURES } from "./flags";
+import { ThemePicker } from "./ThemePicker";
 import { Overlay, card, btn, btnGhost } from "./ui";
 
 /**
@@ -32,6 +34,7 @@ export function SettingsModal({
   const [lic, setLic] = useState<LicenseStatus | null>(null);
   const [licInput, setLicInput] = useState("");
   const [licBusy, setLicBusy] = useState(false);
+  const [showThemes, setShowThemes] = useState(false);
 
   useEffect(() => {
     client.pairingCode().then((r) => setCode(r.pairingCode)).catch(() => setCode(null));
@@ -128,7 +131,7 @@ export function SettingsModal({
 
           <div>
             <p className="mb-1 text-xs font-bold text-ink-muted">{t("配對碼")}</p>
-            <Copyable text={code ?? "…"} mono big />
+            <Copyable text={code ?? "…"} mono big secret />
           </div>
 
           {addrs && addrs.length > 0 ? (
@@ -137,7 +140,7 @@ export function SettingsModal({
             <div>
               <p className="mb-1 text-xs font-bold text-ink-muted">{t("一鍵登入連結(複製給其他裝置打開)")}</p>
               <div className="flex items-center gap-2">
-                <Copyable text={linkFor(addrs[0].ip)} mono />
+                <Copyable text={linkFor(addrs[0].ip)} mono secret />
                 {addrs[0].vpn && (
                   <span className="inline-flex shrink-0 items-center gap-1 rounded-full border-[1.5px] border-pal/40 bg-pal/10 px-2 py-0.5 text-xs font-bold text-pal">
                     <FiWifi className="size-3" /> {addrs[0].vpn}
@@ -180,11 +183,29 @@ export function SettingsModal({
             ))}
         </div>
 
+        {/* 外觀主題 */}
+        <div className="border-t border-line pt-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h3 className="text-sm font-extrabold">{t("外觀主題")}</h3>
+              <p className="mt-1 text-xs text-ink-muted">
+                {t("深 / 淺色與主題風格。白銀、翡翠為贊助者專屬。")}
+              </p>
+            </div>
+            <button
+              className={`${btnGhost} inline-flex shrink-0 items-center gap-1.5`}
+              onClick={() => setShowThemes(true)}
+            >
+              <FiSun className="size-4" /> {t("選擇主題")}
+            </button>
+          </div>
+        </div>
+
         {/* GUI 自我更新(對接 GitHub Releases) */}
         <UpdateCard client={client} />
 
-        {/* 贊助者識別碼(先行版) */}
-        {lic && (
+        {/* 贊助者識別碼(先行版)—— 未公布前用 SHOW_SPONSOR_FEATURES 隱藏 */}
+        {SHOW_SPONSOR_FEATURES && lic && (
           <div className="border-t border-line pt-3">
             <h3 className="inline-flex items-center gap-1.5 text-sm font-extrabold">
               <FiStar className="size-4 text-pal" /> {t("贊助者識別碼")}
@@ -269,6 +290,7 @@ export function SettingsModal({
           </div>
         )}
         {showPrivacy && <PrivacyModal onClose={() => setShowPrivacy(false)} />}
+        {showThemes && <ThemePicker entitled={!!lic?.valid} onClose={() => setShowThemes(false)} />}
 
         {/* 清除暫存資料 */}
         <div className="border-t border-line pt-3">
@@ -311,15 +333,28 @@ function licReason(t: (s: string) => string, reason: string | null): string {
   }
 }
 
-function Copyable({ text, mono, big }: { text: string; mono?: boolean; big?: boolean }) {
+function Copyable({
+  text,
+  mono,
+  big,
+  secret,
+}: {
+  text: string;
+  mono?: boolean;
+  big?: boolean;
+  /** 敏感值(如配對碼):預設模糊遮蔽,點眼睛才顯示;複製一律複製真值。 */
+  secret?: boolean;
+}) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
+  const [revealed, setRevealed] = useState(false);
   const copy = async () => {
     if (await copyText(text)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     }
   };
+  const hidden = secret && !revealed;
   return (
     <button
       onClick={copy}
@@ -328,12 +363,28 @@ function Copyable({ text, mono, big }: { text: string; mono?: boolean; big?: boo
         mono ? "font-mono" : ""
       } ${big ? "text-lg font-bold tracking-widest" : "text-sm"}`}
     >
-      <span className="truncate">{text}</span>
-      {copied ? (
-        <FiCheck className="size-4 shrink-0 text-grass" />
-      ) : (
-        <FiCopy className="size-4 shrink-0 text-ink-muted" />
-      )}
+      <span className={`truncate ${hidden ? "select-none blur-[6px]" : ""}`}>{text}</span>
+      <span className="flex shrink-0 items-center gap-2">
+        {secret && (
+          <span
+            role="button"
+            tabIndex={0}
+            title={hidden ? t("顯示") : t("隱藏")}
+            className="text-ink-muted transition hover:text-pal"
+            onClick={(e) => {
+              e.stopPropagation();
+              setRevealed((v) => !v);
+            }}
+          >
+            {hidden ? <FiEye className="size-4" /> : <FiEyeOff className="size-4" />}
+          </span>
+        )}
+        {copied ? (
+          <FiCheck className="size-4 text-grass" />
+        ) : (
+          <FiCopy className="size-4 text-ink-muted" />
+        )}
+      </span>
     </button>
   );
 }

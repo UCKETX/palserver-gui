@@ -160,7 +160,10 @@ export function cachedVersionSummary(
   rec: InstanceRecord,
   ctx: DriverContext,
 ): { gameVersion: string | null; updateAvailable: boolean | null } {
-  if (rec.backend !== "native") return { gameVersion: null, updateAvailable: null };
+  if (rec.backend !== "native") {
+    // docker/k8s: 版本來自 REST API（同步由 getVersionStatus 寫入快取），無 manifest 比對
+    return { gameVersion: readGameVersion(ctx), updateAvailable: null };
+  }
   const latest = latestMemo ?? readLatestCache();
   const installed = installedManifests(serverRoot(rec, ctx));
   return {
@@ -174,10 +177,12 @@ export async function getVersionStatus(
   ctx: DriverContext,
 ): Promise<VersionStatus> {
   if (rec.backend !== "native") {
+    // docker/k8s: 版本來自 REST API，無 manifest 比對（manifest 在容器/Pod 內）
+    const live = await liveGameVersion(rec);
     return {
-      supported: false,
-      reason: "版本檢查目前僅支援原生模式的實例",
-      gameVersion: null,
+      supported: true,
+      reason: live ? undefined : "伺服器未運行中，無法取得版本",
+      gameVersion: live,
       installedBuild: null,
       latestBuild: null,
       latestUpdatedAt: null,

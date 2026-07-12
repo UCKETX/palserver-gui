@@ -1,15 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { WorldSettingsSchema, type WorldSettings } from "@palserver/shared";
+import { WorldSettingsSchema, type WorldSettings, type EngineSettings } from "@palserver/shared";
 import { DATA_DIR } from "./env.js";
 
 export interface InstanceRecord {
   id: string;
   name: string;
-  backend: "native" | "docker";
+  backend: "native" | "docker" | "k8s";
   flavor: "vanilla" | "modded";
   gamePort: number;
+  /** Steam 查詢埠(UDP)。Palworld 每台預設都用 27015、且不在 PalWorldSettings.ini
+   * 裡,所以同一台開第二台一定撞(第二台綁不到就死在開機)。每台自動分配唯一值,
+   * 啟動時以 -queryport + Engine.ini GameServerQueryPort 兩管道套用。 */
+  queryPort?: number;
+  /** docker only: 自訂容器鏡像;undefined = 用內建 IMAGES[flavor]。 */
+  dockerImage?: string;
   /** native only: custom server root; undefined = agent-managed install
    * under instanceDir/server. */
   serverDir?: string;
@@ -18,10 +24,23 @@ export interface InstanceRecord {
    * auto-installed into. */
   serverDirManaged?: boolean;
   settings: WorldSettings;
+  /** 受管理的 Engine.ini 微調(效能/網路)。store 是這些值的權威來源:伺服器關機時
+   * 會把 Engine.ini 重寫回預設,所以不能只靠檔案。每次啟動前會把這裡的值合併回
+   * Engine.ini(見 native.ts writeIni),GUI 顯示也讀這裡而非讀檔。 */
+  engineSettings?: EngineSettings;
   createdAt: string;
+  /** k8s backend: namespace of the game server StatefulSet. */
+  k8sNamespace?: string;
+  /** k8s backend: name of the game server StatefulSet. */
+  k8sStatefulSet?: string;
+  /** k8s backend: ClusterIP Service name for REST API access. */
+  k8sServiceName?: string;
 }
 
 const STORE_FILE = path.join(DATA_DIR, "instances.json");
+
+/** Steam 查詢埠的分配起點(Palworld 預設值);往上遞增找沒被占用的。 */
+const QUERY_PORT_BASE = 27015;
 
 /**
  * Flat-file store for instance metadata. Container state lives in Docker
@@ -42,8 +61,31 @@ export class InstanceStore {
         rec.backend ??= "docker";
         this.instances.set(rec.id, rec);
       }
+      // 回填既有實例的 Steam 查詢埠:早於這個欄位建立的實例都沒有,補上唯一值,
+      // 否則多台一起開仍會全部搶 27015。下次啟動就會用到新分配的埠。
+      const used = new Set(
+        [...this.instances.values()].map((r) => r.queryPort).filter((p): p is number => !!p),
+      );
+      let next = QUERY_PORT_BASE;
+      for (const rec of this.instances.values()) {
+        if (rec.queryPort == null) {
+          while (used.has(next)) next++;
+          rec.queryPort = next;
+          used.add(next);
+        }
+      }
       this.flush();
     }
+  }
+
+  /** 分配一個沒被別台占用的 Steam 查詢埠(建立實例時用)。 */
+  nextQueryPort(): number {
+    const used = new Set(
+      this.list().map((r) => r.queryPort).filter((p): p is number => !!p),
+    );
+    let port = QUERY_PORT_BASE;
+    while (used.has(port)) port++;
+    return port;
   }
 
   list(): InstanceRecord[] {
@@ -73,7 +115,7 @@ export class InstanceStore {
 
   update(
     id: string,
-    patch: Partial<Pick<InstanceRecord, "settings" | "serverDir" | "serverDirManaged">>,
+    patch: Partial<Pick<InstanceRecord, "settings" | "serverDir" | "serverDirManaged" | "engineSettings">>,
   ): InstanceRecord {
     const rec = this.instances.get(id);
     if (!rec) throw new Error(`instance ${id} not found`);

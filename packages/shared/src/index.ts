@@ -5,6 +5,7 @@ export * from "./options.js";
 export * from "./commands.js";
 export * from "./engine-options.js";
 export * from "./paldefender-options.js";
+export * from "./pal-stats-options.js";
 export * from "./features.js";
 
 /** Value type an option can hold at runtime. */
@@ -43,6 +44,7 @@ export const InstanceStatusSchema = z.enum([
   "installing", // native: server files downloading; watch the logs for progress
   "running",
   "restarting",
+  "starting", // k8s: StatefulSet scaling up (Pod not ready yet)
   "exited",
   "missing",
 ]);
@@ -50,7 +52,7 @@ export type InstanceStatus = z.infer<typeof InstanceStatusSchema>;
 
 /** How the agent runs the server: native = spawn PalServer directly on the
  * host (default, no Docker needed); docker = run it in a container. */
-export const BackendSchema = z.enum(["native", "docker"]);
+export const BackendSchema = z.enum(["native", "docker", "k8s"]);
 export type Backend = z.infer<typeof BackendSchema>;
 
 export const CreateInstanceSchema = z.object({
@@ -59,6 +61,9 @@ export const CreateInstanceSchema = z.object({
   name: z.string().trim().min(1).max(40),
   backend: BackendSchema.default("native"),
   flavor: z.enum(["vanilla", "modded"]).default("vanilla"),
+  /** docker only: 自訂容器鏡像(如 ghcr.io/…/palworld:tag);省略則用內建的
+   * vanilla/modded 映像。方便沿用已在 Docker 部署的其他帕魯鏡像。 */
+  dockerImage: z.string().trim().max(200).optional(),
   /** UDP port the server listens on (host port for docker). */
   gamePort: z.number().int().min(1024).max(65535).default(8211),
   /** native only: custom server directory (absolute path). An existing
@@ -66,6 +71,9 @@ export const CreateInstanceSchema = z.object({
    * is adopted as-is; an empty or new directory becomes the install target.
    * Omit to install under the agent data folder. */
   serverDir: z.string().max(500).optional(),
+  k8sNamespace: z.string().optional(),
+  k8sStatefulSet: z.string().optional(),
+  k8sServiceName: z.string().optional(),
   settings: z.record(z.union([z.string(), z.number(), z.boolean()])).default({}),
 });
 export type CreateInstanceInput = z.infer<typeof CreateInstanceSchema>;
@@ -77,11 +85,11 @@ export type CreateInstanceInput = z.infer<typeof CreateInstanceSchema>;
  */
 export const CustomPalSchema = z
   .object({
-    /** 給予方式:pal=直接給帕魯(givepal_j,需玩家);egg=給帕魯蛋(giveegg_j,需蛋 ID)。 */
+    /** 給予方式:pal=直接給帕魯(givepal_j,RCON);egg=給帕魯蛋(PalDefender REST,可指定玩家)。 */
     mode: z.enum(["pal", "egg"]).default("pal"),
-    /** 目標玩家的 UserId(givepal_j 的第一個參數;egg 模式不需要)。 */
+    /** 目標玩家的 UserId。兩種模式都需要(egg 走 REST 的 /give/paleggs/{userId})。 */
     userId: z.string().trim().max(128).optional(),
-    /** 蛋 ID,例:PalEgg_Ice_01(giveegg_j 的第一個參數;pal 模式不需要)。 */
+    /** 蛋 ID,例:PalEgg_Ice_01(egg 模式必填)。 */
     eggId: z.string().trim().max(64).optional(),
     /** 帕魯種類 ID,例:Anubis(paldb.cc 可查)。 */
     palId: z.string().trim().min(1).max(64),
@@ -114,8 +122,8 @@ export const CustomPalSchema = z
     .optional(),
     partnerSkillLevel: z.number().int().min(1).max(5).optional(),
   })
-  .refine((d) => (d.mode === "egg" ? !!d.eggId : !!d.userId), {
-    message: "pal 模式需要 userId,egg 模式需要 eggId",
+  .refine((d) => !!d.userId && (d.mode !== "egg" || !!d.eggId), {
+    message: "需要目標玩家 userId;egg 模式另需 eggId",
   });
 export type CustomPalInput = z.infer<typeof CustomPalSchema>;
 
@@ -155,7 +163,8 @@ export interface InstanceDetail extends InstanceSummary {
 }
 
 export interface InstanceStats {
-  cpuPercent: number;
+  /** null when a backend has not collected two valid samples yet. */
+  cpuPercent: number | null;
   /** 主機/容器可用的邏輯核心數,讓前端判讀 cpuPercent 的滿載基準。 */
   cpuCores: number;
   memoryBytes: number;
@@ -214,6 +223,112 @@ export interface PlayerDetail {
   teamCount: number;
   palboxCount: number;
   items: PdItemSlot[];
+  /** 已解鎖科技(PalDefender 1.8+ /techs);取不到時 null。 */
+  techs: PlayerTechs | null;
+  /** 進度概要(PalDefender 1.8+ /progression);取不到時 null。 */
+  progression: PlayerProgression | null;
+}
+
+/** 玩家已解鎖的科技(PalDefender /techs)。 */
+export interface PlayerTechs {
+  unlocked: string[];
+  unlockedCount: number;
+  totalCount: number;
+}
+
+/** 玩家進度概要(PalDefender /progression 擷取重點)。 */
+export interface PlayerProgression {
+  level: number;
+  exp: number;
+  unusedStatusPoints: number;
+  technologyPoints: number;
+  ancientTechnologyPoints: number;
+  /** 擊敗頭目總數 */
+  bossesDefeated: number;
+  /** 捕捉過的帕魯種類數(tribeCaptureCount) */
+  palsCaptured: number;
+}
+
+/** PalDefender /players 的一筆玩家(線上 + 離線的統一名冊)。 */
+export interface PdPlayerSummary {
+  name: string;
+  userId: string;
+  playerUid: string;
+  guildName: string;
+  /** Status 為 Online 時 true。 */
+  online: boolean;
+  ip: string;
+  /** 最後存檔的世界座標(Unreal;WorldLocation)。前端走 savToMap 畫到地圖,
+   * 讓離線玩家也能在地圖上顯示最後位置。拿不到時為 undefined。 */
+  worldX?: number;
+  worldY?: number;
+}
+
+/** PalDefender /players 回傳:存檔內所有玩家(含離線)。 */
+export interface PdPlayerList {
+  available: boolean;
+  reason?: string;
+  onlineCount: number;
+  totalCount: number;
+  players: PdPlayerSummary[];
+}
+
+/** 一個公會據點。座標用 world_pos(Unreal 世界座標),前端一律走 savToMap 轉圖上座標,
+ * 跟玩家點用同一套轉換,保證對齊。 */
+export interface PdGuildBase {
+  id: string;
+  worldX: number;
+  worldY: number;
+}
+
+/** PalDefender /guilds 的一個公會。 */
+export interface PdGuild {
+  id: string;
+  name: string;
+  level: number;
+  adminName: string;
+  memberCount: number;
+  /** 成員的 PlayerUID 清單。 */
+  members: string[];
+  bases: PdGuildBase[];
+}
+
+/** PalDefender /guilds 回傳。`detailed` = 有贊助者授權、可看名稱/成員等細節;
+ * 沒授權時仍給據點位置(bases),但 name/level/members 會被清空。 */
+export interface PdGuildList {
+  available: boolean;
+  detailed: boolean;
+  reason?: string;
+  guilds: PdGuild[];
+}
+
+/** GET /guild/{id} 的一名成員。 */
+export interface PdGuildMember {
+  playerUid: string;
+  name: string;
+  status: string;
+}
+
+/** GET /guild/{id} 的一個據點(比 /guilds 多了等級與狀態)。 */
+export interface PdGuildCamp {
+  id: string;
+  level: number;
+  worldX: number;
+  worldY: number;
+  state: string;
+}
+
+/** GET /guild/{id} 的公會詳情(贊助者功能)。 */
+export interface PdGuildDetail {
+  available: boolean;
+  reason?: string;
+  id: string;
+  name: string;
+  level: number;
+  adminName: string;
+  memberCount: number;
+  members: PdGuildMember[];
+  camps: PdGuildCamp[];
 }
 
 /** Whether the agent can reach PalDefender's REST API for this instance. */
@@ -226,6 +341,8 @@ export interface PdRestStatus {
   enabled: boolean;
   /** the agent has a usable bearer token */
   hasToken: boolean;
+  /** REST API 監聽的埠(RESTConfig.json 的 Port,預設 17993) */
+  port: number;
   reason?: string;
 }
 
@@ -351,6 +468,8 @@ export interface KnownPlayer {
   sessions: number;
   playtimeSeconds: number;
   lastLevel: number;
+  /** 公會名(僅 PalDefender 名冊有;agent 自記錄的沒有)。 */
+  guildName?: string;
 }
 
 export interface PresenceEvent {
@@ -427,7 +546,7 @@ export interface SavesStatus {
 
 /* ── automatic restarts ── */
 
-export type RestartReason = "scheduled" | "memory" | "crash" | "manual";
+export type RestartReason = "scheduled" | "memory" | "crash" | "manual" | "startup-failure";
 
 export interface RestartPolicy {
   /** Restart on a timer: every N minutes, or at fixed times of day. */
@@ -512,6 +631,43 @@ export interface ConfigHealth {
   engine: FileHealth;
 }
 
+/* ── INI configuration snapshots ── */
+
+export type ConfigSnapshotFileName = "PalWorldSettings.ini" | "Engine.ini";
+
+/** The only files a configuration snapshot may contain. */
+export interface ConfigSnapshotFiles {
+  /** null means the server has not generated this file yet. */
+  "PalWorldSettings.ini": string | null;
+  "Engine.ini": string | null;
+}
+
+export interface ConfigSnapshotMetadata {
+  instanceId: string;
+  backend: Backend;
+}
+
+/** JSON payload stored below an instance's config-backups directory. */
+export interface ConfigSnapshot {
+  files: ConfigSnapshotFiles;
+  metadata: ConfigSnapshotMetadata;
+  reason: string;
+  createdAt: string;
+  /** UTF-8 byte size of the INI files that exist. */
+  size: number;
+}
+
+/** Snapshot payload plus its agent-generated, filesystem-safe identifier. */
+export interface ConfigSnapshotInfo extends ConfigSnapshot {
+  id: string;
+}
+
+export interface ConfigSnapshotList {
+  supported: boolean;
+  reason?: string;
+  snapshots: ConfigSnapshotInfo[];
+}
+
 /** How a friend can reach this server (LAN / VPN / public). */
 /**
  * 認出常見「遊戲用 VPN」的位址,回傳顯示名稱;不是已知 VPN 就回 null。這些 VPN 都在
@@ -526,7 +682,7 @@ export function detectVpn(ip: string): string | null {
   const [a, b] = p.map(Number);
   if (Number.isNaN(a) || Number.isNaN(b)) return null;
   if (a === 100 && b >= 64 && b <= 127) return "Tailscale";
-  if (a === 26) return "Radmin VPN";
+  if (a === 26) return "Radmin";
   if (a === 25) return "Hamachi";
   return null;
 }
@@ -552,6 +708,10 @@ export interface AgentInfo {
   authenticated: boolean;
   /** agent 所在主機平台(process.platform:darwin / win32 / linux)。前端用來提示 macOS 限制。 */
   platform: string;
+  /** 此平台可用的 backend 清單。前端依此動態顯示/隱藏 backend 選項。
+   * Windows 只支援 native（Docker Desktop UDP 不可靠）；
+   * Linux 支援 native/docker/k8s；macOS 只支援 native（無 Palworld server binary）。 */
+  availableBackends: Backend[];
 }
 
 /** GUI 自我更新的偏好設定(存在 agent 的 data dir)。 */

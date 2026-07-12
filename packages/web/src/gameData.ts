@@ -14,6 +14,10 @@ export interface GameEntity {
   ja?: string;
   /** icon filename within the category folder, if we have artwork for it */
   icon?: string;
+  /** passive-skill rank (詞條 catalog only): 1–5 good, negative = 惡性 */
+  rank?: number;
+  /** element for active skills (主動技 catalog only), e.g. "Fire" */
+  element?: string;
 }
 
 /** Preferred display name for the current UI language (fallback: English). */
@@ -27,8 +31,17 @@ export const displayName = (e: GameEntity) => {
 export interface GameData {
   pals: GameEntity[];
   items: GameEntity[];
+  /** 帕魯蛋子集(items 中 id 以 PalEgg 開頭者),給「給予帕魯蛋」選單用,
+   *  避免混入 Egg / FriedEggs 等食材。 */
+  eggs: GameEntity[];
+  /** 詞條(被動技)目錄,自訂帕魯用;id 為 PalDefender 內部 id */
+  passives: GameEntity[];
+  /** 主動技目錄,自訂帕魯用;id 為 EPalWazaID 去掉前綴 */
+  activeSkills: GameEntity[];
   palById: Map<string, GameEntity>;
   itemById: Map<string, GameEntity>;
+  passiveById: Map<string, GameEntity>;
+  skillById: Map<string, GameEntity>;
 }
 
 const REMOTE_BASE =
@@ -38,19 +51,30 @@ let cache: GameData | null = null;
 let inflight: Promise<GameData> | null = null;
 const listeners = new Set<(d: GameData) => void>();
 
-function build(pals: GameEntity[], items: GameEntity[]): GameData {
+type Catalogs = [GameEntity[], GameEntity[], GameEntity[], GameEntity[]];
+
+function build([pals, items, passives, activeSkills]: Catalogs): GameData {
   return {
     pals,
     items,
+    eggs: items.filter((i) => i.id.startsWith("PalEgg")),
+    passives,
+    activeSkills,
     palById: new Map(pals.map((p) => [p.id, p])),
     itemById: new Map(items.map((i) => [i.id, i])),
+    passiveById: new Map(passives.map((p) => [p.id, p])),
+    skillById: new Map(activeSkills.map((s) => [s.id, s])),
   };
 }
 
-async function fetchCatalogs(base: string, opts?: RequestInit): Promise<[GameEntity[], GameEntity[]]> {
+async function fetchCatalogs(base: string, opts?: RequestInit): Promise<Catalogs> {
+  const one = (file: string) =>
+    fetch(`${base}${file}`, opts).then((r) => r.json() as Promise<GameEntity[]>);
   return Promise.all([
-    fetch(`${base}pals.json`, opts).then((r) => r.json() as Promise<GameEntity[]>),
-    fetch(`${base}items.json`, opts).then((r) => r.json() as Promise<GameEntity[]>),
+    one("pals.json"),
+    one("items.json"),
+    one("passives.json"),
+    one("activeSkills.json"),
   ]);
 }
 
@@ -58,8 +82,7 @@ async function load(): Promise<GameData> {
   if (cache) return cache;
   if (!inflight) {
     inflight = (async () => {
-      const [pals, items] = await fetchCatalogs("/game-data/");
-      cache = build(pals, items);
+      cache = build(await fetchCatalogs("/game-data/"));
       void refreshFromRemote();
       return cache;
     })();
@@ -73,10 +96,11 @@ async function refreshFromRemote(): Promise<void> {
   if (refreshed) return;
   refreshed = true;
   try {
-    const [pals, items] = await fetchCatalogs(REMOTE_BASE, {
+    const fresh = await fetchCatalogs(REMOTE_BASE, {
       cache: "no-cache",
       signal: AbortSignal.timeout(15000),
     });
+    const [pals, items] = fresh;
     if (
       Array.isArray(pals) &&
       Array.isArray(items) &&
@@ -85,7 +109,7 @@ async function refreshFromRemote(): Promise<void> {
       (JSON.stringify(pals) !== JSON.stringify(cache?.pals) ||
         JSON.stringify(items) !== JSON.stringify(cache?.items))
     ) {
-      cache = build(pals, items);
+      cache = build(fresh);
       listeners.forEach((l) => l(cache!));
     }
   } catch {

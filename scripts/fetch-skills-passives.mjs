@@ -1,17 +1,25 @@
 #!/usr/bin/env node
 /**
- * 抓「詞條(被動)」與「主動技」目錄,給指令台的自訂帕魯選單用。
+ * 抓「詞條(被動)」與「主動技」目錄,給指令台的自訂帕魯選單用。含 zh(繁中)/ja(日文)名稱。
  *
  * 資料來源(維護者為貢獻者,已獲同意;見 public/game-data/CREDITS.md):
- *  - 詞條:paldeck.cc/passives —— Next.js 串流資料裡有 {Asset(內部 id), Name, Rank}。
+ *  - 詞條(英文/rank):paldeck.cc/passives —— Next.js 串流資料裡有 {Asset(內部 id), Name, Rank}。
  *    Asset 就是 PalDefender Passives 陣列吃的內部 id。詞條沒有專屬圖示(遊戲內只有
  *    等級箭頭),所以只存 rank,前端自己畫箭頭。
- *  - 主動技:名稱取自 paldb.cc/en/Active_Skills(EPalWazaID::<id> -> 名稱),
- *    元素取自 paldeck.cc/skills(waza_type -> element),以內部 id 對接。
+ *  - 詞條 zh:paldb.cc/{en,tw}/Passive_Skills 的「Pal Passive Skills」分頁卡片列表。
+ *    這個列表**沒有**每筆專屬 id(不像主動技有 EPalWazaID),只能靠「en/tw 兩個語言版本
+ *    卡片數量相同(114/114)且排列順序一致」用位置對應 —— 已用 rank 序列逐一核對過兩版
+ *    完全相同,且是唯一未對到的英文名(paldb 少收錄 1.0 新詞條「Whopper」)。
+ *    ja 版同一頁只收錄 102/114 筆(paldb 日文在地化進度落後,尚未跟上 1.0/屋久島新增
+ *    內容),數量對不上代表位置對應會錯位,沒有安全的辦法重新對齊(內部 stat key、
+ *    Weight 數值都會撞號),因此**詞條 ja 刻意留空**,不用猜的。
+ *  - 主動技:名稱/zh/ja 都取自 paldb.cc/{en,tw,ja}/Active_Skills,anchor 帶
+ *    `EPalWazaID::<id>`,三個語言版本用同一個內部 id 直接對接,不必靠位置猜測。
+ *    元素取自 paldeck.cc/skills(waza_type -> element)。
  *
  * 產出:
- *  packages/web/public/game-data/passives.json      [{id,name,rank}]
- *  packages/web/public/game-data/activeSkills.json  [{id,name,element}]
+ *  packages/web/public/game-data/passives.json      [{id,name,zh?,rank}]
+ *  packages/web/public/game-data/activeSkills.json  [{id,name,zh?,ja?,element?}]
  *
  * 用法:node scripts/fetch-skills-passives.mjs
  */
@@ -23,10 +31,22 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = path.join(ROOT, "packages/web/public/game-data");
 const UA = "palserver-gui-data-sync (maintainer-approved; github.com/io-software-ai/palserver-gui)";
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function get(url) {
   const res = await fetch(url, { headers: { "User-Agent": UA } });
   if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
   return res.text();
+}
+
+/** 依序抓一串 paldb.cc 網址,每次間隔一小段時間,別對同一個站狂發。 */
+async function getSequential(urls) {
+  const out = [];
+  for (const url of urls) {
+    if (out.length > 0) await sleep(400);
+    out.push(await get(url));
+  }
+  return out;
 }
 
 /** 把 Next.js 頁面裡的 self.__next_f.push([n,"..."]) 片段解碼拼回完整字串。 */
@@ -74,42 +94,104 @@ function parsePaldeckElements(blob) {
   return el;
 }
 
+/**
+ * 詞條 zh 對照:解析 paldb.cc/{lang}/Passive_Skills 的「Pal Passive Skills」卡片分頁,
+ * 按頁面出現順序回傳 [{rank, name}, ...]。這個列表沒有專屬 id,呼叫端要靠位置對應
+ * (只在兩個語言版本筆數相同時才安全,見檔頭註解)。
+ */
+function parsePaldbPassiveList(html) {
+  const headerRe = /<h5 class="card-header">[^<]*\/\d+/g;
+  const first = headerRe.exec(html);
+  if (!first) return [];
+  const second = headerRe.exec(html);
+  const section = html.slice(first.index, second ? second.index : html.length);
+  const out = [];
+  for (const m of section.matchAll(/class="passive-rank(-?\d+) ps-2 py-1">([^<]*)<\/div>/g)) {
+    out.push({ rank: Number(m[1]), name: m[2] });
+  }
+  return out;
+}
+
 async function main() {
   await mkdir(DATA_DIR, { recursive: true });
 
-  // ── 詞條 ──
+  // ── 詞條(英文名 + rank,來源:paldeck) ──
   const passivesHtml = await get("https://paldeck.cc/passives");
   const passivesRaw = parsePassives(nextFlight(passivesHtml));
   // 去重(同 id 取第一筆),按 rank 高到低排。
   const seen = new Set();
-  const passives = [];
+  const passivesBase = [];
   for (const p of passivesRaw) {
     if (seen.has(p.id)) continue;
     seen.add(p.id);
-    passives.push({ id: p.id, name: p.name, rank: p.rank });
+    passivesBase.push({ id: p.id, name: p.name, rank: p.rank });
   }
+
+  // ── 詞條 zh(paldb en/tw 位置對應,見檔頭註解;ja 刻意留空) ──
+  const [enPassiveHtml, twPassiveHtml] = await getSequential([
+    "https://paldb.cc/en/Passive_Skills",
+    "https://paldb.cc/tw/Passive_Skills",
+  ]);
+  const enPassiveList = parsePaldbPassiveList(enPassiveHtml);
+  const twPassiveList = parsePaldbPassiveList(twPassiveHtml);
+  const enIndexByName = new Map();
+  enPassiveList.forEach((e, i) => {
+    if (!enIndexByName.has(e.name)) enIndexByName.set(e.name, i);
+  });
+  if (enPassiveList.length !== twPassiveList.length) {
+    console.warn(
+      `[警告] paldb en/tw 詞條卡片數量不一致(en ${enPassiveList.length} / tw ${twPassiveList.length}),位置對應可能不準,請人工複查。`,
+    );
+  }
+
+  const passives = passivesBase.map((p) => {
+    const idx = enIndexByName.get(p.name);
+    const zh = idx !== undefined ? twPassiveList[idx]?.name : undefined;
+    return { id: p.id, name: p.name, ...(zh ? { zh } : {}), rank: p.rank };
+  });
   passives.sort((a, b) => b.rank - a.rank || a.name.localeCompare(b.name));
   await writeFile(path.join(DATA_DIR, "passives.json"), JSON.stringify(passives) + "\n");
 
-  // ── 主動技 ──
-  const [wazaHtml, skillsHtml] = await Promise.all([
-    get("https://paldb.cc/en/Active_Skills"),
-    get("https://paldeck.cc/skills"),
+  // ── 主動技(名稱/zh/ja 都靠 EPalWazaID 內部 id 直接對接,不必猜位置) ──
+  const [wazaHtmlEn, wazaHtmlZh, wazaHtmlJa, skillsHtml] = await getSequential([
+    "https://paldb.cc/en/Active_Skills",
+    "https://paldb.cc/tw/Active_Skills",
+    "https://paldb.cc/ja/Active_Skills",
+    "https://paldeck.cc/skills",
   ]);
-  const names = parsePaldbWaza(wazaHtml);
+  const namesEn = parsePaldbWaza(wazaHtmlEn);
+  const namesZh = parsePaldbWaza(wazaHtmlZh);
+  const namesJa = parsePaldbWaza(wazaHtmlJa);
   const elements = parsePaldeckElements(nextFlight(skillsHtml));
   const skills = [];
   const skillSeen = new Set();
-  for (const [id, name] of names) {
+  for (const [id, name] of namesEn) {
     if (skillSeen.has(id)) continue;
     skillSeen.add(id);
-    skills.push({ id, name, ...(elements.get(id) ? { element: elements.get(id) } : {}) });
+    const zh = namesZh.get(id);
+    const ja = namesJa.get(id);
+    const element = elements.get(id);
+    skills.push({
+      id,
+      name,
+      ...(zh ? { zh } : {}),
+      ...(ja ? { ja } : {}),
+      ...(element ? { element } : {}),
+    });
   }
   skills.sort((a, b) => a.name.localeCompare(b.name));
   await writeFile(path.join(DATA_DIR, "activeSkills.json"), JSON.stringify(skills) + "\n");
 
-  console.log(`passives.json: ${passives.length} 條`);
-  console.log(`activeSkills.json: ${skills.length} 條(有元素 ${skills.filter((s) => s.element).length})`);
+  // ── 統計 ──
+  const passiveZhCount = passives.filter((p) => p.zh).length;
+  const skillZhCount = skills.filter((s) => s.zh).length;
+  const skillJaCount = skills.filter((s) => s.ja).length;
+  console.log(
+    `passives.json: ${passives.length} 條(zh ${passiveZhCount}/${passives.length} = ${((passiveZhCount / passives.length) * 100).toFixed(1)}%;ja 未提供 —— paldb ja 頁詞條數量少於 en/tw,無法安全位置對應,見檔頭註解)`,
+  );
+  console.log(
+    `activeSkills.json: ${skills.length} 條(有元素 ${skills.filter((s) => s.element).length};zh ${skillZhCount}/${skills.length} = ${((skillZhCount / skills.length) * 100).toFixed(1)}%;ja ${skillJaCount}/${skills.length} = ${((skillJaCount / skills.length) * 100).toFixed(1)}%)`,
+  );
 }
 
 await main();

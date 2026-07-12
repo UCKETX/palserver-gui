@@ -13,6 +13,7 @@ import type { FileHealth } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { FileEditor } from "./FileManager";
 import { ConfigCorruptModal } from "./ConfigCorruptModal";
+import { LaunchOptionsCard } from "./LaunchOptionsCard";
 import { usePromoConfig } from "./promoConfig";
 import { t, useI18n } from "./i18n";
 import { btn, btnGhost, card, errorCls, inputCls } from "./ui";
@@ -188,6 +189,8 @@ export function EngineTab({
           </div>
         </div>
       ))}
+
+      <LaunchOptionsCard client={client} instanceId={instanceId} category="perf" />
 
       {dirtyKeys.length > 0 && (
         <div className="sticky bottom-4 flex flex-wrap items-center justify-between gap-3 rounded-(--radius-cute) border-2 border-sun/50 bg-card p-3 shadow-(--shadow-cute)">

@@ -18,6 +18,7 @@ import type {
   InstanceStats,
   InstanceSummary,
   KnownPlayer,
+  LaunchOptions,
   LicenseStatus,
   LiveStatus,
   LogSource,
@@ -507,6 +508,20 @@ export class AgentClient {
     return this.request(`/api/instances/${id}/engine-settings`, {
       method: "PUT",
       body: JSON.stringify(values),
+    });
+  }
+
+  launchOptions(id: string): Promise<{ launchOptions: LaunchOptions; queryPort: number | null }> {
+    return this.request(`/api/instances/${id}/launch-options`);
+  }
+
+  updateLaunchOptions(
+    id: string,
+    patch: { launchOptions?: LaunchOptions; queryPort?: number | null },
+  ): Promise<{ launchOptions: LaunchOptions; queryPort: number | null; applied: string }> {
+    return this.request(`/api/instances/${id}/launch-options`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
     });
   }
 

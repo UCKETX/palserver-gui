@@ -3,6 +3,7 @@ import { FiAlertTriangle, FiColumns, FiCopy, FiDownloadCloud, FiHardDrive, FiLay
 import type { InstanceDetail } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { CopyPath } from "./CopyPath";
+import { LaunchOptionsCard } from "./LaunchOptionsCard";
 import { TABS, LOCKED_TABS, OVERVIEW_CARDS, useHiddenTabs, useHiddenCards, type Tab } from "./tabPrefs";
 import { t, useI18n } from "./i18n";
 import { btn, btnDanger, btnGhost, card, errorCls, inputCls, labelCls } from "./ui";
@@ -41,6 +42,8 @@ export function InstanceSettingsTab({
           <ExportDuplicateCard client={client} detail={detail} stopped={stopped} />
         </>
       )}
+
+      <LaunchOptionsCard client={client} instanceId={detail.id} category="general" />
 
       <TabVisibilityCard />
 

@@ -1,78 +1,61 @@
-# palserver GUI — v2.0.1
+# palserver GUI — v2.0.2
 
-自 alpha.5 以來累積的**大型功能更新**:全新內建世界地圖、可切換的三套主題、一批贊助者先行版管理功能,以及大量管理增強與修復。
+介面英 / 日翻譯全面補齊 · 公告支援中英日 · 遊戲資料補漏
+Full English / Japanese UI translation · trilingual in-app announcements · game-data fixes
+UI の英日翻訳を全面対応 · お知らせを多言語化 · ゲームデータを補完
 
-## 🗺️ 全新:內建世界地圖
-
-- **完整世界地圖**(帕魯島 + 櫻島 + Feybreak,高解析度),不用再自備底圖
-- **線上玩家即時標記** + **離線玩家最後已知位置**;公會據點、**野外首領(Alpha 帕魯)圖層**、地標(快速旅行點 / 高塔 / 地城,名稱隨介面語言)
-- **全螢幕地圖**(`/map`),可從線上地圖一鍵開新分頁
-- **地圖描點選座標**:傳送、生成等需要座標的指令,直接點地圖放圖釘即可(不用手打座標)
-
-## 🎨 全新:主題系統
-
-- **三套主題**:帕魯原色、白銀(Vercel 風)、極光翡翠,每套都有**深色 / 淺色**,搭配質感切換彈窗(每套帶迷你即時預覽)
-- 白銀、極光翡翠為**贊助者專屬**主題
-
-## ⭐ 贊助者先行版功能(有效贊助者解鎖,到期後對所有人開放)
-
-- **帕魯數值編輯器**(透過 PalSchema):修改物種基礎數值 HP / 攻防 / 捕獲率等,**首領版可單獨調**;一鍵安裝 PalSchema、修改紀錄清單、一鍵還原全部
-- **傳送玩家**:把玩家傳送到另一位玩家,或**地圖描點的座標**
-- **批量給予道具**:物品圖示選單 + 數量,一次發多個
-- 自訂帕魯 / 帕魯蛋、公會據點詳情、地標名稱
-
-## 🛠️ 管理增強
-
-- **啟動參數面板**:Steam 查詢埠(queryport)**可自行設定**(並檢查與其他伺服器不重複);效能旗標(`useperfthreads` / `NoAsyncLoadingThread` / `UseMultithreadForDS` / 工作執行緒數)歸「引擎微調」、`publiclobby` / `logformat` 歸「設定」
-- **Docker 自訂容器鏡像**:沿用你已在 Docker 部署的其他帕魯鏡像
-- **docker / k8s 後端不再被平台鎖死**:Docker 依實際是否連得上判斷(macOS/Windows 有 Docker Desktop 也能用),k8s 一律可選
-- **PalDefender REST API 端口可改**;**MOTD 登入公告**做進設定 UI
-- 首頁伺服器卡片**拖曳排序**;分頁可**自訂顯示 / 隱藏**;總覽卡片可關閉
-- 帕魯 / 道具資料更新到 **Palworld 1.0(藥師島)**;主動技 / 詞條多語(繁中 / 日文)
-
-## 🔒 隱私
-
-- **全面遮蔽 SteamID**:名冊、日誌、玩家選擇器、指令輸出等處一律中間碼(可點擊顯示 / 複製)
-- 配對碼與一鍵登入連結預設**馬賽克遮蔽**
-
-## 🐛 修復
-
-- 同機多開的 Steam 查詢埠衝突(第二台起不來)
-- 地圖描點座標換算(改用 PalDefender 的地圖座標)
-- 主題深 / 淺切換不同步、淺色主題被系統深色污染
-- 下拉選單在彈窗內被裁切(改用 portal)
-- 線上地圖把玩家配錯公會造成的假突襲警示
-- 傳送指令:移除純 RCON 無效的「傳送到自己」、`tp` 補上來源玩家參數
-- 總覽埠提醒:同機多台的遊戲埠 / queryport / RCON / REST / PalDefender REST 埠都要不同
-
-完整 commit 紀錄:[`v2.0.0-alpha.5...v2.0.1`](https://github.com/io-software-ai/palserver-gui/compare/v2.0.0-alpha.5...v2.0.1)
-
----
-
-## 下載哪一個?
-
-大部分人只要看你電腦對應的那一列就好。解壓縮後**雙擊 `palserver-agent`**,
-瀏覽器會自動打開管理介面,不用先裝 Node、不用 Docker、不用打指令。
-
-| 你的電腦 | 下載這個 | 說明 |
-| --- | --- | --- |
-| **Windows** | **`palserver-agent-windows.zip`** | 最多人用,雙擊即可 |
-| **Linux** | `palserver-agent-linux.zip` | 同上 |
-| **macOS** | `palserver-agent-macos.zip` | Mac 不能實際開帕魯伺服器(限制),只能拿來管理別台遠端主機 |
-
-> 這三個都是「合一版」:免安裝執行檔 **+** 網頁介面,一個檔案搞定,適合自己開服。
+> 這些更新(翻譯 / 公告 / 遊戲資料)開啟 GUI 時會自動同步,現有使用者不必重新下載也能拿到。
+> These sync automatically when you open the GUI — existing users get them without re-downloading.
+> これらの更新は GUI 起動時に自動同期され、再ダウンロード不要で反映されます。
 
 <details>
-<summary>其他檔案是什麼?(進階,新手可以直接略過)</summary>
+<summary><b>🇹🇼 中文更新說明</b></summary>
 
-- **`palserver-web.zip`** — 只有「網頁介面」、不含 agent。要把管理網頁自己架到公開網站(例如 Zeabur)給大家線上用時才需要。
-- **`*.tar.gz`** — 內容和對應的 `.zip` 一樣,但這是給 agent「一鍵自我更新」讀的格式。**手動下載請用 `.zip`。**
-- **`SHA256SUMS.txt`** — 檔案校驗碼,自我更新時會自動比對防止下載損毀,一般玩家可以忽略。
+- **介面多語補齊** — 英文 / 日文介面翻譯全面補上(先前約 130 個字串仍顯示中文,現已全數翻譯)。
+- **在地化公告** — 登入時的內建公告改為依你的介面語言顯示(繁體中文 / 英文 / 日文)。
+- **遊戲資料補漏** — 補上先前遺漏的物品(木板、優質木板、生化電池、極低溫冷卻介質、腐蝕溶劑、牧場學Ⅰ),並為 50 隻較新的怕魯補上中文 / 日文名稱。
+
+</details>
+
+<details>
+<summary><b>🇬🇧 English</b></summary>
+
+- **Full UI localization** — every remaining Chinese-only string (~130) now has English / Japanese translations.
+- **Localized announcements** — the built-in announcement popup now shows in your interface language (Traditional Chinese / English / Japanese).
+- **Game-data fixes** — added missing items (Wooden Board, High Quality Wooden Board, Bio Battery, Cryogenic Coolant, Corrosive Solvent, Applied Ranching Handbook I) and filled in Chinese / Japanese names for 50 newer Pals.
+
+</details>
+
+<details>
+<summary><b>🇯🇵 日本語</b></summary>
+
+- **UI の多言語対応を完了** — 中国語のみだった約 130 の文字列に英語 / 日本語の翻訳を追加。
+- **お知らせの多言語化** — 起動時の内蔵お知らせが UI 言語(繁体字中国語 / 英語 / 日本語)で表示されるように。
+- **ゲームデータの補完** — 抜けていたアイテム(木の板、上質な木の板、バイオバッテリー、極低温冷却媒体、腐食性溶剤、応用牧場学Ⅰ)を追加し、新しいパル 50 体に中国語 / 日本語名を補完。
+
 </details>
 
 ---
 
-首次安裝會下載較大的帕魯伺服器檔案、需要一點時間,屬正常現象。
-安裝與連線教學見 [玩家版指南](https://github.com/io-software-ai/palserver-gui/blob/main/docs/INSTALL.zh-TW.md);有問題歡迎到 [Discord](https://discord.gg/sgMMdUZd3V) 找我們。
+## ⬇️ 下載 / Download / ダウンロード
 
-> 免費開源,僅限非商業使用(PolyForm Noncommercial)。
+解壓縮後雙擊 **`palserver-agent`** 即可(免裝 Node / Docker)· Unzip and double-click **`palserver-agent`**.
+
+| 你的電腦 / OS | 下載 / File |
+| --- | --- |
+| **Windows** | **`palserver-agent-windows.zip`** |
+| **Linux** | `palserver-agent-linux.zip` |
+| **macOS**(僅遠端管理 / manage remote only) | `palserver-agent-macos.zip` |
+
+安裝教學 / Setup → [中文指南](https://github.com/io-software-ai/palserver-gui/blob/main/docs/INSTALL.zh-TW.md) · 有問題來 [Discord](https://discord.gg/sgMMdUZd3V)
+
+<details>
+<summary>其他檔案 / Other files</summary>
+
+- **`palserver-web.zip`** — 只有網頁介面(自架公開站用)/ web UI only, for hosting the panel publicly.
+- **`*.tar.gz`** — agent 自我更新用的格式 / for the in-app self-updater. 手動下載請用 `.zip`.
+- **`SHA256SUMS.txt`** — 檔案校驗碼 / checksums (used by the self-updater).
+
+</details>
+
+> 免費開源,僅限非商業使用(PolyForm Noncommercial)· Free & open source, non-commercial use only.

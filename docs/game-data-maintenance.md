@@ -135,3 +135,8 @@ node scripts/fetch-skills-passives.mjs
 - 怕魯索引頁不完整（只 120），完整清單走 paldeck.cc/pals，別浪費時間在 paldb 分頁上。
 - 圖示偶爾 403，別讓整批中斷；缺圖的條目留著、拿掉 icon 欄即可。
 - 詞條沒有可靠的多語 id 對接來源，zh 只能位置對齊、ja 拿不到——這是來源限制，不是你的 bug。
+- **補既有怕魯/物品譯名最穩的抓法**：`https://paldb.cc/tw/<英文顯示名>` 與 `/ja/<英文顯示名>` 頁的
+  `<meta property="og:title">` 就是該語言顯示名（空白換底線，例 `/tw/Eidrolon`、`/ja/Azurobe_Cryst`）。
+  新怕魯常「先有 id/en、後有譯名」——paldeck 還沒收的，paldb 通常已有頁 + og:title，用它填 zh/ja
+  比索引頁 anchor 可靠（連變體頁都有）。物品內部 id 則到 `paldb.cc/en/<slug>` 抓第一個 `?s=Items%2F<id>`
+  （顯示名 slug ≠ 內部 id，例 木板 `Wooden_Board` 的 id 是 `Processed_Wood`）。

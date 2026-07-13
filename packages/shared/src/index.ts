@@ -14,23 +14,30 @@ export type WorldOptionValue = string | number | boolean;
 export type WorldSettings = Record<keyof typeof WORLD_OPTIONS, WorldOptionValue>;
 
 function zodFor(meta: OptionMeta): z.ZodTypeAny {
+  // .catch(default):單一欄位驗證失敗(超出範圍 / 型別錯 / 舊存檔的髒值)就退回預設,而不是
+  // 讓整包 parse 丟例外。這很關鍵 —— store 載入時任一實例的任一設定超範圍,不該讓整個 agent
+  // 開機崩潰(曾發生:ItemWeightRate 被存成 0、舊版 schema min 0.1 → agent 打不開)。
   switch (meta.type) {
     case "float": {
       // soft:只擋 NaN/Infinity 與非正值,上限放很寬(玩家想填極端值就讓他填,前端另做提醒);
       // 非 soft:照建議範圍嚴格限制。
       const b = z.number().finite();
-      return (meta.soft ? b.min(0).max(100000) : b.min(meta.min).max(meta.max)).default(meta.default);
+      return (meta.soft ? b.min(0).max(100000) : b.min(meta.min).max(meta.max))
+        .default(meta.default)
+        .catch(meta.default);
     }
     case "int": {
       const b = z.number().int().finite();
-      return (meta.soft ? b.min(0).max(1000000) : b.min(meta.min).max(meta.max)).default(meta.default);
+      return (meta.soft ? b.min(0).max(1000000) : b.min(meta.min).max(meta.max))
+        .default(meta.default)
+        .catch(meta.default);
     }
     case "bool":
-      return z.boolean().default(meta.default);
+      return z.boolean().default(meta.default).catch(meta.default);
     case "enum":
-      return z.enum(meta.choices as [string, ...string[]]).default(meta.default);
+      return z.enum(meta.choices as [string, ...string[]]).default(meta.default).catch(meta.default);
     case "string":
-      return z.string().max(meta.maxLength).default(meta.default);
+      return z.string().max(meta.maxLength).default(meta.default).catch(meta.default);
   }
 }
 

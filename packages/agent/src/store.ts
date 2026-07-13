@@ -57,8 +57,11 @@ export class InstanceStore {
       const raw: InstanceRecord[] = JSON.parse(fs.readFileSync(STORE_FILE, "utf8"));
       for (const rec of raw) {
         // Migrate settings saved by older schema versions: fill new options
-        // with defaults, drop keys we no longer know.
-        rec.settings = WorldSettingsSchema.parse(rec.settings);
+        // with defaults, drop keys we no longer know. 用 safeParse 兜底:即使整筆
+        // settings 壞掉(null / 非物件),也退回全預設而非讓整個 agent 開機崩潰。
+        // (欄位級的超範圍/髒值由 schema 的 .catch 各自退回預設,見 zodFor。)
+        const parsed = WorldSettingsSchema.safeParse(rec.settings ?? {});
+        rec.settings = parsed.success ? parsed.data : WorldSettingsSchema.parse({});
         // Records created before the native backend existed were docker-based.
         rec.backend ??= "docker";
         this.instances.set(rec.id, rec);

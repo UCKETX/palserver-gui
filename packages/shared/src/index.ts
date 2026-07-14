@@ -544,6 +544,24 @@ export interface PlayerSave {
   /** the .sav filename without extension — Palworld's internal PlayerUid */
   playerUid: string;
   sizeBytes: number;
+  /** 檔案最後修改時間(k8s 後端拿不到,可能缺)。 */
+  modifiedAt?: string;
+}
+
+/** 共玩主機玩家的固定 PlayerUid,「檔名形式」(32 hex 無連字號,同 PlayerSave.playerUid)。
+ *  見 docs/MIGRATION.md 情境 C 與內建主機角色修復。 */
+export const COOP_HOST_UID = "00000000000000000000000000000001";
+
+/** 主機角色修復(內建 palworld-host-save-fix)的結果。 */
+export interface HostFixResult {
+  /** 修復前的舊 PlayerUid(通常是共玩主機的 0000…0001)。 */
+  oldUid: string;
+  /** 角色資料移交過去的新 PlayerUid。 */
+  newUid: string;
+  /** Level.sav 裡被改寫的角色條目數(正常恰為 1)。 */
+  patchedLevelEntries: number;
+  /** 修復前自動備份的檔名。 */
+  backup: string;
 }
 
 export interface WorldSave {

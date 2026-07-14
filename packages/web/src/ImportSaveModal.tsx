@@ -24,7 +24,7 @@ const SOURCE_OPTIONS: { kind: SourceKind; label: string; hint: string }[] = [
   {
     kind: "coop",
     label: "本機共玩存檔",
-    hint: "本機(四人邀請碼)存檔在 %LOCALAPPDATA%\\Pal\\Saved\\SaveGames\\<SteamID>\\ 底下。注意:主機玩家的角色需要用社群工具 palworld-host-save-fix 轉換,否則進伺服器會被要求重建角色(帕魯與建築不受影響)。",
+    hint: "本機(四人邀請碼)存檔在 %LOCALAPPDATA%\\Pal\\Saved\\SaveGames\\<SteamID>\\ 底下。主機玩家的角色需要過戶,GUI 已內建工具:建立後讓主機玩家先加入一次,再到「存檔備份」分頁按「修復主機角色」即可。",
   },
 ];
 

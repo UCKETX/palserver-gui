@@ -62,6 +62,7 @@ import {
   writeFileInPodBrowser,
 } from "./k8s-file-browser.js";
 import * as saves from "./saves.js";
+import { applyHostFix } from "./host-save-fix.js";
 import { getEngineSettings, writeEngineSettings } from "./engine-ini.js";
 import { getConfigHealth, regenerateConfig } from "./config-health.js";
 import {
@@ -1415,6 +1416,25 @@ export function registerRoutes(
     const { worldGuid } = z.object({ worldGuid: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "世界 GUID 格式不合法") }).parse(req.body);
     reply.code(201);
     return saves.createBackup(rec, ctxOf(rec), worldGuid);
+  });
+
+  // ── 主機角色修復(內建 palworld-host-save-fix,共玩存檔搬上專用伺服器用)──
+  app.post("/api/instances/:id/saves/host-fix", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const { worldGuid, oldSav, newSav } = z
+      .object({
+        worldGuid: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "世界 GUID 格式不合法"),
+        oldSav: z.string().regex(/^[0-9A-Fa-f]{32}\.sav$/, "玩家存檔檔名格式不合法"),
+        newSav: z.string().regex(/^[0-9A-Fa-f]{32}\.sav$/, "玩家存檔檔名格式不合法"),
+      })
+      .parse(req.body);
+    if (await isRunning(rec)) {
+      throw Object.assign(new Error("請先停止伺服器再執行修復"), { statusCode: 409 });
+    }
+    // 改壞角色無法復原 — 修復前強制留一份世界備份。
+    const backup = await saves.createBackup(rec, ctxOf(rec), worldGuid);
+    const result = applyHostFix(saves.worldDirOf(rec, ctxOf(rec), worldGuid), oldSav, newSav);
+    return { ...result, backup: backup.name };
   });
 
   // ── 匯入外部存檔(其他專用伺服器 / 本機共玩 / 舊版 v1 GUI)──

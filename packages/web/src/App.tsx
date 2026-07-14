@@ -426,7 +426,7 @@ function CreateDialog({
             {importWorld.coopHost && (
               <p className="mt-1 inline-flex items-start gap-1.5 font-bold text-amber-600">
                 <FiAlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                {t("這是本機共玩存檔:建立後記得用 palworld-host-save-fix 轉換主機玩家的角色。")}
+                {t("這是本機共玩存檔:建立後讓主機玩家先加入一次,再到「存檔備份」分頁按「修復主機角色」完成過戶。")}
               </p>
             )}
           </div>

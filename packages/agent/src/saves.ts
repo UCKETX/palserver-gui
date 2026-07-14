@@ -240,11 +240,15 @@ function listWorlds(root: string): WorldSave[] {
         active: e.name === active,
         sizeBytes: dirSize(full),
         modifiedAt: new Date(fs.statSync(full).mtimeMs).toISOString(),
-        playerSaves: players.map((f) => ({
-          file: f,
-          playerUid: path.basename(f, path.extname(f)),
-          sizeBytes: fs.statSync(path.join(playersDir, f)).size,
-        })),
+        playerSaves: players.map((f) => {
+          const st = fs.statSync(path.join(playersDir, f));
+          return {
+            file: f,
+            playerUid: path.basename(f, path.extname(f)),
+            sizeBytes: st.size,
+            modifiedAt: new Date(st.mtimeMs).toISOString(),
+          };
+        }),
       } satisfies WorldSave;
     })
     .sort((a, b) => Number(b.active) - Number(a.active) || b.modifiedAt.localeCompare(a.modifiedAt));
@@ -739,6 +743,13 @@ export function inspectExternalSave(sourcePath: string): { worlds: ExternalWorld
     }
   }
   return { worlds };
+}
+
+/** 世界資料夾的絕對路徑(host-FS 後端限定;主機角色修復等檔案級操作用)。 */
+export function worldDirOf(rec: InstanceRecord, ctx: DriverContext, worldGuid: string): string {
+  assertWorldGuid(worldGuid);
+  if (rec.backend === "k8s") throw fail("此操作僅支援原生與 Docker 實例", 409);
+  return path.join(saveGamesFromSaved(savedRoot(rec, ctx)), worldGuid);
 }
 
 /** 把外部世界資料夾複製進目標實例並設為啟用世界。呼叫端負責確認伺服器已停止。

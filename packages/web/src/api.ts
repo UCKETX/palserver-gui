@@ -15,6 +15,7 @@ import type {
   EngineSettingsStatus,
   ExternalWorldCandidate,
   FileContent,
+  HostFixResult,
   ImportSaveResult,
   InstanceDetail,
   InstanceStats,
@@ -607,6 +608,13 @@ export class AgentClient {
     return this.request(`/api/instances/${id}/saves/restore`, {
       method: "POST",
       body: JSON.stringify({ backup }),
+    });
+  }
+
+  hostFix(id: string, worldGuid: string, oldSav: string, newSav: string): Promise<HostFixResult> {
+    return this.request(`/api/instances/${id}/saves/host-fix`, {
+      method: "POST",
+      body: JSON.stringify({ worldGuid, oldSav, newSav }),
     });
   }
 

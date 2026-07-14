@@ -8,12 +8,14 @@ import {
   FiPlay,
   FiRotateCcw,
   FiSave,
+  FiTool,
   FiTrash2,
   FiUser,
 } from "react-icons/fi";
-import type { BackupSchedule, InstanceSummary, SavesStatus, WorldSave } from "@palserver/shared";
+import { COOP_HOST_UID, type BackupSchedule, type InstanceSummary, type SavesStatus, type WorldSave } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { FileBrowserDialog } from "./FileManager";
+import { HostFixModal } from "./HostFixModal";
 import { t, useI18n } from "./i18n";
 import { btn, btnGhost, card, errorCls, inputCls } from "./ui";
 
@@ -39,6 +41,8 @@ export function SavesTab({
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [browsing, setBrowsing] = useState<string | null>(null);
+  // 主機角色修復(共玩存檔)對話框:記住針對哪個世界開啟。
+  const [hostFixWorld, setHostFixWorld] = useState<WorldSave | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -142,8 +146,20 @@ export function SavesTab({
             if (!confirm(t("刪除玩家存檔「{file}」後,該玩家再次加入時會是全新角色。\n\n確定嗎?", { file }))) return;
             void act(() => client.deletePlayerSave(instanceId, world.guid, file), t("已刪除玩家存檔"));
           }}
+          onHostFix={() => setHostFixWorld(world)}
         />
       ))}
+
+      {hostFixWorld && (
+        <HostFixModal
+          client={client}
+          instanceId={instanceId}
+          world={hostFixWorld}
+          running={running}
+          onClose={() => setHostFixWorld(null)}
+          onDone={() => void refresh()}
+        />
+      )}
 
       <div className={`${card} p-0`}>
         <h3 className="border-b-2 border-line px-5 py-3 text-sm font-extrabold text-ink-muted">
@@ -217,6 +233,7 @@ function WorldCard({
   onActivate,
   onBrowse,
   onDeletePlayer,
+  onHostFix,
 }: {
   world: WorldSave;
   busy: boolean;
@@ -225,8 +242,11 @@ function WorldCard({
   onActivate: () => void;
   onBrowse: () => void;
   onDeletePlayer: (file: string) => void;
+  onHostFix: () => void;
 }) {
   const [showPlayers, setShowPlayers] = useState(false);
+  // 偵測到共玩主機角色檔(0000…0001)→ 這個世界八成是共玩搬過來的,主動給修復入口。
+  const hasCoopHost = world.playerSaves.some((p) => p.playerUid === COOP_HOST_UID);
   return (
     <div className={card}>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -272,6 +292,15 @@ function WorldCard({
           {world.playerSaves.length > 0 && (
             <button className={btnGhost} onClick={() => setShowPlayers((v) => !v)}>
               <FiUser className="inline size-4" /> {t("玩家存檔")}
+            </button>
+          )}
+          {hasCoopHost && (
+            <button
+              className={`${btnGhost} inline-flex items-center gap-1.5 border-sun/60 text-sun hover:border-sun`}
+              onClick={onHostFix}
+              title={t("這個世界含共玩主機角色檔 — 一鍵過戶給專用伺服器的新角色")}
+            >
+              <FiTool className="size-4" /> {t("修復主機角色")}
             </button>
           )}
         </div>

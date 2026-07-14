@@ -46,7 +46,9 @@ export function SavesTab({
 
   const refresh = useCallback(async () => {
     try {
-      setSaves(await client.saves(instanceId));
+      const next = await client.saves(instanceId);
+      // 內容沒變就沿用舊物件:輪詢不觸發無謂重繪,也不干擾子元件的編輯狀態。
+      setSaves((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -55,6 +57,9 @@ export function SavesTab({
 
   useEffect(() => {
     void refresh();
+    // 定時輪詢:玩家加入產生新角色檔、備份排程跑完等,不用離開再回來才看得到。
+    const timer = setInterval(refresh, 10000);
+    return () => clearInterval(timer);
   }, [refresh]);
 
   const flash = (text: string) => {
@@ -350,7 +355,10 @@ function ScheduleCard({
   const [draft, setDraft] = useState(schedule);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => setDraft(schedule), [schedule]);
+  // 以內容為 key:輪詢帶回等值的新物件時不重置草稿(否則編輯中的表單會被洗掉)。
+  const scheduleKey = JSON.stringify(schedule);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setDraft(schedule), [scheduleKey]);
 
   const dirty =
     draft.enabled !== schedule.enabled ||

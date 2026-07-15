@@ -95,6 +95,9 @@ class Analyzer {
   /** uid → 名冊資料(跨公會取最近一次上線)。 */
   readonly playersSeen = new Map<string, { name: string; guildName: string; ticks: number }>();
   private charEntries = 0;
+  /** 存檔內的世界時鐘(GameTimeSaveData.RealDateTimeTicks)——上游清理工具
+   *  以它為「現在」計算離線天數;拿得到就優先用,mtime 只當 fallback。 */
+  private realDateTimeTicks: number | null = null;
 
   /** 值開始:把自己在容器裡的位置(key 或 array index)推進 path。 */
   private beginValue(): void {
@@ -220,6 +223,22 @@ class Analyzer {
   }
 
   private scalar(t: Token & { value?: unknown }): void {
+    if (t.name === "numberValue" && this.realDateTimeTicks === null) {
+      const p = this.path;
+      if (
+        p.length === 7 &&
+        p[0] === "properties" &&
+        p[1] === "worldSaveData" &&
+        p[2] === "value" &&
+        p[3] === "GameTimeSaveData" &&
+        p[4] === "value" &&
+        p[5] === "RealDateTimeTicks" &&
+        p[6] === "value"
+      ) {
+        this.realDateTimeTicks = Number(t.value);
+        return;
+      }
+    }
     const e = this.elem;
     if (!e) return;
     const rel = this.path.slice(e.depth);
@@ -273,7 +292,11 @@ class Analyzer {
 
   /** 串流讀完後,把名冊換算成離線天數並排序。 */
   finish(levelSavMtimeMs: number): LevelJsonAnalysis {
-    const nowTicks = levelSavMtimeMs * 10_000 + EPOCH_TICKS;
+    const mtimeTicks = levelSavMtimeMs * 10_000 + EPOCH_TICKS;
+    // 存檔內世界時鐘須通過合理性檢查(與 mtime 差距一年內)才採用,否則退回 mtime
+    const rt = this.realDateTimeTicks;
+    const nowTicks =
+      rt !== null && Math.abs(rt - mtimeTicks) <= 365 * TICKS_PER_DAY ? rt : mtimeTicks;
     const rows: SaveHealthPlayerRow[] = [];
     for (const [uid, p] of this.playersSeen) {
       let days: number | null = null;

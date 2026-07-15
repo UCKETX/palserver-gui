@@ -6,12 +6,12 @@
 - 已交付:palsav-tools.yml workflow、agent save-tools.ts/save-health.ts(+單元測試 3/3)、
   GET/POST /api/instances/:id/saves/health、web HealthCard(贊助鎖 save-slim)、三語 i18n。
 - **接下來必做(依序)**:
-  1. GitHub Actions 手動跑一次 `palsav-tools` workflow(預設 inputs 即可)→ 確認兩平台 build 綠、
-     release `palsav-tools-v1` 有 palsav-win-x64.exe / palsav-linux-x64 / SHA256SUMS.txt。
-     首跑風險點:Windows MSVC 編 palooz(workflow 已 patch GCC 旗標,理論上過)。
+  1. ~~跑 palsav-tools workflow~~ ✅ 已完成(run #2 success,release palsav-tools-v1 四資產齊;
+     首跑的 mv 檔名 bug 已修於 a6193d6)。
   2. Windows 測試機(Tailscale)真實世界存檔端到端:開始健檢 → 報告出現。
-     **優先確認「離線天數」數字合理**(last_online_real_time ticks 時鐘基準是未實測假設,
-     分析器對超出 0-3650 天的值回 null;若全是 null 或天數明顯錯,改 save-health.ts 的 EPOCH 換算)。
+     離線天數基準已照上游作法改用存檔內世界時鐘 GameTimeSaveData.RealDateTimeTicks
+     (mtime 只當 fallback,來源:.claude/notes/upstream-clean-logic.md 子題 6),
+     實機仍順眼確認天數合理即可。
   3. mac dev 順眼確認卡片顯示「不支援」訊息而非壞掉。
 - Stage 2(清理/寫回)未動,計畫在 .claude/notes/save-slim-plan.md。
 

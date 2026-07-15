@@ -93,6 +93,9 @@ function buildJson(): string {
     properties: {
       worldSaveData: {
         value: {
+          GameTimeSaveData: {
+            value: { RealDateTimeTicks: { value: `__RAW_${ticksDaysAgo(0)}__` } },
+          },
           CharacterSaveParameterMap: {
             value: [charEntry(true), charEntry(true), charEntry(false), charEntry(false), charEntry(false)],
           },
@@ -150,6 +153,18 @@ test("analyzeLevelJsonStream:計數與離線名單", async () => {
   assert.equal(r.inactivePlayers[0].uid, "p2");
   assert.equal(r.inactivePlayers[0].guildName, "ActiveGuild");
   assert.equal(r.inactivePlayers[0].lastOnlineDaysAgo, 45);
+});
+
+test("analyzeLevelJsonStream:離線天數以存檔內世界時鐘為準,mtime 只是 fallback", async () => {
+  // mtime 比世界時鐘晚 100 天:若誤用 mtime,Bob 會變 145 天;正確應仍是 45
+  const skewedMtime = MTIME_MS + 100 * 24 * 3600 * 1000;
+  const r = await analyzeLevelJsonStream(Readable.from([buildJson()]), skewedMtime);
+  assert.equal(r.inactivePlayers[0]?.lastOnlineDaysAgo, 45);
+
+  // 世界時鐘缺失(合成資料拿掉 GameTimeSaveData)→ 退回 mtime 基準
+  const noClock = buildJson().replace(/"GameTimeSaveData":\{[^}]*\}\}\},/, "");
+  const r2 = await analyzeLevelJsonStream(Readable.from([noClock]), MTIME_MS);
+  assert.equal(r2.inactivePlayers[0]?.lastOnlineDaysAgo, 45);
 });
 
 test("analyzeLevelJsonStream:荒謬 ticks 回 null 而非硬湊", async () => {

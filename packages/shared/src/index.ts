@@ -109,7 +109,8 @@ export const CustomPalSchema = z
     palId: z.string().trim().min(1).max(64),
   nickname: z.string().trim().max(40).optional(),
   gender: z.enum(["Male", "Female", "None"]).optional(),
-  level: z.number().int().min(1).max(100).optional(),
+  /* max 255:遊戲內可偵測的最高等級。 */
+  level: z.number().int().min(1).max(255).optional(),
   /** 主動技(最多 3 個技能 ID)。 */
   activeSkills: z.array(z.string().trim().min(1).max(64)).max(3).optional(),
   /** 詞條 / 被動技(技能 ID)。 */
@@ -123,8 +124,8 @@ export const CustomPalSchema = z
       defense: z.number().int().min(0).max(255).optional(),
     })
     .optional(),
-  /** 星星 / 濃縮等級,0–4。 */
-  condensedPals: z.number().int().min(0).max(4).optional(),
+  /** 濃縮消耗隻數(PalDefender CondensedPals 吃數量,不是星星等級)。 */
+  condensedPals: z.number().int().min(0).optional(),
   /** 靈魂強化,每項 0–20。 */
   souls: z
     .object({

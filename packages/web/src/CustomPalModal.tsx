@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FiStar, FiLock, FiX, FiExternalLink } from "react-icons/fi";
+import { FiStar, FiLock, FiX, FiExternalLink, FiRefreshCw } from "react-icons/fi";
 import { GiEggClutch } from "react-icons/gi";
 import { hasFeature, type CustomPalInput, type KnownPlayer } from "@palserver/shared";
 import type { AgentClient } from "./api";
@@ -97,6 +97,22 @@ export function CustomPalModal({
       .catch(() => setEntitled(false));
     client.knownPlayers(instanceId).then(setPlayers).catch(() => setPlayers([]));
   }, [client, instanceId]);
+
+  /* 隨機填入 helper */
+  const randomGender = () => setGender(Math.random() < 0.5 ? "Male" : "Female");
+  const randomPassives = () => {
+    if (!gameData?.passives?.length) return;
+    const n = Math.floor(Math.random() * 5); // 0 ~ 4
+    const shuffled = [...gameData.passives].sort(() => Math.random() - 0.5);
+    setPassives(shuffled.slice(0, n).map((p) => p.id));
+  };
+  const randomIvs = () =>
+    setIv({
+      health: String(Math.floor(Math.random() * 101)),
+      attackMelee: String(Math.floor(Math.random() * 101)),
+      attackShot: String(Math.floor(Math.random() * 101)),
+      defense: String(Math.floor(Math.random() * 101)),
+    });
 
   const locked = entitled === false;
   const canSubmit = useMemo(
@@ -247,7 +263,12 @@ export function CustomPalModal({
               <input className={inputCls} value={nickname} onChange={(e) => setNickname(e.target.value)} />
             </label>
             <label className="flex min-w-0 flex-col gap-1 text-xs font-bold text-ink-muted">
-              {t("性別")}
+              <span className="inline-flex items-center gap-1">
+                {t("性別")}
+                <button type="button" className="inline-flex items-center text-pal transition hover:text-pal/70" onClick={randomGender} title={t("隨機")}>
+                  <FiRefreshCw className="size-3" />
+                </button>
+              </span>
               <select className={inputCls} value={gender} onChange={(e) => setGender(e.target.value as typeof gender)}>
                 <option value="">{t("預設")}</option>
                 <option value="None">None</option>
@@ -255,11 +276,16 @@ export function CustomPalModal({
                 <option value="Female">{t("母")}</option>
               </select>
             </label>
-            {numField(t("等級"), level, setLevel, 100)}
+            {numField(t("等級"), level, setLevel, 255)}
           </div>
 
           <div className="flex min-w-0 flex-col gap-1 text-xs font-bold text-ink-muted">
-            {t("詞條 / 被動(最多 8)")}
+            <span className="inline-flex items-center gap-1">
+              {t("詞條 / 被動(最多 8)")}
+              <button type="button" className="inline-flex items-center text-pal transition hover:text-pal/70" onClick={randomPassives} title={t("隨機")}>
+                <FiRefreshCw className="size-3" />
+              </button>
+            </span>
             <MultiPicker
               catalog={gameData?.passives ?? []}
               value={passives}
@@ -282,7 +308,12 @@ export function CustomPalModal({
           </div>
 
           <div>
-            <p className="mb-1 text-xs font-bold text-ink-muted">{t("體質 / IV(0–255)")}</p>
+            <p className="mb-1 inline-flex items-center gap-1 text-xs font-bold text-ink-muted">
+              {t("體質 / IV(0–255)")}
+              <button type="button" className="inline-flex items-center text-pal transition hover:text-pal/70" onClick={randomIvs} title={t("隨機")}>
+                <FiRefreshCw className="size-3" />
+              </button>
+            </p>
             <div className="grid gap-2 sm:grid-cols-4">
               {numField(t("血量"), iv.health, (v) => setIv({ ...iv, health: v }), 255)}
               {numField(t("近攻"), iv.attackMelee, (v) => setIv({ ...iv, attackMelee: v }), 255)}
@@ -292,7 +323,8 @@ export function CustomPalModal({
           </div>
 
           <div className="grid gap-2 sm:grid-cols-4">
-            {numField(t("星星 / 濃縮(0–4)"), stars, setStars, 4)}
+            {/* 改為濃縮隻數,因 PalDefender CondensedPals 吃消耗數量而非星等;max 對應 schema 已放寬。 */}
+            {numField(t("濃縮隻數"), stars, setStars, 999)}
           </div>
 
           <div>

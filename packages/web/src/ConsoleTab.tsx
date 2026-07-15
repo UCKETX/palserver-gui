@@ -3,6 +3,8 @@ import { FiTerminal, FiPlay, FiSearch, FiTrash2, FiStar, FiMapPin } from "react-
 import { GiShield } from "react-icons/gi";
 import {
   COMMAND_CATEGORY_LABELS,
+  RELIC_TYPES,
+  RELIC_TYPE_LABELS,
   buildCommand,
   type CommandArg,
   type CommandSpec,
@@ -126,6 +128,22 @@ function ArgField({
           onChange={onChange}
           placeholder={t("搜尋帕魯名稱或輸入 ID…")}
         />
+      </label>
+    );
+  }
+
+  // 遺物類型參數:下拉選單,選項來自 RELIC_TYPES。
+  if (arg.relicType) {
+    return (
+      <label className={`${labelCls} min-w-0`}>
+        {t(arg.label)}
+        {!arg.required && <span className="font-normal">{t("(選填)")}</span>}
+        <select className={inputCls} value={value} onChange={(e) => onChange(e.target.value)}>
+          <option value="">{t("選擇雕像類型…")}</option>
+          {RELIC_TYPES.map((rt) => (
+            <option key={rt} value={rt}>{t(RELIC_TYPE_LABELS[rt])}</option>
+          ))}
+        </select>
       </label>
     );
   }

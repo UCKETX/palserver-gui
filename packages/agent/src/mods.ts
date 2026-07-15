@@ -20,7 +20,8 @@ import { serverRoot } from "./native.js";
 const GH_REPOS: Record<ModComponent, { repo: string; asset: RegExp; envUrl: string }> = {
   ue4ss: {
     repo: "UE4SS-RE/RE-UE4SS",
-    asset: /^UE4SS_v?[\d.]+\.zip$/i,
+    /* UE4SS experimental-latest 資產名含 git 資訊(例:UE4SS_v3.0.1-1011-gb50986bd.zip)。 */
+    asset: /^UE4SS_v?[\d.]+(-[\d]+-g[0-9a-f]+)?\.zip$/i,
     envUrl: "PALSERVER_UE4SS_URL",
   },
   paldefender: {

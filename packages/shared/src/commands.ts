@@ -35,7 +35,34 @@ export interface CommandArg {
   player?: boolean;
   /** 座標參數:提供「在地圖上描點」按鈕(填入世界座標 x y),也可自由輸入。 */
   coord?: boolean;
+  /** 遺物類型參數:渲染為下拉選單,選項來自 RELIC_TYPES。 */
+  relicType?: boolean;
 }
+
+/* 靈魂雕像(give_relic)支援的遺物類型清單。 */
+export const RELIC_TYPES = [
+  "CapturePower", "HungerReduction", "SwimSpeed", "FoodDecayReduction",
+  "JumpPower", "GliderSpeed", "ClimbSpeed", "StatusAilmentResist",
+  "StaminaReduction", "SphereHoming", "ExpBonus", "RainbowPassiveRate",
+  "MoveSpeed",
+] as const;
+
+/* 雕像名稱(對應 give_relic 的 RelicType 內部 ID)。前端用 t() 翻譯成其他語言。 */
+export const RELIC_TYPE_LABELS: Record<string, string> = {
+  CapturePower: "翠葉鼠",
+  HungerReduction: "棉悠悠",
+  SwimSpeed: "企丸丸",
+  FoodDecayReduction: "肚肚鱷",
+  JumpPower: "燎火鹿",
+  GliderSpeed: "達鼠泥",
+  ClimbSpeed: "新葉猿",
+  StatusAilmentResist: "瞅什魔",
+  StaminaReduction: "搗蛋貓",
+  SphereHoming: "秘斯媞雅",
+  ExpBonus: "佩克龍",
+  RainbowPassiveRate: "八雲犬",
+  MoveSpeed: "旺財",
+};
 
 export interface CommandSpec {
   name: string;
@@ -229,7 +256,11 @@ export const COMMANDS: CommandSpec[] = [
     source: "paldefender",
     category: "items",
     label: "給予靈魂雕像",
-    args: [userId(), { name: "amount", label: "數量", required: true, placeholder: "1" }],
+    args: [
+      userId(),
+      { name: "relicType", label: "雕像類型", required: true, relicType: true },
+      { name: "amount", label: "數量", required: false, placeholder: "1" },
+    ],
   },
   {
     name: "givepal",

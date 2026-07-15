@@ -11,7 +11,7 @@ const IMAGE_BOUNDS = L.latLngBounds([-2125.3, -1922.44], [1031.13, 1233.99]);
 
 /**
  * 地圖描點選座標:點地圖放圖釘,回傳 PalDefender tp / spawn 指令用的「地圖小座標」
- * 字串「X Y」(高度 Z 由伺服器自動找地面)。tp 吃的就是地圖座標(-1000~1000),
+ * 字串「X Y [Z]」(Z 由伺服器自動找地面)。tp 吃的就是地圖座標(-1000~1000),
  * 而 Leaflet CRS.Simple 的 latlng 本身即 [mapY(北), mapX(東)],所以 X=lng、Y=lat,
  * 不需再換算世界座標。與線上地圖共用同一套座標系。
  */
@@ -26,6 +26,7 @@ export function MapPickModal({
   const elRef = useRef<HTMLDivElement>(null);
   const markerRef = useRef<L.CircleMarker | null>(null);
   const [world, setWorld] = useState<{ x: number; y: number } | null>(null);
+  const [z, setZ] = useState("");
 
   useEffect(() => {
     const el = elRef.current;
@@ -93,17 +94,32 @@ export function MapPickModal({
           </button>
         </div>
         <p className="shrink-0 text-xs text-ink-muted">
-          {t("點地圖任一處放置圖釘,選好按「使用此座標」。傳送高度(Z)由伺服器自動找地面。")}
+          {t("點地圖任一處放置圖釘,選好按「使用此座標」。Z 留空則由伺服器自動找地面高度。")}
         </p>
         <div ref={elRef} className="min-h-0 flex-1 overflow-hidden rounded-cute border-2 border-line" />
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
-          <span className="font-mono text-sm text-ink-muted">
-            {world ? `X ${world.x}  Y ${world.y}` : t("尚未選點")}
-          </span>
+          <div className="flex flex-wrap items-center gap-3 font-mono text-sm text-ink-muted">
+            <span>{world ? `X ${world.x}` : t("X —")}</span>
+            <span>{world ? `Y ${world.y}` : t("Y —")}</span>
+            <label className="flex items-center gap-1">
+              <span>Z</span>
+              <input
+                className="w-20 rounded-md border border-line bg-card-soft px-2 py-0.5 font-mono text-sm outline-none transition focus:border-pal"
+                type="number"
+                value={z}
+                placeholder={t("自動")}
+                onChange={(e) => setZ(e.target.value)}
+              />
+            </label>
+          </div>
           <button
             className={`${btn} inline-flex items-center gap-1.5`}
             disabled={!world}
-            onClick={() => world && onPick(`${world.x} ${world.y}`)}
+            onClick={() => {
+              if (!world) return;
+              const zPart = z.trim() ? ` ${z.trim()}` : "";
+              onPick(`${world.x} ${world.y}${zPart}`);
+            }}
           >
             <FiMapPin className="size-4" /> {t("使用此座標")}
           </button>

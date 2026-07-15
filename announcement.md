@@ -337,3 +337,75 @@ lang: ja
 **自動検出とワンクリック修正**に対応します:協力プレイセーブのインポート時に自動処理し、既存ワールドにもセーブタブで警告と修復ボタンを表示します。
 
 ご不便をおかけしました。報告ありがとうございます!
+
+===
+
+---
+id: 2026-07-reinstall-option
+title: 新選項:重灌伺服器 — 更新一直失敗的救星
+lang: zh
+---
+
+有島主回報**伺服器版本更新會失敗**(檔案損毀到驗證也修不好)。v2.2.1 起,「總覽 → 遊戲版本」卡片新增**「重灌伺服器」**:
+
+## 它會做什麼
+
+1. 開始前**自動備份**啟用中的世界
+2. **刪除遊戲本體檔案**,從 Steam 全新下載
+3. **完整保留**你的世界存檔與設定檔(整個 `Pal/Saved`,包含 `PalWorldSettings.ini`、`Engine.ini`)
+
+## 注意
+
+- 已安裝的**模組**(UE4SS / PalDefender / pak)會一併被清除,重灌後請重新安裝
+- 需要先停止伺服器;下載量與初次安裝相同(數 GB)
+- 使用自訂既有安裝目錄的實例不提供此功能(避免誤刪你目錄裡的其他檔案)
+
+一般更新失敗先試「立即更新」重跑一次(內建檔案驗證);還是失敗再用重灌。
+
+===
+
+---
+id: 2026-07-reinstall-option
+title: New option: Reinstall Server — for when updates keep failing
+lang: en
+---
+
+Some server owners reported **game updates failing** (files corrupted beyond what validation can repair). Since v2.2.1, the "Overview → Game Version" card has a new **"Reinstall Server"** option:
+
+## What it does
+
+1. **Automatically backs up** the active world before starting
+2. **Deletes the game files** and downloads them fresh from Steam
+3. **Fully keeps** your world saves and config files (the entire `Pal/Saved`, including `PalWorldSettings.ini` and `Engine.ini`)
+
+## Notes
+
+- Installed **mods** (UE4SS / PalDefender / pak) are removed too — reinstall them afterwards
+- The server must be stopped first; the download is the same size as a fresh install (several GB)
+- Not available for instances using a custom pre-existing install directory (to avoid deleting your own files)
+
+If an update fails, try "Update Now" once more first (it includes file validation) — reach for reinstall only if it keeps failing.
+
+===
+
+---
+id: 2026-07-reinstall-option
+title: 新オプション:サーバー再インストール — 更新が失敗し続けるときに
+lang: ja
+---
+
+**サーバー更新が失敗する**(検証でも修復できないファイル破損)という報告をいただきました。v2.2.1 から「概要 → ゲームバージョン」カードに**「サーバー再インストール」**を追加しました:
+
+## 動作内容
+
+1. 開始前にアクティブワールドを**自動バックアップ**
+2. **ゲーム本体ファイルを削除**し、Steam から新規ダウンロード
+3. ワールドセーブと設定ファイルは**完全保持**(`Pal/Saved` 全体、`PalWorldSettings.ini`・`Engine.ini` 含む)
+
+## 注意
+
+- 導入済みの **MOD**(UE4SS / PalDefender / pak)も削除されます。再インストール後に入れ直してください
+- 事前にサーバーの停止が必要;ダウンロード量は新規インストールと同じ(数 GB)です
+- 既存インストールを指定したインスタンスでは利用できません(お客様自身のファイルの誤削除を防ぐため)
+
+更新に失敗したら、まず「今すぐ更新」をもう一度(ファイル検証込み)。それでも失敗する場合に再インストールをお使いください。

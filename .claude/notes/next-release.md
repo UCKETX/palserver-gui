@@ -1,10 +1,11 @@
 # 下一版 release 草稿(尚未發布)
 
-v2.1.1 已發布(2026-07-15:贊助碼驗證改走 stats.iosoftware.ai 修大陸/香港線路、
-礦物地圖圖層、公會詳情頭像+成員定位、玩家上限 99、路徑遮蔽、#20/#21 社群修正)。
-以下累積之後的新功能;發版時:bump 版本 → 用這清單寫四語 RELEASE_NOTES → tag → push。
+v2.2.1 已發布(2026-07-15:存檔深度整合大版本 —— 玩家/公會完整檔案(離線可查)、
+存檔健檢、重灌伺服器、共玩存檔自動修復、世界設定 ini 同步、首頁進階顯示、
+人類 NPC/研究目錄。完整清單見該版 RELEASE_NOTES 或 git log v2.1.1..v2.2.1)。
+發版流程:bump 四個 package.json → 四語 RELEASE_NOTES → chore(release) commit → tag → push --tags。
 
-## Features(自 v2.1.1 起)
+## Features(自 v2.2.1 起)
 - (尚無)
 
 ## 待確認 / 需實機驗證(v2.1.1 遺留)

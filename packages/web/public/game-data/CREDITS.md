@@ -51,3 +51,12 @@ alongside English names when the source provides them.
 
 All Palworld artwork is © Pocketpair, Inc. These icons are bundled only to
 label in-game entities within this management tool.
+
+## World Tree base map
+
+`packages/web/public/worldtree-map.webp` is stitched from paldb.cc's World
+Tree map tiles (`node scripts/fetch-worldtree-map.mjs`, maintainer-approved
+scraping, same arrangement as the game-data name sync). Calibration bounds
+come from paldb.cc's `treemap_data_en.js` (`landScapeRealPositionMin/Max`);
+the coordinate transform lives in `packages/shared/src/index.ts`
+(`savToWorldTreeMap`). Map artwork is © Pocketpair, Inc.

@@ -4,7 +4,9 @@ import { GiCrownedSkull, GiMinerals } from "react-icons/gi";
 import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
+  isWorldTreeCoord,
   savToMap,
+  savToWorldTreeMap,
   type LiveStatus,
   type RestPlayer,
   type PdGuild,
@@ -42,6 +44,13 @@ const MAP_IMAGE = "/palworld-full-map.jpg";
  * Verified: Mt Obsidian, the snow island and Sakurajima all land in-region.
  */
 const IMAGE_BOUNDS = L.latLngBounds([-2125.3, -1922.44], [1031.13, 1233.99]);
+
+/** 世界樹(1.0 終局區域)獨立底圖:scripts/fetch-worldtree-map.mjs 拼自 paldb.cc tile,
+ * 四角 = shared WORLD_TREE_BOUNDS(savToWorldTreeMap 把世界座標線性映到 ±1000 正方形)。 */
+const TREE_MAP_IMAGE = "/worldtree-map.webp";
+const TREE_IMAGE_BOUNDS = L.latLngBounds([-1000, -1000], [1000, 1000]);
+
+export type MapWorld = "main" | "tree";
 
 const escapeHtml = (s: string) =>
   s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c);
@@ -169,11 +178,15 @@ export function MapTab({
   const [guildHint, setGuildHint] = useState(false);
   // 公會詳情點成員 → 地圖跳到該位置。n 是 nonce:同一點連點兩次也要重新觸發。
   const [focus, setFocus] = useState<{ x: number; y: number; n: number } | null>(null);
+  // 主世界 / 世界樹(1.0)雙底圖:座標系互相獨立,標記依 isWorldTreeCoord 分流
+  const [world, setWorld] = useState<MapWorld>("main");
 
-  // 外部(玩家詳情的據點按鈕)指定聚焦:同步進內部 focus,並確保地圖已展開
+  // 外部(玩家詳情的據點按鈕)指定聚焦:同步進內部 focus,並確保地圖已展開。
+  // 聚焦座標一律是主世界地圖座標,先切回主世界。
   useEffect(() => {
     if (!externalFocus) return;
     setOpen(true);
+    setWorld("main");
     setFocus(externalFocus);
   }, [externalFocus]);
 
@@ -242,6 +255,21 @@ export function MapTab({
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex overflow-hidden rounded-full border-2 border-line">
+            {(["main", "tree"] as const).map((w) => (
+              <button
+                key={w}
+                className={
+                  world === w
+                    ? "bg-pal px-3 py-1.5 text-[13px] font-extrabold text-white"
+                    : "bg-card-soft px-3 py-1.5 text-[13px] font-extrabold text-ink-muted transition hover:text-pal"
+                }
+                onClick={() => setWorld(w)}
+              >
+                {w === "main" ? t("主世界") : t("世界樹")}
+              </button>
+            ))}
+          </div>
           <button
             className={`${btnGhost} inline-flex items-center gap-1.5 ${showPlayers ? "border-pal text-pal" : "opacity-60"}`}
             onClick={() => setShowPlayers((v) => !v)}
@@ -256,13 +284,15 @@ export function MapTab({
               <FiMoon className="size-4" /> {t("離線玩家")}
             </button>
           )}
-          <button
-            className={`${btnGhost} inline-flex items-center gap-1.5 ${showBases ? "border-pal text-pal" : "opacity-60"}`}
-            onClick={() => setShowBases((v) => !v)}
-          >
-            <FiHome className="size-4" /> {t("公會據點")}
-          </button>
-          {landmarks.length > 0 &&
+          {world === "main" && (
+            <button
+              className={`${btnGhost} inline-flex items-center gap-1.5 ${showBases ? "border-pal text-pal" : "opacity-60"}`}
+              onClick={() => setShowBases((v) => !v)}
+            >
+              <FiHome className="size-4" /> {t("公會據點")}
+            </button>
+          )}
+          {world === "main" && landmarks.length > 0 &&
             (guildsUnlocked ? (
               <button
                 className={`${btnGhost} inline-flex items-center gap-1.5 ${showLandmarks ? "border-pal text-pal" : "opacity-60"}`}
@@ -281,7 +311,7 @@ export function MapTab({
                 <FiStar className="size-3.5 text-pal" />
               </button>
             ))}
-          {bosses.length > 0 &&
+          {world === "main" && bosses.length > 0 &&
             (guildsUnlocked ? (
               <button
                 className={`${btnGhost} inline-flex items-center gap-1.5 ${showBosses ? "border-pal text-pal" : "opacity-60"}`}
@@ -300,7 +330,7 @@ export function MapTab({
                 <FiStar className="size-3.5 text-pal" />
               </button>
             ))}
-          {ores && ores.spots.length > 0 &&
+          {world === "main" && ores && ores.spots.length > 0 &&
             (guildsUnlocked ? (
               <button
                 className={`${btnGhost} inline-flex items-center gap-1.5 ${showOres ? "border-pal text-pal" : "opacity-60"}`}
@@ -350,6 +380,7 @@ export function MapTab({
       )}
       <div className="min-h-0 flex-1 overflow-hidden rounded-xl">
         <PlayerMap
+          world={world}
           players={live.players}
           guilds={guilds}
           pdPlayers={pdPlayers}
@@ -710,6 +741,7 @@ function Info({ label, value }: { label: string; value: string }) {
 /** Leaflet CRS.Simple map + avatar markers for players and base markers for
  * guilds (both from savToMap, so they share the players' coordinate frame). */
 function PlayerMap({
+  world,
   players,
   guilds,
   pdPlayers,
@@ -728,6 +760,7 @@ function PlayerMap({
   onGuildClick,
   onPlayerClick,
 }: {
+  world: MapWorld;
   players: RestPlayer[];
   guilds: PdGuild[];
   /** PalDefender /players roster — matches live players to their guild, and
@@ -752,6 +785,8 @@ function PlayerMap({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
+  /** 目前底圖邊界(applySize 與 world 切換共用) */
+  const boundsRef = useRef<L.LatLngBounds>(IMAGE_BOUNDS);
   const markersRef = useRef<L.LayerGroup | null>(null);
   // 礦物層獨立一組:~3.9k 個 canvas 圓點,只在資料/開關變化時重畫,
   // 不跟著 5 秒一次的即時資料重繪循環走。
@@ -773,8 +808,7 @@ function PlayerMap({
     });
     map.setView(IMAGE_BOUNDS.getCenter(), -2); // provisional view; applySize refits properly
     el.style.background = "transparent"; // let the card bg show past the image instead of Leaflet's grey
-    L.imageOverlay(MAP_IMAGE, IMAGE_BOUNDS).addTo(map);
-    map.setMaxBounds(IMAGE_BOUNDS.pad(0.3));
+    // 底圖與邊界由 world effect 掛(主世界/世界樹切換共用同一條路徑)
     // canvas 圓點畫在 overlay pane,天然壓在 divIcon 類 marker(markerPane)之下。
     oresRendererRef.current = L.canvas({ padding: 0.3 });
     oresGroupRef.current = L.layerGroup().addTo(map);
@@ -789,9 +823,9 @@ function PlayerMap({
     const applySize = () => {
       map.invalidateSize();
       if (map.getSize().y === 0) return;
-      map.setMinZoom(map.getBoundsZoom(IMAGE_BOUNDS) - 1);
+      map.setMinZoom(map.getBoundsZoom(boundsRef.current) - 1);
       if (!fitted) {
-        map.fitBounds(IMAGE_BOUNDS);
+        map.fitBounds(boundsRef.current);
         fitted = true;
       }
     };
@@ -809,6 +843,24 @@ function PlayerMap({
     };
   }, []);
 
+  // 底圖切換(主世界 / 世界樹):換 overlay 與邊界,重新 fit。
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const bounds = world === "tree" ? TREE_IMAGE_BOUNDS : IMAGE_BOUNDS;
+    boundsRef.current = bounds;
+    const overlay = L.imageOverlay(world === "tree" ? TREE_MAP_IMAGE : MAP_IMAGE, bounds).addTo(map);
+    overlay.bringToBack(); // 壓在礦物/標記層之下
+    map.setMaxBounds(bounds.pad(0.3));
+    if (map.getSize().y > 0) {
+      map.setMinZoom(map.getBoundsZoom(bounds) - 1);
+      map.fitBounds(bounds);
+    }
+    return () => {
+      map.removeLayer(overlay);
+    };
+  }, [world]);
+
   // 公會詳情跳轉:飛到成員位置並拉近(已經更近就維持現有縮放)。
   useEffect(() => {
     const map = mapRef.current;
@@ -822,7 +874,7 @@ function PlayerMap({
     const renderer = oresRendererRef.current;
     if (!group || !renderer) return;
     group.clearLayers();
-    if (!showOres || !ores) return;
+    if (!showOres || !ores || world !== "main") return;
     for (const s of ores.spots) {
       const ty = ores.types[s.t];
       if (!ty) continue;
@@ -841,13 +893,20 @@ function PlayerMap({
         })
         .addTo(group);
     }
-  }, [ores, showOres, lang]);
+  }, [ores, showOres, lang, world]);
 
   useEffect(() => {
     const group = markersRef.current;
     if (!group) return;
     group.clearLayers();
     const SIZE = 40;
+
+    // 座標分流:實體在哪個世界(isWorldTreeCoord)必須等於目前檢視的世界,
+    // 否則回 null 不畫 —— 世界樹玩家用主世界公式會畫到圖外,反之亦然。
+    const project = (sx: number, sy: number): { x: number; y: number } | null => {
+      if (isWorldTreeCoord(sx) !== (world === "tree")) return null;
+      return world === "tree" ? savToWorldTreeMap(sx, sy) : savToMap(sx, sy);
+    };
 
     // Match each live player to their guild. The game REST player ids
     // (playerId/userId) don't line up with PalDefender's guild-member PlayerUIDs,
@@ -871,7 +930,12 @@ function PlayerMap({
     // All bases in map coords, for the raid-proximity check. (Independent of the
     // base-marker toggle — a player near an enemy base is flagged regardless.)
     const allBases = guilds.flatMap((g) =>
-      g.bases.map((b) => ({ ...savToMap(b.worldX, b.worldY), guildId: g.id, guildName: g.name })),
+      g.bases
+        .map((b) => {
+          const pos = project(b.worldX, b.worldY);
+          return pos ? { ...pos, guildId: g.id, guildName: g.name } : null;
+        })
+        .filter((b): b is { x: number; y: number; guildId: string; guildName: string } => b !== null),
     );
     /** Name of a *different* guild whose base this point sits near, else null. */
     const enemyBaseNear = (px: number, py: number, ownGuildId?: string): string | null => {
@@ -884,7 +948,7 @@ function PlayerMap({
 
     // Static landmarks (fast travel / towers / dungeons) as the bottom layer,
     // each with its own game compass icon.
-    if (showLandmarks) {
+    if (showLandmarks && world === "main") {
       for (const lm of landmarks) {
         const style = LANDMARK_STYLE[lm.type];
         if (!style) continue;
@@ -909,7 +973,7 @@ function PlayerMap({
     // Field bosses (Alpha Pals): a distinct red-framed Pal portrait with a
     // crown badge + level — deliberately unlike the round guild-ringed player
     // avatars (no ping) and separate from the landmark layer.
-    if (showBosses) {
+    if (showBosses && world === "main") {
       const BS = 36;
       for (const b of bosses) {
         const iconUrl = b.icon ? palIconUrl(b.icon) : null;
@@ -945,7 +1009,9 @@ function PlayerMap({
       for (const g of guilds) {
         const color = guildColor(g.id);
         for (const b of g.bases) {
-          const { x, y } = savToMap(b.worldX, b.worldY);
+          const pos = project(b.worldX, b.worldY);
+          if (!pos) continue;
+          const { x, y } = pos;
           const icon = L.divIcon({
             className: "pmap-base-wrap",
             iconSize: [32, 32],
@@ -979,7 +1045,9 @@ function PlayerMap({
       for (const pp of pdPlayers) {
         if (pp.online || pp.worldX == null || pp.worldY == null) continue;
         if (onlineIds.has(pp.userId) || onlineIds.has(pp.playerUid)) continue;
-        const { x, y } = savToMap(pp.worldX, pp.worldY);
+        const pos = project(pp.worldX, pp.worldY);
+        if (!pos) continue;
+        const { x, y } = pos;
         const iconUrl = avatarIconUrl(pp.userId, gameData);
         const guild = pp.guildName ? guildByName.get(pp.guildName) : undefined;
         const ring = guild ? guildColor(guild.id) : "#8a94a3";
@@ -1006,7 +1074,9 @@ function PlayerMap({
 
     if (showPlayers)
       for (const p of players) {
-        const { x, y } = savToMap(p.location_x, p.location_y);
+        const pos = project(p.location_x, p.location_y);
+        if (!pos) continue;
+        const { x, y } = pos;
         const iconUrl = avatarIconUrl(p.userId, gameData);
         const guild = guildOf(p);
         // Only flag a raid when we actually know the player's guild — otherwise
@@ -1042,7 +1112,7 @@ function PlayerMap({
         marker.on("click", () => onPlayerClickRef.current?.(p.userId, p.name));
         group.addLayer(marker);
       }
-  }, [players, guilds, pdPlayers, landmarks, bosses, lang, showPlayers, showOffline, showBases, showLandmarks, showBosses, gameData]);
+  }, [players, guilds, pdPlayers, landmarks, bosses, lang, showPlayers, showOffline, showBases, showLandmarks, showBosses, gameData, world]);
 
   return <div ref={containerRef} className="h-full w-full rounded-xl bg-card-soft" />;
 }

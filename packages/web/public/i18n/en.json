@@ -1354,5 +1354,7 @@
   "每天固定多個時間": "Multiple fixed times daily",
   "每天的重啟時間": "Restart time of day",
   "新增時刻": "Add time",
-  "移除此時刻": "Remove this time"
+  "移除此時刻": "Remove this time",
+  "主世界": "Main world",
+  "世界樹": "World Tree"
 }

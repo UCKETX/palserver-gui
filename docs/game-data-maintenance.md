@@ -18,6 +18,7 @@
 | 新地區 / 地圖重繪 | 地圖底圖 + `landmarks.json` + `bosses.json` + `ores.json`（見最後一節） |
 | 新野外頭目（Alpha Pal） | `bosses.json`（見最後一節） |
 | 新礦物 / 礦點變動 | `ores.json`：跑 `node scripts/fetch-map-ores.mjs`；新礦種要先在腳本的 `TYPES` 補「map_data type → items.json id」對照 |
+| 世界樹底圖更新 | `packages/web/public/worldtree-map.webp`：跑 `node scripts/fetch-worldtree-map.mjs`(需 website/node_modules 的 sharp)。座標邊界若變(paldb treemap_data 的 landScapeRealPositionMin/Max),同步改 `packages/shared/src/index.ts` 的 `WORLD_TREE_BOUNDS` 並跑 `worldtree.test.ts` |
 
 ## 資料檔清單與 schema
 

@@ -507,6 +507,30 @@ export function savToMap(savX: number, savY: number): { x: number; y: number } {
   };
 }
 
+/** 世界樹(1.0 終局區域)是獨立座標區,不在主世界底圖上。
+ *  邊界來源:paldb.cc treemap_data_en.js 的 landScapeRealPositionMin/Max
+ *  (研究依據 .claude/notes/worldtree-map-research.md);主世界 X 上限 349400,
+ *  兩區僅在 X∈[347351.5,349400] 極窄角落重疊(0.14%,實際是海/空白)。 */
+export const WORLD_TREE_BOUNDS = {
+  min: { x: 347351.5, y: -818197 },
+  max: { x: 689148.5, y: -476400 },
+} as const;
+
+/** 這個世界座標是否落在世界樹(用 X 軸判別,比 Y 乾淨)。 */
+export function isWorldTreeCoord(savX: number): boolean {
+  return savX > 350000;
+}
+
+/** 世界座標 → 世界樹地圖座標:±1000 正方形,底圖 worldtree-map.webp 的四角
+ *  即 WORLD_TREE_BOUNDS(與主世界同款線性縮放+XY 對調;X/Y span 相等,正方形)。 */
+export function savToWorldTreeMap(savX: number, savY: number): { x: number; y: number } {
+  const span = WORLD_TREE_BOUNDS.max.x - WORLD_TREE_BOUNDS.min.x;
+  return {
+    x: ((savY - WORLD_TREE_BOUNDS.min.y) / span) * 2000 - 1000,
+    y: ((savX - WORLD_TREE_BOUNDS.min.x) / span) * 2000 - 1000,
+  };
+}
+
 /** A player the agent has seen at least once on this instance — the roster
  * that survives logouts, so offline targets (e.g. /unban) stay selectable. */
 export interface KnownPlayer {

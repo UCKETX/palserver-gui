@@ -753,6 +753,35 @@ async function spawnServer(rec: InstanceRecord, ctx: DriverContext): Promise<voi
   writePidRecord(ctx, { pid: child.pid, startedAt: id?.startedAt ?? null });
 }
 
+/** 每實例的 CPU 取樣歷史(instanceDir → 上一筆);行程結束就清掉。 */
+interface CpuSample {
+  /** 全行程樹的累計 CPU 時間(毫秒;pidusage 的 ctime 加總) */
+  ctimeMs: number;
+  /** 取樣時刻(Date.now() 毫秒) */
+  at: number;
+  stats: InstanceStats;
+}
+const cpuSamples = new Map<string, CpuSample>();
+
+/** CPU%(單核基準,行程樹加總可破百;export 供單元測試):
+ *  有上一筆且 ctime 沒回退(行程沒換)→ Δctime/Δt 毫秒精度差分;
+ *  首次取樣或行程重啟(ctime 回退)/歷史過舊 → 退回「自開機以來平均」。 */
+export function computeCpuPercent(
+  prev: { ctimeMs: number; at: number } | null,
+  ctimeMs: number,
+  at: number,
+  mainElapsedMs: number | null,
+): number {
+  const usable =
+    prev !== null && ctimeMs >= prev.ctimeMs && at > prev.at && at - prev.at < 10 * 60_000;
+  const ratio = usable
+    ? (ctimeMs - prev.ctimeMs) / (at - prev.at)
+    : mainElapsedMs && mainElapsedMs > 0
+      ? ctimeMs / mainElapsedMs
+      : 0;
+  return Math.round(ratio * 1000) / 10; // 百分比,一位小數
+}
+
 export const nativeDriver: ServerDriver = {
   status: getNativeStatus,
 
@@ -886,7 +915,15 @@ export const nativeDriver: ServerDriver = {
   async stats(_rec, ctx) {
     // 用 checkAlive 而非裸 pid:PID 被別台重用時別回報鄰居的 CPU/記憶體。
     const live = await checkAlive(ctx);
-    if (!live.alive || live.pid === null) return null;
+    if (!live.alive || live.pid === null) {
+      cpuSamples.delete(ctx.instanceDir);
+      return null;
+    }
+    // 多個消費者(首頁進階顯示/效能分析頁/supervisor 記憶體檢查)各自輪詢:
+    // 1.5 秒內重複查詢直接回上一筆,取樣間隔不會被並行輪詢切碎。
+    const prev = cpuSamples.get(ctx.instanceDir);
+    if (prev && Date.now() - prev.at < 1500) return prev.stats;
+
     const pid = live.pid;
     // PalServer.exe is a thin launcher; the actual server is a child process
     // (PalServer-Win64-Shipping-Cmd.exe), so aggregate the whole tree.
@@ -896,17 +933,28 @@ export const nativeDriver: ServerDriver = {
       pids.map((p) => pidusage(p).catch(() => null)),
     );
     const alive = usages.filter((u) => u !== null);
-    if (alive.length === 0) return null;
+    if (alive.length === 0) {
+      cpuSamples.delete(ctx.instanceDir);
+      return null;
+    }
     // 主行程(pids[0])的 elapsed 就是伺服器運行時間;pidusage 以毫秒回報。
     const mainElapsed = usages[0]?.elapsed;
-    return {
-      cpuPercent: alive.reduce((sum, u) => sum + u.cpu, 0),
+    // CPU% 不用 pidusage 的 cpu 欄位:它在 Windows 以 os.uptime()(整秒)算間隔,
+    // 短輪詢誤差極大(實測 3 秒內 78%→36%→0%),且其 per-pid 歷史會被多個輪詢互踩。
+    // 改用 ctime(累計 CPU 毫秒,與取樣間隔無關)配 Date.now() 毫秒精度自算差分。
+    const ctimeMs = alive.reduce((sum, u) => sum + u.ctime, 0);
+    const at = Date.now();
+    const cpuPercent = computeCpuPercent(prev ?? null, ctimeMs, at, mainElapsed ?? null);
+    const stats = {
+      cpuPercent,
       cpuCores: os.cpus().length,
       memoryBytes: alive.reduce((sum, u) => sum + u.memory, 0),
       memoryLimitBytes: os.totalmem(),
       processCount: alive.length,
       uptimeSeconds: mainElapsed ? Math.round(mainElapsed / 1000) : undefined,
     } satisfies InstanceStats;
+    cpuSamples.set(ctx.instanceDir, { ctimeMs, at, stats });
+    return stats;
   },
 
   logSources(rec, ctx) {

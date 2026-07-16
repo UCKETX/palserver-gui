@@ -87,7 +87,7 @@ html:lang(ja) {
   --shadow-cute-hover: 0 10px 24px rgb(0 0 0 / 0.45);
 }
 
-/* ══ 主題系列(贊助者限定):白銀(Vercel 風)、翡翠棲地。各有深/淺兩版。 ══ */
+/* ══ 主題系列:白銀(Vercel 風)、翡翠棲地。各有深/淺兩版。 ══ */
 
 /* ── 白銀 · 深色:純黑底 + 銀白 + 多層銀光暈 ── */
 :root[data-theme="silver-dark"] {
@@ -225,7 +225,7 @@ html:lang(ja) {
   background-image: linear-gradient(120deg, rgb(36 227 154 / 0.12), rgb(34 211 238 / 0.06) 45%, transparent 82%);
 }
 
-/* ══ 更多主題系列(贊助者限定):午夜紫、櫻花粉、橘色貓貓。 ══ */
+/* ══ 更多主題系列:午夜紫、櫻花粉、橘色貓貓。 ══ */
 
 /* ── 午夜紫 · 淺色:柔薰衣草底 + 紫羅蘭主色 ── */
 :root[data-theme="lilac-light"] {

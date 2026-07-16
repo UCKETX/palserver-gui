@@ -1,10 +1,7 @@
 /**
- * 贊助者專屬功能目錄與授權判斷(agent 與 web 共用)。
+ * 進階功能目錄與可用性判斷(agent 與 web 共用)。
  *
- * 模式:功能就在公開程式碼裡,但需要「有效的贊助識別碼」才會解鎖 —— 永久贊助者
- * 專屬,沒有免費期限;不在目錄裡的功能一律免費。(2026-07 起取消原本的
- * 「到期後對所有人開放」機制。)
- * 因為是開源自架,識別碼檢查跑在使用者機器上,無法硬性防繞過,定位是支持者專屬體驗。
+ * 目錄保留穩定的功能 id,供前後端共用；目前所有功能均免費開放,不需要識別碼。
  */
 
 export interface EarlyAccessFeature {
@@ -24,9 +21,9 @@ export const EARLY_ACCESS_FEATURES: EarlyAccessFeature[] = [
   { id: "leaderboard", label: "伺服器排行榜(等級 / 財富 / 圖鑑 / 最強帕魯 + 掃描差異週報)" },
 ];
 
-/** 這個功能是否對所有人免費 —— 只有「不在目錄裡」的功能免費;目錄內為贊助者專屬,無期限。 */
-export function featureFreeNow(id: string): boolean {
-  return !EARLY_ACCESS_FEATURES.some((x) => x.id === id);
+/** 所有功能目前均對所有使用者免費。 */
+export function featureFreeNow(_id: string): boolean {
+  return true;
 }
 
 /** agent 回報給前端的授權狀態。 */
@@ -49,12 +46,8 @@ export interface LicenseStatus {
 }
 
 /**
- * 統一的功能可用性判斷:免費功能 OR 有有效贊助授權。
- *
- * 目前只有單一贊助層級,識別碼的 `features` 清單僅供顯示 —— 有效贊助者一律解鎖
- * 全部贊助者功能(這樣新增功能不必重發碼 / 改 worker)。若日後要做分層,再把
- * `lic.features.includes(id)` 的判斷加回來即可。
+ * 統一的功能可用性判斷。保留授權參數以維持既有 API 相容性。
  */
-export function hasFeature(id: string, lic: Pick<LicenseStatus, "valid" | "features">): boolean {
-  return featureFreeNow(id) || lic.valid;
+export function hasFeature(id: string, _lic: Pick<LicenseStatus, "valid" | "features">): boolean {
+  return featureFreeNow(id);
 }

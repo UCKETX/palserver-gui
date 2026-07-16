@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GiSheep, GiEggClutch } from "react-icons/gi";
-import { FiActivity, FiAlertTriangle, FiClock, FiCpu, FiDownload, FiHardDrive, FiHeart, FiHelpCircle, FiPlus, FiServer, FiSettings, FiStar, FiUsers, FiZap } from "react-icons/fi";
-import { hasFeature } from "@palserver/shared";
+import { FiActivity, FiAlertTriangle, FiClock, FiCpu, FiDownload, FiHardDrive, FiHeart, FiHelpCircle, FiPlus, FiServer, FiSettings, FiUsers, FiZap } from "react-icons/fi";
 import type { Backend, ExternalWorldCandidate, InstanceStats, InstanceSummary, LiveStatus } from "@palserver/shared";
 import {
   DndContext,
@@ -201,20 +200,11 @@ function Dashboard({ client, onOpen }: { client: AgentClient; onOpen: (id: strin
   const [order, setOrder] = useState<string[]>(loadInstanceOrder);
   const [advanced, setAdvanced] = useState(() => localStorage.getItem(ADVANCED_KEY) === "1");
   const [extras, setExtras] = useState<Record<string, CardExtra>>({});
-  // 進階顯示是贊助者先行功能(dashboard-stats),與其他早鳥功能同一套判斷。
-  const [entitled, setEntitled] = useState(false);
   const toggleAdvanced = () =>
     setAdvanced((v) => {
       localStorage.setItem(ADVANCED_KEY, v ? "0" : "1");
       return !v;
     });
-
-  useEffect(() => {
-    client
-      .license()
-      .then((l) => setEntitled(hasFeature("dashboard-stats", l)))
-      .catch(() => setEntitled(false));
-  }, [client]);
 
   const ordered = instances ? sortByOrder(instances, order) : [];
   // 拖曳需要移動 8px 才啟動,讓「單純點擊卡片」照樣開啟該伺服器;鍵盤也能排序(無障礙)。
@@ -253,7 +243,7 @@ function Dashboard({ client, onOpen }: { client: AgentClient; onOpen: (id: strin
     .sort()
     .join(",");
   useEffect(() => {
-    if (!advanced || !entitled || !runningKey) {
+    if (!advanced || !runningKey) {
       setExtras({});
       return;
     }
@@ -290,24 +280,13 @@ function Dashboard({ client, onOpen }: { client: AgentClient; onOpen: (id: strin
       <div className="mb-6 flex items-center justify-between">
         <h2 className="text-[17px] font-extrabold">{t("伺服器")}</h2>
         <div className="flex items-center gap-2">
-          {entitled ? (
-            <button
-              className={`${btnGhost} inline-flex items-center gap-1.5 ${advanced ? "border-pal text-pal" : "opacity-70"}`}
-              onClick={toggleAdvanced}
-              title={t("在首頁卡片直接顯示在線玩家數與資源用量")}
-            >
-              <FiActivity className="size-4" /> {t("進階顯示")}
-              <FiStar className="size-3.5 text-pal" />
-            </button>
-          ) : (
-            <button
-              className={`${btnGhost} inline-flex items-center gap-1.5 opacity-70`}
-              title={t("此功能為贊助者專屬功能,可在設定頁輸入贊助者識別碼解鎖。")}
-            >
-              <FiActivity className="size-4" /> {t("進階顯示")}
-              <FiStar className="size-3.5 text-pal" />
-            </button>
-          )}
+          <button
+            className={`${btnGhost} inline-flex items-center gap-1.5 ${advanced ? "border-pal text-pal" : "opacity-70"}`}
+            onClick={toggleAdvanced}
+            title={t("在首頁卡片直接顯示在線玩家數與資源用量")}
+          >
+            <FiActivity className="size-4" /> {t("進階顯示")}
+          </button>
           <button
             className={`${btn} inline-flex items-center gap-1.5`}
             onClick={() => setShowCreate(true)}
@@ -324,7 +303,7 @@ function Dashboard({ client, onOpen }: { client: AgentClient; onOpen: (id: strin
           </button>
         </div>
       </div>
-      {advanced && entitled && instances && instances.length > 0 && (
+      {advanced && instances && instances.length > 0 && (
         <DashboardOverview instances={instances} extras={extras} />
       )}
       {instances === null ? (
@@ -347,7 +326,7 @@ function Dashboard({ client, onOpen }: { client: AgentClient; onOpen: (id: strin
                   inst={inst}
                   onOpen={onOpen}
                   // 進階顯示時每張卡都要有資訊區(未運作的當佔位符),排版才不會高低不齊。
-                  extra={advanced && entitled ? (extras[inst.id] ?? null) : undefined}
+                  extra={advanced ? (extras[inst.id] ?? null) : undefined}
                 />
               ))}
             </div>
@@ -430,7 +409,7 @@ function DashboardOverview({
 }
 
 /** 單張可拖曳排序的伺服器卡片(@dnd-kit)。整張卡是拖曳把手,單純點擊仍會開啟。
- * extra:進階顯示(贊助者)開啟且運作中才有 —— undefined=不顯示,null=載入中。 */
+ * extra:進階顯示開啟且運作中才有 —— undefined=不顯示,null=載入中。 */
 function SortableServerCard({
   inst,
   onOpen,

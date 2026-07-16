@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FiChevronDown, FiStar, FiX } from "react-icons/fi";
+import { FiChevronDown, FiX } from "react-icons/fi";
 import type { InstanceStatus } from "@palserver/shared";
 import { STATUS_LABELS } from "./labels";
 import { t, useI18n } from "./i18n";
@@ -141,8 +141,7 @@ export function DismissibleWarning({
   );
 }
 
-/** 「詳細資訊」開關按鈕 —— 玩家/公會詳情彈窗右上角共用,星星標示贊助內容,
- *  開啟時高亮(樣式比照地圖圖層開關)。 */
+/** 「詳細資訊」開關按鈕 —— 玩家/公會詳情彈窗右上角共用。 */
 export function DetailsToggle({
   show,
   onToggle,
@@ -161,18 +160,7 @@ export function DetailsToggle({
       title={hint}
     >
       {t("詳細資訊")}
-      <FiStar className="size-3.5 text-pal" />
     </button>
-  );
-}
-
-/** 贊助鎖提示(詳細資訊開關內,未解鎖時顯示)。 */
-export function SponsorHint() {
-  useI18n();
-  return (
-    <div className="rounded-cute border-2 border-sun/40 bg-sun/10 px-3 py-2 text-xs font-bold text-sun">
-      {t("詳細資訊是贊助者功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}
-    </div>
   );
 }
 

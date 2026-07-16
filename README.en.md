@@ -102,14 +102,14 @@ If you hit a problem, check the **[FAQ](https://faq.toc.icu/)** first, or ask on
 - Auto-restart: scheduled (fixed interval or daily times), memory threshold, crash recovery (with an hourly cap to avoid infinite restart loops)
 - Broadcasts a countdown and saves the world before planned restarts; manual stops don't count as crashes
 
-**Sponsor-exclusive features** (unlocked for active sponsors)
+**Advanced features** (all free, no code required)
 - **Pal stat editor** (via PalSchema): tweak a species' base HP / attack / defense / capture rate etc., **with a separate override for the boss variant**; one-click PalSchema install, a change log, and one-click revert-all
 - **Teleport players**: teleport a player to another player, or to **coordinates picked on the map**
 - **Bulk-give items**: an item icon picker + quantity, grant several at once
 - Custom Pals / eggs, guild base details, landmark names
 
 **Other**
-- Four languages: 繁體中文 / 简体中文 / English / 日本語; **six themes** (Pal (default) / Silver / Aurora Jade / Midnight Lilac / Sakura Pink / Orange Cat) **×** light / dark — some themes are sponsor-exclusive
+- Four languages: 繁體中文 / 简体中文 / English / 日本語; **six free themes** (Pal (default) / Silver / Aurora Jade / Midnight Lilac / Sakura Pink / Orange Cat) **×** light / dark
 - **Drag-to-reorder** server cards on the home page; tabs can be **customized (show / hide)**; the overview card can be dismissed
 - Connectivity diagnostics: detects your public IP, whether you're behind NAT/CGNAT, plus VPN (Tailscale / Radmin) hosting guides
 - Optional GUI self-update: checks GitHub Releases, verifies SHA256, swaps binaries and restarts itself

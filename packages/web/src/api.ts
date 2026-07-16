@@ -345,7 +345,7 @@ export class AgentClient {
     });
   }
 
-  /** 自訂帕魯(贊助者先行版):PalDefender 範本 + givepal_j。 */
+  /** 自訂帕魯:PalDefender 範本 + givepal_j。 */
   giveCustomPal(id: string, input: CustomPalInput): Promise<{ output: string }> {
     return this.request(`/api/instances/${id}/pals/give`, {
       method: "POST",
@@ -353,7 +353,7 @@ export class AgentClient {
     });
   }
 
-  /** 批量給予道具(贊助者先行版)。非贊助者回 403。 */
+  /** 批量給予道具。 */
   giveItems(
     id: string,
     userId: string,
@@ -365,7 +365,7 @@ export class AgentClient {
     });
   }
 
-  /** 傳送玩家(贊助者先行版):target = 目標玩家 UserId 或座標「x y」。非贊助者回 403。 */
+  /** 傳送玩家:target = 目標玩家 UserId 或座標「x y」。 */
   teleport(id: string, source: string, target: string): Promise<{ output: string }> {
     return this.request(`/api/instances/${id}/teleport`, {
       method: "POST",
@@ -488,12 +488,12 @@ export class AgentClient {
     });
   }
 
-  /** PalSchema(帕魯物種數值編輯器,贊助者先行版 pal-stats)安裝狀態。 */
+  /** PalSchema(帕魯物種數值編輯器)安裝狀態。 */
   palSchema(id: string): Promise<PalSchemaStatus> {
     return this.request(`/api/instances/${id}/palschema`);
   }
 
-  /** 安裝需先停伺服器(執行中回 409);非贊助者回 403。 */
+  /** 安裝需先停伺服器(執行中回 409)。 */
   installPalSchema(id: string): Promise<{ installed: string; version: string; applied: string }> {
     return this.request(`/api/instances/${id}/palschema/install`, { method: "POST" });
   }
@@ -515,7 +515,7 @@ export class AgentClient {
     });
   }
 
-  /** 清空所有物種數值調整(改回原本設定)。非贊助者也可用。 */
+  /** 清空所有物種數值調整(改回原本設定)。 */
   clearPalStats(id: string): Promise<PalStatsStatus> {
     return this.request(`/api/instances/${id}/pal-stats`, { method: "DELETE" });
   }

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { FiHome, FiMapPin, FiPackage, FiRefreshCw, FiUsers, FiX, FiZap } from "react-icons/fi";
 import { GiBookshelf } from "react-icons/gi";
-import { hasFeature, savToMap, type SaveGuild } from "@palserver/shared";
+import { savToMap, type SaveGuild } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { useGameData, displayName, findCharacter, itemIconUrl, type GameData } from "./gameData";
 import { t, useI18n } from "./i18n";
-import { DetailsToggle, Overlay, SponsorHint, btnGhost, card, errorCls, useDetailsPref } from "./ui";
+import { DetailsToggle, Overlay, btnGhost, card, errorCls, useDetailsPref } from "./ui";
 
 /**
  * 公會詳情彈窗(存檔快照驅動)— 與 PlayerDetailModal 同款 UX,含「從存檔刷新」。
@@ -39,16 +39,8 @@ export function GuildDetailModal({
   const [canScan, setCanScan] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
-  // 「詳細資訊」開關:駐守帕魯/公會倉庫/研究(贊助內容);狀態記憶在 localStorage
+  // 「詳細資訊」開關:駐守帕魯/公會倉庫/研究;狀態記憶在 localStorage
   const [showDetails, toggleDetails] = useDetailsPref();
-  const [entitled, setEntitled] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    client
-      .license()
-      .then((l) => setEntitled(hasFeature("save-slim", l)))
-      .catch(() => setEntitled(false));
-  }, [client, instanceId]);
 
   useEffect(() => {
     client
@@ -97,7 +89,7 @@ export function GuildDetailModal({
 
   const adminNorm = (guild.adminUid ?? "").replace(/[^0-9a-f]/gi, "").toLowerCase();
   const admin = guild.members.find((m) => m.uid.replace(/[^0-9a-f]/gi, "").toLowerCase() === adminNorm);
-  const deep = showDetails && entitled === true;
+  const deep = showDetails;
 
   return (
     <Overlay onClose={onClose}>
@@ -176,8 +168,6 @@ export function GuildDetailModal({
             })}
           </div>
         </div>
-
-        {showDetails && entitled === false && <SponsorHint />}
 
         {/* 據點 + 駐守帕魯(據點座標是基礎資訊;駐守明細收在詳細開關) */}
         {guild.bases.length > 0 && (

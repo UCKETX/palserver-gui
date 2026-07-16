@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiTerminal, FiPlay, FiSearch, FiTrash2, FiStar, FiMapPin } from "react-icons/fi";
+import { FiTerminal, FiPlay, FiSearch, FiTrash2, FiMapPin } from "react-icons/fi";
 import { GiShield } from "react-icons/gi";
 import {
   COMMAND_CATEGORY_LABELS,
@@ -19,7 +19,7 @@ import { CustomPalModal } from "./CustomPalModal";
 import { GiveItemsModal } from "./GiveItemsModal";
 import { TeleportModal } from "./TeleportModal";
 import { MapPickModal } from "./MapPickModal";
-import { SHOW_SPONSOR_FEATURES } from "./flags";
+import { SHOW_ADVANCED_FEATURES } from "./flags";
 import { useGameData, itemIconUrl, palIconUrl, type GameData } from "./gameData";
 import { t, useI18n } from "./i18n";
 import { btn, btnGhost, card, errorCls, inputCls, labelCls } from "./ui";
@@ -340,9 +340,7 @@ export function ConsoleTab({
               placeholder={t("搜尋指令…")}
             />
           </div>
-          {/* 贊助者先行版:自訂帕魯(帕魯 / 帕魯蛋兩條)—— 樣式與下方指令一致,藍色標示贊助。
-              未公布前用 SHOW_SPONSOR_FEATURES 整組隱藏;點了跳彈窗,未解鎖時表單不可用。 */}
-          {SHOW_SPONSOR_FEATURES && catalog.paldefender && (
+          {SHOW_ADVANCED_FEATURES && catalog.paldefender && (
             <>
               <button
                 type="button"
@@ -350,7 +348,7 @@ export function ConsoleTab({
                 onClick={() => setCustomPalMode("pal")}
               >
                 <span className="inline-flex items-center gap-1 font-mono text-pal">
-                  givepal_j <FiStar className="size-3" />
+                  givepal_j
                 </span>
                 <span className="block text-xs text-ink-muted">{t("自訂帕魯(詞條 / 體質 / 星星)")}</span>
               </button>
@@ -360,7 +358,7 @@ export function ConsoleTab({
                 onClick={() => setCustomPalMode("egg")}
               >
                 <span className="inline-flex items-center gap-1 font-mono text-pal">
-                  giveegg_j <FiStar className="size-3" />
+                  giveegg_j
                 </span>
                 <span className="block text-xs text-ink-muted">{t("自訂帕魯蛋(詞條 / 體質 / 星星)")}</span>
               </button>
@@ -370,7 +368,7 @@ export function ConsoleTab({
                 onClick={() => setShowGiveItems(true)}
               >
                 <span className="inline-flex items-center gap-1 font-mono text-pal">
-                  giveitems <FiStar className="size-3" />
+                  giveitems
                 </span>
                 <span className="block text-xs text-ink-muted">{t("批量給予道具(選單 + 數量)")}</span>
               </button>
@@ -380,7 +378,7 @@ export function ConsoleTab({
                 onClick={() => setShowTeleport(true)}
               >
                 <span className="inline-flex items-center gap-1 font-mono text-pal">
-                  tp <FiStar className="size-3" />
+                  tp
                 </span>
                 <span className="block text-xs text-ink-muted">{t("傳送玩家(玩家 / 地圖座標)")}</span>
               </button>

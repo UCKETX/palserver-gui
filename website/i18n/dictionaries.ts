@@ -127,7 +127,7 @@ const zh: Dictionary = {
   features: {
     eyebrow: '功能巡禮',
     h2: '從開服到救火, 一頁全包。',
-    lead: '每一台伺服器點進去就是完整面板:總覽、效能、玩家、地圖、指令、世界設定、引擎微調、模組、帕魯數值(贊助版)、存檔備份、自動重啟、日誌——13 個分頁一次展開, 不需要的分頁還能自己關掉。',
+    lead: '每一台伺服器點進去就是完整面板:總覽、效能、玩家、地圖、指令、世界設定、引擎微調、模組、帕魯數值、存檔備份、自動重啟、日誌——13 個分頁一次展開, 不需要的分頁還能自己關掉。',
     items: [
       {
         title: '所有伺服器, 一眼掌握',
@@ -179,7 +179,7 @@ const zh: Dictionary = {
   },
   highlights: {
     eyebrow: 'v2.0.1 全新',
-    h2: '地圖、主題、贊助功能——這次補齊的三件大事。',
+    h2: '地圖、主題、進階功能——這次補齊的三件大事。',
     items: [
       {
         tag: '世界地圖',
@@ -189,12 +189,12 @@ const zh: Dictionary = {
       {
         tag: '主題系統',
         title: '三套主題, 深淺色都照顧到',
-        body: '帕魯原色、白銀(Vercel 風)、極光翡翠, 每套都有深色 / 淺色, 搭配帶迷你即時預覽的質感切換彈窗。白銀與極光翡翠是贊助者專屬主題。',
+        body: '帕魯原色、白銀(Vercel 風)、極光翡翠, 每套都有深色 / 淺色, 搭配帶迷你即時預覽的質感切換彈窗。全部主題均可免費使用。',
       },
       {
-        tag: '贊助者專屬',
-        title: '贊助者專屬進階功能',
-        body: '帕魯數值編輯器(修改物種 HP / 攻防 / 捕獲率, 首領版可單獨調)、傳送玩家、批量給予道具、自訂帕魯與公會據點詳情——輸入有效的贊助者識別碼即解鎖全部進階功能。',
+        tag: '全部免費',
+        title: '完整進階功能',
+        body: '帕魯數值編輯器(修改物種 HP / 攻防 / 捕獲率, 首領版可單獨調)、傳送玩家、批量給予道具、自訂帕魯與公會據點詳情——全部免費開放,不需要識別碼。',
       },
     ],
   },
@@ -321,7 +321,7 @@ const zhCN: Dictionary = {
   features: {
     eyebrow: '功能巡礼',
     h2: '从开服到救火, 一页全包。',
-    lead: '每台服务器点进去都是完整面板:总览、性能、玩家、地图、命令、世界设置、引擎微调、模组、帕鲁数值(赞助版)、存档备份、自动重启、日志——13 个标签页集中管理,不需要的标签页还可以自行关闭。',
+    lead: '每台服务器点进去都是完整面板:总览、性能、玩家、地图、命令、世界设置、引擎微调、模组、帕鲁数值、存档备份、自动重启、日志——13 个标签页集中管理,不需要的标签页还可以自行关闭。',
     items: [
       {
         title: '所有服务器, 一眼掌握',
@@ -373,7 +373,7 @@ const zhCN: Dictionary = {
   },
   highlights: {
     eyebrow: 'v2.0.1 全新',
-    h2: '地图、主题、赞助功能——这次补齐的三件大事。',
+    h2: '地图、主题、高级功能——这次补齐的三件大事。',
     items: [
       {
         tag: '世界地图',
@@ -383,12 +383,12 @@ const zhCN: Dictionary = {
       {
         tag: '主题系统',
         title: '三套主题,深浅色均支持',
-        body: '帕鲁原色、白银(Vercel 风)、极光翡翠,每套都有深色 / 浅色模式,并提供实时预览的主题切换窗口。白银与极光翡翠是赞助者专属主题。',
+        body: '帕鲁原色、白银(Vercel 风)、极光翡翠,每套都有深色 / 浅色模式,并提供实时预览的主题切换窗口。全部主题均可免费使用。',
       },
       {
-        tag: '赞助者专属',
-        title: '赞助者专属进阶功能',
-        body: '帕鲁数值编辑器(修改物种 HP / 攻防 / 捕获率,首领版可单独调整)、传送玩家、批量给予道具、自定义帕鲁与公会据点详情——输入有效的赞助者识别码即解锁全部进阶功能。',
+        tag: '全部免费',
+        title: '完整高级功能',
+        body: '帕鲁数值编辑器(修改物种 HP / 攻防 / 捕获率,首领版可单独调整)、传送玩家、批量给予道具、自定义帕鲁与公会据点详情——全部免费开放,无需识别码。',
       },
     ],
   },
@@ -515,7 +515,7 @@ const en: Dictionary = {
   features: {
     eyebrow: 'Feature tour',
     h2: 'From hosting to firefighting, all on one page.',
-    lead: 'Every server opens into a full panel: overview, performance, players, map, commands, world settings, engine tuning, mods, pal stats (sponsor), backups, auto-restart, logs — 13 tabs at once, and you can hide any tab you don\'t need.',
+    lead: 'Every server opens into a full panel: overview, performance, players, map, commands, world settings, engine tuning, mods, pal stats, backups, auto-restart, logs — 13 tabs at once, and you can hide any tab you don\'t need.',
     items: [
       {
         title: 'Every server, at a glance',
@@ -567,7 +567,7 @@ const en: Dictionary = {
   },
   highlights: {
     eyebrow: 'New in v2.0.1',
-    h2: 'Map, themes, sponsor perks — the three big additions this round.',
+    h2: 'Map, themes, and advanced tools — the three big additions this round.',
     items: [
       {
         tag: 'World map',
@@ -577,12 +577,12 @@ const en: Dictionary = {
       {
         tag: 'Theme system',
         title: 'Three themes, light and dark both covered',
-        body: 'Palworld classic, Silver (Vercel-style) and Aurora Emerald — each with a light and dark mode — switchable from a theme picker with a live mini preview. Silver and Aurora Emerald are sponsor-exclusive themes.',
+        body: 'Palworld classic, Silver (Vercel-style) and Aurora Emerald — each with a light and dark mode — switchable from a theme picker with a live mini preview. Every theme is free to use.',
       },
       {
-        tag: 'Sponsor exclusive',
-        title: 'Sponsor-exclusive power features',
-        body: 'A pal stat editor (HP/attack/defense/capture rate, bosses adjustable separately), teleport a player, bulk-give items, custom pals and guild-base detail views — all unlocked with an active sponsor code.',
+        tag: 'All free',
+        title: 'Full advanced toolset',
+        body: 'A pal stat editor (HP/attack/defense/capture rate, bosses adjustable separately), teleport a player, bulk-give items, custom pals and guild-base detail views — all available free with no code required.',
       },
     ],
   },
@@ -761,7 +761,7 @@ const ja: Dictionary = {
   },
   highlights: {
     eyebrow: 'v2.0.1 の新機能',
-    h2: 'マップ・テーマ・スポンサー特典——今回の 3 大追加。',
+    h2: 'マップ・テーマ・高度な機能——今回の 3 大追加。',
     items: [
       {
         tag: 'ワールドマップ',
@@ -771,12 +771,12 @@ const ja: Dictionary = {
       {
         tag: 'テーマシステム',
         title: '3 テーマ、ライトもダークも',
-        body: 'パルワールド標準・シルバー(Vercel 風)・オーロラエメラルドの 3 テーマ、それぞれライト / ダーク対応。ミニプレビュー付きのテーマ切り替えダイアログから選択できます。シルバーとオーロラエメラルドはスポンサー限定テーマ。',
+        body: 'パルワールド標準・シルバー(Vercel 風)・オーロラエメラルドの 3 テーマ、それぞれライト / ダーク対応。ミニプレビュー付きのテーマ切り替えダイアログから選択でき、すべて無料で利用できます。',
       },
       {
-        tag: 'スポンサー限定',
-        title: 'スポンサー限定の上級機能',
-        body: 'パルのステータス編集(HP・攻撃・防御・捕獲率、ボスは個別調整可)、プレイヤーのテレポート、アイテムの一括付与、カスタムパルやギルド拠点の詳細表示——有効なスポンサーコードですべて解放されます。',
+        tag: 'すべて無料',
+        title: '高度な機能をすべて利用可能',
+        body: 'パルのステータス編集(HP・攻撃・防御・捕獲率、ボスは個別調整可)、プレイヤーのテレポート、アイテムの一括付与、カスタムパルやギルド拠点の詳細表示——コード不要ですべて無料で利用できます。',
       },
     ],
   },

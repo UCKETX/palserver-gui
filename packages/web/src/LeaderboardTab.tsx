@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { FiAward, FiBookOpen, FiDollarSign, FiHome, FiLock, FiRefreshCw, FiTrendingUp, FiZap } from "react-icons/fi";
+import { FiAward, FiBookOpen, FiDollarSign, FiHome, FiRefreshCw, FiTrendingUp, FiZap } from "react-icons/fi";
 import type { SaveScanStats, SaveScanPlayerStat } from "@palserver/shared";
-import { hasFeature } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { displayName, palIconUrl, useGameData, type GameData } from "./gameData";
 import { t, useI18n } from "./i18n";
@@ -10,25 +9,17 @@ import { btnGhost, card, errorCls } from "./ui";
 /**
  * 排行榜分頁 — 存檔掃描統計歷史(save-stats-history)驅動。
  * 榜單吃最新一筆掃描;有前一筆時加「與上次掃描相比」週報區。
- * 不依賴 PalDefender;贊助者功能(leaderboard)。
+ * 不依賴 PalDefender。
  */
 export function LeaderboardTab({ client, instanceId }: { client: AgentClient; instanceId: string }) {
   useI18n();
   const gameData = useGameData();
   const [worldGuid, setWorldGuid] = useState<string | null>(null);
   const [history, setHistory] = useState<SaveScanStats[] | null>(null);
-  const [entitled, setEntitled] = useState<boolean | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [canScan, setCanScan] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    client
-      .license()
-      .then((l) => setEntitled(hasFeature("leaderboard", l)))
-      .catch(() => setEntitled(false));
-  }, [client]);
 
   const load = useCallback(async () => {
     try {
@@ -83,7 +74,6 @@ export function LeaderboardTab({ client, instanceId }: { client: AgentClient; in
 
   const latest = history && history.length > 0 ? history[history.length - 1] : null;
   const prev = history && history.length > 1 ? history[history.length - 2] : null;
-  const locked = entitled === false;
 
   return (
     <div className="flex flex-col gap-4">
@@ -93,7 +83,7 @@ export function LeaderboardTab({ client, instanceId }: { client: AgentClient; in
             ? t("資料來自存檔掃描(掃描於 {when})。", { when: new Date(latest.scannedAt).toLocaleString() })
             : t("尚未掃描過存檔。點「從存檔刷新」建立快照。")}
         </p>
-        {canScan && !locked && (
+        {canScan && (
           <button
             className={`${btnGhost} inline-flex items-center gap-1.5`}
             onClick={() => void scan()}
@@ -108,14 +98,7 @@ export function LeaderboardTab({ client, instanceId }: { client: AgentClient; in
       {error && <p className={errorCls}>{error}</p>}
       {note && !scanning && <p className="text-[13px] text-ink-muted">{note}</p>}
 
-      {locked && (
-        <div className="inline-flex items-center gap-2 rounded-cute border-2 border-sun/40 bg-sun/10 px-3 py-2 text-xs font-bold text-sun">
-          <FiLock className="size-4 shrink-0" />
-          {t("這是贊助者專屬功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}
-        </div>
-      )}
-
-      {!locked && latest && (
+      {latest && (
         <>
           {prev ? (
             <WeeklyReport latest={latest} prev={prev} />
@@ -190,7 +173,7 @@ export function LeaderboardTab({ client, instanceId }: { client: AgentClient; in
         </>
       )}
 
-      {!locked && history && history.length === 0 && (
+      {history && history.length === 0 && (
         <div className="rounded-cute border-2 border-dashed border-line px-6 py-10 text-center text-ink-muted">
           <FiAward className="mx-auto mb-2 size-11" />
           {t("還沒有排行榜資料。掃描一次存檔就會出現(掃描也會更新健檢與玩家/公會快照)。")}

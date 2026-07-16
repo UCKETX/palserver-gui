@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { t, getLang, type Lang } from "./i18n";
 
 /**
- * 日誌重點標記 + 格式化(贊助者功能 log-tools)。
+ * 日誌重點標記 + 格式化。
  *
  * 規則的 regex 全部對照「真實的 PalDefender log」(格式 `[時:分:秒][等級] 訊息`)整理:
  *   加入   'Name' (UserId=…, IP=…) has logged in.  /  steam_xxx ('IP') connected to the server.

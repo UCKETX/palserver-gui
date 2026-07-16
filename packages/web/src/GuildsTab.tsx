@@ -11,7 +11,7 @@ import { btnGhost, card, errorCls } from "./ui";
  * 公會分頁 — 存檔快照(save-tools 掃描)驅動的公會總覽。
  * 清單卡片只放基礎資訊,點擊開 GuildDetailModal 看完整資料
  * (成員/據點駐守帕魯/公會倉庫/研究)— 與玩家詳情同一套 UX。
- * 不依賴 PalDefender;贊助者功能(save-slim)。
+ * 不依賴 PalDefender。
  */
 export function GuildsTab({
   client,

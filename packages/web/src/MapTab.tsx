@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiRefreshCw, FiMap, FiX, FiHome, FiUsers, FiStar, FiMoon, FiMapPin, FiExternalLink } from "react-icons/fi";
+import { FiRefreshCw, FiMap, FiX, FiHome, FiUsers, FiMoon, FiMapPin, FiExternalLink } from "react-icons/fi";
 import { GiCrownedSkull, GiMinerals } from "react-icons/gi";
 import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -166,7 +166,6 @@ export function MapTab({
   const [bosses, setBosses] = useState<Boss[]>([]);
   const [showOres, setShowOres] = useState(false);
   const [ores, setOres] = useState<OreData | null>(null);
-  const [guildHint, setGuildHint] = useState(false);
   // 公會詳情點成員 → 地圖跳到該位置。n 是 nonce:同一點連點兩次也要重新觸發。
   const [focus, setFocus] = useState<{ x: number; y: number; n: number } | null>(null);
 
@@ -200,8 +199,7 @@ export function MapTab({
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-    // 公會據點是贊助者限定:非贊助者這裡回空陣列(detailed=false)。開關照樣顯示,
-    // 只是標上星星表示要贊助才有。
+    // PalDefender 未提供詳細資料時,公會點擊會改用存檔快照。
     client
       .guilds(instanceId)
       .then((g) => {
@@ -262,63 +260,30 @@ export function MapTab({
           >
             <FiHome className="size-4" /> {t("公會據點")}
           </button>
-          {landmarks.length > 0 &&
-            (guildsUnlocked ? (
-              <button
-                className={`${btnGhost} inline-flex items-center gap-1.5 ${showLandmarks ? "border-pal text-pal" : "opacity-60"}`}
-                onClick={() => setShowLandmarks((v) => !v)}
-              >
-                <FiMapPin className="size-4" /> {t("地標")}
-                <FiStar className="size-3.5 text-pal" />
-              </button>
-            ) : (
-              <button
-                className={`${btnGhost} inline-flex items-center gap-1.5 opacity-70`}
-                title={t("此功能為贊助者專屬功能,可在設定頁輸入贊助者識別碼解鎖。")}
-                onClick={() => setGuildHint((v) => !v)}
-              >
-                <FiMapPin className="size-4" /> {t("地標")}
-                <FiStar className="size-3.5 text-pal" />
-              </button>
-            ))}
-          {bosses.length > 0 &&
-            (guildsUnlocked ? (
-              <button
-                className={`${btnGhost} inline-flex items-center gap-1.5 ${showBosses ? "border-pal text-pal" : "opacity-60"}`}
-                onClick={() => setShowBosses((v) => !v)}
-              >
-                <GiCrownedSkull className="size-4" /> {t("野外頭目")}
-                <FiStar className="size-3.5 text-pal" />
-              </button>
-            ) : (
-              <button
-                className={`${btnGhost} inline-flex items-center gap-1.5 opacity-70`}
-                title={t("此功能為贊助者專屬功能,可在設定頁輸入贊助者識別碼解鎖。")}
-                onClick={() => setGuildHint((v) => !v)}
-              >
-                <GiCrownedSkull className="size-4" /> {t("野外頭目")}
-                <FiStar className="size-3.5 text-pal" />
-              </button>
-            ))}
-          {ores && ores.spots.length > 0 &&
-            (guildsUnlocked ? (
-              <button
-                className={`${btnGhost} inline-flex items-center gap-1.5 ${showOres ? "border-pal text-pal" : "opacity-60"}`}
-                onClick={() => setShowOres((v) => !v)}
-              >
-                <GiMinerals className="size-4" /> {t("礦物")}
-                <FiStar className="size-3.5 text-pal" />
-              </button>
-            ) : (
-              <button
-                className={`${btnGhost} inline-flex items-center gap-1.5 opacity-70`}
-                title={t("此功能為贊助者專屬功能,可在設定頁輸入贊助者識別碼解鎖。")}
-                onClick={() => setGuildHint((v) => !v)}
-              >
-                <GiMinerals className="size-4" /> {t("礦物")}
-                <FiStar className="size-3.5 text-pal" />
-              </button>
-            ))}
+          {landmarks.length > 0 && (
+            <button
+              className={`${btnGhost} inline-flex items-center gap-1.5 ${showLandmarks ? "border-pal text-pal" : "opacity-60"}`}
+              onClick={() => setShowLandmarks((v) => !v)}
+            >
+              <FiMapPin className="size-4" /> {t("地標")}
+            </button>
+          )}
+          {bosses.length > 0 && (
+            <button
+              className={`${btnGhost} inline-flex items-center gap-1.5 ${showBosses ? "border-pal text-pal" : "opacity-60"}`}
+              onClick={() => setShowBosses((v) => !v)}
+            >
+              <GiCrownedSkull className="size-4" /> {t("野外頭目")}
+            </button>
+          )}
+          {ores && ores.spots.length > 0 && (
+            <button
+              className={`${btnGhost} inline-flex items-center gap-1.5 ${showOres ? "border-pal text-pal" : "opacity-60"}`}
+              onClick={() => setShowOres((v) => !v)}
+            >
+              <GiMinerals className="size-4" /> {t("礦物")}
+            </button>
+          )}
         </div>
         <div className="flex gap-2">
           {!fullscreen && (
@@ -343,11 +308,6 @@ export function MapTab({
           )}
         </div>
       </div>
-      {guildHint && !guildsUnlocked && (
-        <p className="rounded-xl bg-sun/15 px-3 py-2 text-[13px] font-bold text-sun">
-          {t("此功能為贊助者專屬功能,可在設定頁輸入贊助者識別碼解鎖。")}
-        </p>
-      )}
       <div className="min-h-0 flex-1 overflow-hidden rounded-xl">
         <PlayerMap
           players={live.players}
@@ -366,8 +326,7 @@ export function MapTab({
           showOres={showOres}
           gameData={gameData}
           onGuildClick={(id) => {
-            // 免費用戶:REST 公會詳情被 agent 端 403(guild-map),直接走存檔版
-            // 公會彈窗(基礎資訊免費、詳細資訊在開關內引導贊助)
+            // REST 無詳細資料時改用存檔快照。
             if (guildsUnlocked) setGuildDetailId(id);
             else void openGuildFull(id, "");
           }}
@@ -478,7 +437,7 @@ export function MapTab({
   );
 }
 
-/** 公會詳情彈窗(贊助者):成員名單 + 據點,取自 PalDefender /guild/{id}。
+/** 公會詳情彈窗:成員名單 + 據點,取自 PalDefender /guild/{id}。
  * 成員顯示與地圖/玩家列表同款的帕魯頭像(seed=userId,靠 pdPlayers 名冊把
  * playerUid 對回 userId;對不上才退用 playerUid)。在線成員可點:回報地圖
  * 座標給父層跳轉(位置優先取遊戲 REST 即時座標,退而求其次用名冊的最後存檔位置)。 */
@@ -938,8 +897,8 @@ function PlayerMap({
     }
 
     // Guild bases first (under players). world_pos → savToMap, same frame.
-    // The whole guild feature is sponsor-only, so if we have any guild data the
-    // viewer is a sponsor — bases are always coloured, named, and clickable.
+    // Guild data returned by the agent is always detailed when available, so bases
+    // are coloured, named, and clickable.
     // Marker = the in-game Palbox art on a guild-coloured ring.
     if (showBases) {
       for (const g of guilds) {

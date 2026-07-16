@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiArrowLeft, FiPlay, FiSquare, FiRefreshCw, FiSave, FiTerminal, FiFileText, FiX, FiAlertTriangle, FiAlignLeft, FiStar } from "react-icons/fi";
+import { FiArrowLeft, FiPlay, FiSquare, FiRefreshCw, FiSave, FiTerminal, FiFileText, FiX, FiAlertTriangle, FiAlignLeft } from "react-icons/fi";
 import type {
   InstanceDetail as Detail,
   LogSource,
@@ -22,11 +22,10 @@ import { VersionCard } from "./VersionCard";
 import { ConnectionCard } from "./ConnectionCard";
 import { MigrationCard } from "./MigrationCard";
 import { InstanceSettingsTab } from "./InstanceSettingsTab";
-import { SHOW_SPONSOR_FEATURES } from "./flags";
+import { SHOW_ADVANCED_FEATURES } from "./flags";
 import { PerformanceTab } from "./PerformanceTab";
 import { EngineTab } from "./EngineTab";
 import { maskSteamIdsInText } from "./SteamId";
-import { hasFeature } from "@palserver/shared";
 import { classifyLine, categoryColor, formatLine, genericLine, translateTarget, useLogPrefs } from "./logHighlight";
 import { STATUS_LABELS } from "./labels";
 import { TABS, LOCKED_TABS, useHiddenTabs, useHiddenCards, type Tab } from "./tabPrefs";
@@ -296,7 +295,7 @@ export function InstanceDetailPage({
 
       <div className="flex flex-wrap gap-x-2 gap-y-1 border-b-2 border-line">
         {TABS.filter((t) => t.id !== "paldefender" || palDefender)
-          .filter((t) => t.id !== "palstats" || SHOW_SPONSOR_FEATURES)
+          .filter((t) => t.id !== "palstats" || SHOW_ADVANCED_FEATURES)
           .filter((t) => LOCKED_TABS.includes(t.id) || !hiddenTabs.includes(t.id))
           .map((t) => (
           <button
@@ -511,15 +510,10 @@ function LogsTab({ client, instanceId }: { client: AgentClient; instanceId: stri
   const [sources, setSources] = useState<LogSource[]>([]);
   const [source, setSource] = useState<LogSourceId | "">("");
   const [lines, setLines] = useState<string[]>([]);
-  const [entitled, setEntitled] = useState<boolean | null>(null);
   const prefs = useLogPrefs();
   const transRef = useRef<Map<string, string>>(new Map());
   const [, bumpTrans] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    client.license().then((l) => setEntitled(hasFeature("log-tools", l))).catch(() => setEntitled(false));
-  }, [client]);
 
   useEffect(() => {
     client
@@ -547,11 +541,11 @@ function LogsTab({ client, instanceId }: { client: AgentClient; instanceId: stri
     return () => socket.close();
   }, [client, instanceId, source]);
 
-  // 翻譯(贊助者功能 log-tools):把要翻的行一次「批次」送 agent 代理 Google 翻譯(換行合併,
+  // 翻譯:把要翻的行一次「批次」送 agent 代理 Google 翻譯(換行合併,
   // 一個請求翻很多行 → 即時感),結果快取,同句不重複。格式化開著就只翻套不了版的一般行訊息
   // (事件行已中文套版);沒開就整行送翻。英文介面不翻。開著時新行進來會再補翻。
   useEffect(() => {
-    if (entitled !== true || !prefs.translate) return;
+    if (!prefs.translate) return;
     const tlv = translateTarget();
     if (tlv === "en") return;
     // 收集近 300 行裡還沒翻的句子(去重)。
@@ -589,7 +583,7 @@ function LogsTab({ client, instanceId }: { client: AgentClient; instanceId: stri
       }
       bumpTrans((v) => v + 1);
     })();
-  }, [entitled, prefs.translate, prefs.format, lines, client]);
+  }, [prefs.translate, prefs.format, lines, client]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -597,7 +591,7 @@ function LogsTab({ client, instanceId }: { client: AgentClient; instanceId: stri
 
   const highlight = prefs.highlight; // 免費
   const format = prefs.format; // 免費
-  const translate = entitled === true && prefs.translate; // 贊助者限定
+  const translate = prefs.translate;
   const tl = translateTarget();
 
   return (
@@ -632,22 +626,12 @@ function LogsTab({ client, instanceId }: { client: AgentClient; instanceId: stri
       <div className="flex flex-wrap items-center gap-2">
         <LogToggle on={prefs.highlight} onChange={prefs.setHighlight} label={t("重點標記")} />
         <LogToggle on={prefs.format} onChange={prefs.setFormat} icon={<FiAlignLeft className="size-4" />} label={t("格式化")} />
-        {/* 翻譯:贊助者限定,星星標示;未解鎖時停用。 */}
         <LogToggle
           on={translate}
-          onChange={(v) => entitled === true && prefs.setTranslate(v)}
-          disabled={entitled !== true}
-          icon={<FiStar className="size-4 text-pal" />}
+          onChange={prefs.setTranslate}
           label={t("翻譯")}
-          title={entitled === true ? undefined : t("翻譯為贊助者專屬功能")}
         />
       </div>
-      {entitled === false && (
-        <p className="inline-flex items-center gap-2 rounded-cute border-2 border-sun/40 bg-sun/10 px-3 py-2 text-xs font-bold text-sun">
-          <FiStar className="size-4 shrink-0 text-pal" />
-          {t("日誌翻譯為贊助者專屬功能,到「設定 → 贊助者識別碼」輸入識別碼即可解鎖。")}
-        </p>
-      )}
 
       <div className="h-[440px] overflow-auto rounded-(--radius-cute) bg-[#1c1927] p-4 font-mono text-sm">
         {lines.length ? (

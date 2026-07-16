@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FiAlertTriangle, FiDownload, FiEdit2, FiList, FiLock, FiStar, FiTrash2 } from "react-icons/fi";
+import { FiAlertTriangle, FiDownload, FiEdit2, FiList, FiTrash2 } from "react-icons/fi";
 import { GiSheep } from "react-icons/gi";
 import {
-  hasFeature,
   PAL_ROW_VARIANTS,
   PAL_STAT_CATEGORY_LABELS,
   PAL_STAT_KEYS,
@@ -40,14 +39,12 @@ const emptyDraft = () =>
   Object.fromEntries(PAL_STAT_KEYS.map((k) => [k, ""])) as Record<PalStatKey, string>;
 
 /**
- * 帕魯物種數值編輯器(贊助者先行版 pal-stats):透過 PalSchema 修改
+ * 帕魯物種數值編輯器:透過 PalSchema 修改
  * DT_PalMonsterParameter 的物種基礎值(HP / 攻防 / 移速 / 捕獲率等)。
- * 未解鎖時整組表單照樣顯示,但變灰、不可操作,並提示去設定頁輸入識別碼。
  */
 export function PalStatsTab({ client, instanceId }: { client: AgentClient; instanceId: string }) {
   useI18n();
   const gameData = useGameData();
-  const [entitled, setEntitled] = useState<boolean | null>(null);
   const [status, setStatus] = useState<PalStatsStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -68,17 +65,9 @@ export function PalStatsTab({ client, instanceId }: { client: AgentClient; insta
   }, [client, instanceId]);
 
   useEffect(() => {
-    client
-      .license()
-      .then((l) => setEntitled(hasFeature("pal-stats", l)))
-      .catch(() => setEntitled(false));
-  }, [client, instanceId]);
-
-  useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  const locked = entitled === false;
   const row = palId.trim() ? palRowName(palId.trim(), variant) : "";
 
   // 該資料列目前已存的值(儲存基準),用來算「哪些欄位改過」與載入表單預設。
@@ -179,7 +168,7 @@ export function PalStatsTab({ client, instanceId }: { client: AgentClient; insta
     }
   };
 
-  // 清空所有物種數值調整。刻意不受贊助者鎖限制:贊助到期的使用者也能改回原設定。
+  // 清空所有物種數值調整。
   const clearAll = async () => {
     if (
       !confirm(
@@ -208,22 +197,12 @@ export function PalStatsTab({ client, instanceId }: { client: AgentClient; insta
         <p className="rounded-xl bg-grass/10 px-3 py-2 text-[13px] font-bold text-grass">{notice}</p>
       )}
 
-      {locked && (
-        <div className="inline-flex items-center gap-2 rounded-cute border-2 border-sun/40 bg-sun/10 px-3 py-2 text-xs font-bold text-sun">
-          <FiLock className="size-4 shrink-0" />
-          {t("這是贊助者先行版功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}
-        </div>
-      )}
-
       <div className={`${card} flex flex-wrap items-center justify-between gap-2`}>
         <p className="inline-flex items-center gap-2 text-sm font-extrabold">
           <GiSheep className="size-4 text-pal" /> {t("帕魯物種數值編輯器")}
-          <span className="inline-flex items-center gap-1 rounded-full bg-pal/10 px-2 py-0.5 text-xs font-bold text-pal">
-            <FiStar className="size-3" /> {t("贊助者")}
-          </span>
         </p>
         {status.schema.installed && (
-          <div className={locked ? "pointer-events-none opacity-55" : ""}>
+          <div>
             <button
               className={`${btnGhost} inline-flex items-center gap-1.5 text-berry hover:border-berry`}
               onClick={uninstall}
@@ -253,11 +232,11 @@ export function PalStatsTab({ client, instanceId }: { client: AgentClient; insta
             </span>
           </DismissibleWarning>
           {status.reason && <p className="text-[13px] text-sun">{status.reason}</p>}
-          <div className={locked ? "pointer-events-none w-fit opacity-55" : "w-fit"}>
+          <div className="w-fit">
             <button
               className={`${btn} inline-flex items-center gap-1.5`}
               onClick={install}
-              disabled={locked || installing}
+              disabled={installing}
             >
               <FiDownload className="size-4" /> {installing ? t("安裝中…") : t("安裝 PalSchema")}
             </button>
@@ -265,7 +244,7 @@ export function PalStatsTab({ client, instanceId }: { client: AgentClient; insta
         </div>
       ) : (
         <>
-          <div className={locked ? "pointer-events-none flex flex-col gap-4 opacity-55" : "flex flex-col gap-4"}>
+          <div className="flex flex-col gap-4">
           <div className={`${card} flex flex-col gap-3`}>
             <div className="grid gap-2 sm:grid-cols-2">
               <label className="flex min-w-0 flex-col gap-1 text-xs font-bold text-ink-muted">
@@ -432,17 +411,15 @@ export function PalStatsTab({ client, instanceId }: { client: AgentClient; insta
                           </span>
                         ))}
                       </div>
-                      {!locked && (
-                        <button
-                          className={`${btnGhost} inline-flex shrink-0 items-center gap-1 text-xs`}
-                          onClick={() => {
-                            setPalId(parsed.palId);
-                            setVariant(parsed.variant);
-                          }}
-                        >
-                          <FiEdit2 className="size-3.5" /> {t("編輯")}
-                        </button>
-                      )}
+                      <button
+                        className={`${btnGhost} inline-flex shrink-0 items-center gap-1 text-xs`}
+                        onClick={() => {
+                          setPalId(parsed.palId);
+                          setVariant(parsed.variant);
+                        }}
+                      >
+                        <FiEdit2 className="size-3.5" /> {t("編輯")}
+                      </button>
                     </div>
                   );
                 })}

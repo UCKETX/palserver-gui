@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { FiCheck, FiLock, FiMoon, FiStar, FiSun, FiX } from "react-icons/fi";
+import { FiCheck, FiMoon, FiSun, FiX } from "react-icons/fi";
 import { t, useI18n } from "./i18n";
 import { Overlay, card } from "./ui";
 import {
@@ -23,7 +22,6 @@ interface ThemeDef {
   family: ThemeFamily;
   name: string;
   blurb: string;
-  free: boolean;
   preview: Record<"light" | "dark", Swatch>;
 }
 
@@ -33,7 +31,6 @@ const THEMES: ThemeDef[] = [
     family: "pal",
     name: "帕魯原色",
     blurb: "陽光草原 / 梅紫夜",
-    free: true,
     preview: {
       light: { bg: "#f7fbfd", card: "#ffffff", accent: "#3fa7e0", ink: "#2f3a45", accentText: "#ffffff" },
       dark: { bg: "#232030", card: "#2d2a3b", accent: "#5bb8ec", ink: "#eceaf2", accentText: "#0d1420" },
@@ -43,7 +40,6 @@ const THEMES: ThemeDef[] = [
     family: "silver",
     name: "白銀",
     blurb: "純黑白銀 / 極簡光暈",
-    free: false,
     preview: {
       light: { bg: "#f4f5f7", card: "#ffffff", accent: "#18181b", ink: "#16171a", accentText: "#fafafa" },
       dark: { bg: "#000000", card: "#0f0f0f", accent: "#ededed", ink: "#fafafa", accentText: "#0a0a0a" },
@@ -53,7 +49,6 @@ const THEMES: ThemeDef[] = [
     family: "emerald",
     name: "極光翡翠",
     blurb: "鮮翡翠 / 青檸光暈",
-    free: false,
     preview: {
       light: { bg: "#ecfdf4", card: "#ffffff", accent: "#10b981", ink: "#0f2b20", accentText: "#ffffff" },
       dark: { bg: "#123a2b", card: "#1b4a38", accent: "#24e39a", ink: "#ecfdf3", accentText: "#06241a" },
@@ -63,7 +58,6 @@ const THEMES: ThemeDef[] = [
     family: "lilac",
     name: "午夜紫",
     blurb: "薰衣草晝 / 午夜紫夜",
-    free: false,
     preview: {
       light: { bg: "#f6f2fe", card: "#ffffff", accent: "#8b5cf6", ink: "#2a2140", accentText: "#ffffff" },
       dark: { bg: "#17122a", card: "#221a3c", accent: "#b79bff", ink: "#f0eafb", accentText: "#1a1030" },
@@ -73,7 +67,6 @@ const THEMES: ThemeDef[] = [
     family: "cherry",
     name: "櫻花粉",
     blurb: "淡櫻晝 / 深梅玫夜",
-    free: false,
     preview: {
       light: { bg: "#fdf1f7", card: "#ffffff", accent: "#ee5fa0", ink: "#40222f", accentText: "#ffffff" },
       dark: { bg: "#2a1620", card: "#3a2130", accent: "#ff8ab8", ink: "#fdeef5", accentText: "#2a0f1c" },
@@ -83,7 +76,6 @@ const THEMES: ThemeDef[] = [
     family: "cat",
     name: "橘色貓貓",
     blurb: "暖薑橘晝 / 焦糖夜",
-    free: false,
     preview: {
       light: { bg: "#fff6ec", card: "#ffffff", accent: "#f5943a", ink: "#3d2a1a", accentText: "#ffffff" },
       dark: { bg: "#241a11", card: "#322416", accent: "#ff9d4d", ink: "#fbeedd", accentText: "#2a1808" },
@@ -116,25 +108,17 @@ function MiniPreview({ s }: { s: Swatch }) {
 }
 
 /**
- * 外觀主題選擇器(質感彈窗):3 套主題各帶迷你即時預覽,頂部切深/淺,
- * 選中有勾勾;白銀 / 翡翠為贊助者專屬,未解鎖時鎖住並提示。
+ * 外觀主題選擇器:每套主題各帶迷你即時預覽,頂部切深/淺。
  */
-export function ThemePicker({ entitled, onClose }: { entitled: boolean; onClose: () => void }) {
+export function ThemePicker({ onClose }: { onClose: () => void }) {
   useI18n();
   const systemDark = useSystemDark();
   const mode = useThemeMode();
-  const [lockedHint, setLockedHint] = useState(false);
 
   const dark = isThemeDark(mode, systemDark);
   const activeFamily = themeFamily(mode);
 
-  const apply = (family: ThemeFamily, free: boolean) => {
-    if (!free && !entitled) {
-      setLockedHint(true);
-      return;
-    }
-    setThemeMode(composeTheme(family, dark));
-  };
+  const apply = (family: ThemeFamily) => setThemeMode(composeTheme(family, dark));
   const setDark = (d: boolean) => setThemeMode(composeTheme(activeFamily, d));
 
   return (
@@ -175,14 +159,13 @@ export function ThemePicker({ entitled, onClose }: { entitled: boolean; onClose:
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {THEMES.map((th) => {
             const selected = activeFamily === th.family;
-            const locked = !th.free && !entitled;
             return (
               <button
                 key={th.family}
-                onClick={() => apply(th.family, th.free)}
+                onClick={() => apply(th.family)}
                 className={`relative flex flex-col gap-2 rounded-cute border-2 p-2.5 text-left transition ${
                   selected ? "border-pal shadow-(--shadow-cute)" : "border-line hover:border-pal/50"
-                } ${locked ? "opacity-75" : ""}`}
+                }`}
               >
                 <MiniPreview s={th.preview[dark ? "dark" : "light"]} />
                 <div className="flex items-start justify-between gap-1">
@@ -194,28 +177,12 @@ export function ThemePicker({ entitled, onClose }: { entitled: boolean; onClose:
                     <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-pal text-white">
                       <FiCheck className="size-3.5" />
                     </span>
-                  ) : (
-                    !th.free && (
-                      <FiStar className="mt-0.5 size-4 shrink-0 text-pal" />
-                    )
-                  )}
+                  ) : null}
                 </div>
-                {locked && (
-                  <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/55 px-1.5 py-0.5 text-[10px] font-bold text-white backdrop-blur-sm">
-                    <FiLock className="size-3" /> {t("贊助")}
-                  </span>
-                )}
               </button>
             );
           })}
         </div>
-
-        {lockedHint && !entitled && (
-          <p className="inline-flex items-center gap-2 rounded-cute border-2 border-sun/40 bg-sun/10 px-3 py-2 text-xs font-bold text-sun">
-            <FiLock className="size-4 shrink-0" />
-            {t("帶星號的主題為贊助者專屬,請在下方輸入贊助者識別碼解鎖。")}
-          </p>
-        )}
       </div>
     </Overlay>
   );

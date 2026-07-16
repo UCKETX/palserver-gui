@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { FiStar, FiLock, FiX, FiMapPin, FiSend } from "react-icons/fi";
-import { hasFeature, type KnownPlayer } from "@palserver/shared";
+import { FiX, FiMapPin, FiSend } from "react-icons/fi";
+import type { KnownPlayer } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { PlayerPicker } from "./PlayerPicker";
 import { MapPickModal } from "./MapPickModal";
@@ -8,7 +8,7 @@ import { t, useI18n } from "./i18n";
 import { Overlay, btn, btnGhost, card, errorCls, inputCls } from "./ui";
 
 /**
- * 傳送玩家(贊助者先行版 teleport):把某玩家傳送到「另一玩家」或「地圖上描點的座標」。
+ * 傳送玩家:把某玩家傳送到「另一玩家」或「地圖上描點的座標」。
  * 底層走 PalDefender RCON `tp <來源> <目標玩家|x y z>`,立即生效。
  */
 export function TeleportModal({
@@ -26,7 +26,6 @@ export function TeleportModal({
   onClose: () => void;
 }) {
   useI18n();
-  const [entitled, setEntitled] = useState<boolean | null>(null);
   const [players, setPlayers] = useState<KnownPlayer[]>([]);
   const [source, setSource] = useState(initialSource ?? "");
   const [mode, setMode] = useState<"player" | "coords">("player");
@@ -38,16 +37,11 @@ export function TeleportModal({
   const [result, setResult] = useState<string | null>(null);
 
   useEffect(() => {
-    client
-      .license()
-      .then((l) => setEntitled(hasFeature("teleport", l)))
-      .catch(() => setEntitled(false));
     client.knownPlayers(instanceId).then(setPlayers).catch(() => setPlayers([]));
   }, [client, instanceId]);
 
-  const locked = entitled === false;
   const target = (mode === "player" ? targetPlayer : coords).trim();
-  const canSubmit = !locked && source.trim() !== "" && target !== "" && !busy;
+  const canSubmit = source.trim() !== "" && target !== "" && !busy;
 
   const submit = async () => {
     setBusy(true);
@@ -72,27 +66,17 @@ export function TeleportModal({
         <div className="flex shrink-0 items-center justify-between">
           <h2 className="inline-flex items-center gap-2 text-lg font-extrabold">
             <FiSend className="size-5 text-pal" /> {t("傳送玩家")}
-            <span className="inline-flex items-center gap-1 rounded-full bg-pal/10 px-2 py-0.5 text-xs font-bold text-pal">
-              <FiStar className="size-3" /> {t("贊助者")}
-            </span>
           </h2>
           <button className="text-ink-muted transition hover:text-ink" onClick={onClose} aria-label={t("關閉")}>
             <FiX className="size-5" />
           </button>
         </div>
 
-        {locked && (
-          <div className="inline-flex items-center gap-2 rounded-cute border-2 border-sun/40 bg-sun/10 px-3 py-2 text-xs font-bold text-sun">
-            <FiLock className="size-4 shrink-0" />
-            {t("這是贊助者先行版功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}
-          </div>
-        )}
-
         <p className="text-xs text-ink-muted">
           {t("把某玩家傳送到另一玩家所在,或地圖上描點的座標(透過 PalDefender),立即生效。")}
         </p>
 
-        <div className={locked ? "pointer-events-none flex flex-col gap-3 opacity-55" : "flex flex-col gap-3"}>
+        <div className="flex flex-col gap-3">
           <label className="flex min-w-0 flex-col gap-1 text-xs font-bold text-ink-muted">
             {t("要傳送的玩家")}
             <PlayerPicker roster={players} value={source} onChange={setSource} />

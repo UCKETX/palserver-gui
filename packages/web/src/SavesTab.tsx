@@ -6,7 +6,6 @@ import {
   FiClock,
   FiDownload,
   FiFolder,
-  FiLock,
   FiPlay,
   FiRotateCcw,
   FiSave,
@@ -16,7 +15,6 @@ import {
 } from "react-icons/fi";
 import {
   COOP_HOST_UID,
-  hasFeature,
   type BackupSchedule,
   type InstanceSummary,
   type SaveHealthStatus,
@@ -255,7 +253,7 @@ export function SavesTab({
   );
 }
 
-/** 存檔健檢(save-slim Stage 1,贊助者):唯讀分析世界存檔組成,不改動任何檔案。 */
+/** 存檔健檢(save-slim Stage 1):唯讀分析世界存檔組成,不改動任何檔案。 */
 function HealthCard({
   client,
   instanceId,
@@ -268,18 +266,10 @@ function HealthCard({
   running: boolean;
 }) {
   useI18n();
-  const [entitled, setEntitled] = useState<boolean | null>(null);
   const [worldGuid, setWorldGuid] = useState(() => (worlds.find((w) => w.active) ?? worlds[0]).guid);
   const [status, setStatus] = useState<SaveHealthStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
-
-  useEffect(() => {
-    client
-      .license()
-      .then((l) => setEntitled(hasFeature("save-slim", l)))
-      .catch(() => setEntitled(false));
-  }, [client, instanceId]);
 
   // 選中的世界被刪掉時退回啟用世界
   useEffect(() => {
@@ -298,8 +288,8 @@ function HealthCard({
   }, [client, instanceId, worldGuid]);
 
   useEffect(() => {
-    if (entitled) void refresh();
-  }, [entitled, refresh]);
+    void refresh();
+  }, [refresh]);
 
   const checking = status !== null && status.phase !== "idle";
   useEffect(() => {
@@ -324,7 +314,6 @@ function HealthCard({
     return "";
   };
 
-  const locked = entitled === false;
   const report = status?.report ?? null;
 
   return (
@@ -333,7 +322,7 @@ function HealthCard({
         <h3 className="inline-flex items-center gap-2 text-sm font-extrabold">
           <FiActivity className="size-4 text-pal" /> {t("存檔健檢")}
         </h3>
-        {!locked && status?.supported && (
+        {status?.supported && (
           <div className="flex items-center gap-2">
             {worlds.length > 1 && (
               <select
@@ -361,27 +350,20 @@ function HealthCard({
         {t("唯讀分析世界存檔的組成:玩家、公會、容器殘留與掉落物,協助判斷存檔是否肥大。不會改動任何存檔。")}
       </p>
 
-      {locked && (
-        <div className="inline-flex items-center gap-2 rounded-cute border-2 border-sun/40 bg-sun/10 px-3 py-2 text-xs font-bold text-sun">
-          <FiLock className="size-4 shrink-0" />
-          {t("這是贊助者先行版功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}
-        </div>
-      )}
-
-      {!locked && status && !status.supported && (
+      {status && !status.supported && (
         <div className="rounded-cute border-2 border-dashed border-line px-6 py-6 text-center text-[13px] text-ink-muted">
           {status.reason}
         </div>
       )}
 
-      {!locked && error && <p className={errorCls}>{error}</p>}
-      {!locked && status?.error && !checking && (
+      {error && <p className={errorCls}>{error}</p>}
+      {status?.error && !checking && (
         <p className={errorCls}>
           {t("上次健檢失敗:{reason}", { reason: status.error })}
         </p>
       )}
 
-      {!locked && checking && status && (
+      {checking && status && (
         <div>
           <div className="flex items-center justify-between text-xs font-bold text-sun">
             <span>{phaseLabel(status)}</span>
@@ -405,7 +387,7 @@ function HealthCard({
         </div>
       )}
 
-      {!locked && !checking && report && (
+      {!checking && report && (
         <div className="flex flex-col gap-3">
           <p className="text-xs text-ink-muted">
             {t("檢查時間 {when} · Level.sav {size} · 玩家檔 {players} 個({psize})· 世界目錄共 {total}", {

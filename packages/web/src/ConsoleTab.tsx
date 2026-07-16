@@ -20,7 +20,7 @@ import { GiveItemsModal } from "./GiveItemsModal";
 import { TeleportModal } from "./TeleportModal";
 import { MapPickModal } from "./MapPickModal";
 import { SHOW_SPONSOR_FEATURES } from "./flags";
-import { useGameData, itemIconUrl, palIconUrl, type GameData } from "./gameData";
+import { useGameData, itemIconUrl, palIconUrl, technologyIconUrl, type GameData } from "./gameData";
 import { t, useI18n } from "./i18n";
 import { btn, btnGhost, card, errorCls, inputCls, labelCls } from "./ui";
 
@@ -98,20 +98,27 @@ function ArgField({
   // 座標參數:文字欄 + 「地圖描點」按鈕(自帶狀態,獨立成元件避免條件 hook)。
   if (arg.coord) return <CoordField arg={arg} value={value} onChange={onChange} />;
 
-  // Item/Egg/Pal id args get an icon search picker backed by the catalogs.
-  // eggid 只列帕魯蛋(不是全部道具),itemid 才是全物品目錄。
-  if ((arg.name === "itemid" || arg.name === "eggid") && gameData) {
+  // Item/Egg/Tech ids get an icon search picker backed by the catalogs.
+  // eggid 只列帕魯蛋;techid 使用玩家科技目錄;itemid 才是全物品目錄。
+  if ((arg.name === "itemid" || arg.name === "eggid" || arg.name === "techid") && gameData) {
     const isEgg = arg.name === "eggid";
+    const isTech = arg.name === "techid";
     return (
       <label className={`${labelCls} min-w-0`}>
         {t(arg.label)}
         {!arg.required && <span className="font-normal">{t("(選填)")}</span>}
         <EntityPicker
-          catalog={isEgg ? gameData.eggs : gameData.items}
-          iconUrl={itemIconUrl}
+          catalog={isEgg ? gameData.eggs : isTech ? gameData.technologies : gameData.items}
+          iconUrl={isTech ? technologyIconUrl : itemIconUrl}
           value={value}
           onChange={onChange}
-          placeholder={isEgg ? t("搜尋蛋名稱或輸入 ID…") : t("搜尋道具名稱或輸入 ID…")}
+          placeholder={
+            isEgg
+              ? t("搜尋蛋名稱或輸入 ID…")
+              : isTech
+                ? t("搜尋科技名稱或輸入 ID…")
+                : t("搜尋道具名稱或輸入 ID…")
+          }
         />
       </label>
     );

@@ -8,6 +8,7 @@ import { UpdateCard } from "./UpdateCard";
 import { useI18n } from "./i18n";
 import { SHOW_SPONSOR_FEATURES } from "./flags";
 import { ThemePicker } from "./ThemePicker";
+import { useHiddenCards } from "./tabPrefs";
 import { Overlay, card, btn, btnGhost, inputCls } from "./ui";
 
 /**
@@ -26,6 +27,7 @@ export function SettingsModal({
 }) {
   const { t } = useI18n();
   const [code, setCode] = useState<string | null>(null);
+  const [hiddenCards, setHiddenCards] = useHiddenCards();
   const [addrs, setAddrs] = useState<{ ip: string; vpn: string | null }[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [showToken, setShowToken] = useState(false);
@@ -230,6 +232,29 @@ export function SettingsModal({
               <FiSun className="size-4" /> {t("選擇主題")}
             </button>
           </div>
+        </div>
+
+        {/* 右下角貓貓:可整隻關掉(hiddenCards 全域偏好,Mascot 讀同一份) */}
+        <div className="border-t border-line pt-3">
+          <h3 className="text-sm font-extrabold">{t("右下角貓貓")}</h3>
+          <p className="mt-1 text-xs text-ink-muted">
+            {t("首頁右下角打呼的貓貓(作者家的貓),點牠會打開贊助小視窗。")}
+          </p>
+          <label className="mt-2 flex items-center gap-2 text-[13px] font-bold text-ink-muted">
+            <input
+              type="checkbox"
+              className="accent-pal"
+              checked={!hiddenCards.includes("mascot")}
+              onChange={(e) =>
+                setHiddenCards(
+                  e.target.checked
+                    ? hiddenCards.filter((id) => id !== "mascot")
+                    : [...hiddenCards, "mascot"],
+                )
+              }
+            />
+            {t("顯示貓貓")}
+          </label>
         </div>
 
         {/* GUI 自我更新(對接 GitHub Releases) */}

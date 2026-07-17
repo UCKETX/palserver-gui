@@ -58,7 +58,8 @@ export const WORLD_OPTIONS = {
   bIsShowJoinLeftMessage: { type: "bool", default: true, category: "server" },
   RESTAPIEnabled: { type: "bool", default: true, category: "server" },
   RESTAPIPort: { type: "int", default: 8212, min: 1024, max: 65535, category: "server" },
-  RCONEnabled: { type: "bool", default: false, category: "server" },
+  // 預設啟用:GUI 的倒數公告/廣播/指令台都靠 RCON;建立時會自動生管理員密碼與唯一埠。
+  RCONEnabled: { type: "bool", default: true, category: "server" },
   RCONPort: { type: "int", default: 25575, min: 1024, max: 65535, category: "server" },
   ChatPostLimitPerMinute: { type: "int", default: 10, min: 1, max: 120, category: "server" },
   LogFormatType: { type: "enum", default: "Text", choices: ["Text", "Json"], category: "server" },

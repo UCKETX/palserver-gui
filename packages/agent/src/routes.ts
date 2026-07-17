@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
   COMMANDS,
@@ -429,6 +430,11 @@ export function registerRoutes(
     if (typeof explicitRestPort === "number" && store.usedTcpPorts().has(explicitRestPort)) {
       return reply.code(409).send({ error: `REST API port ${explicitRestPort} already in use` });
     }
+    // RCON 埠同規則(RCON 預設啟用)。
+    const explicitRconPort = input.settings?.RCONEnabled !== false ? input.settings?.RCONPort : undefined;
+    if (typeof explicitRconPort === "number" && store.usedTcpPorts().has(explicitRconPort)) {
+      return reply.code(409).send({ error: `RCON port ${explicitRconPort} already in use` });
+    }
     let serverDir: string | undefined;
     let serverDirManaged: boolean | undefined;
     if (input.serverDir?.trim()) {
@@ -502,6 +508,17 @@ export function registerRoutes(
     // 沒明給 REST 埠時自動分配唯一值(仿 queryPort 自動分配)。
     if (settings.RESTAPIEnabled && typeof explicitRestPort !== "number") {
       settings.RESTAPIPort = store.nextRestApiPort();
+    }
+    // RCON 預設啟用:沒明給埠就自動分配唯一值;沒設管理員密碼就自動生一組
+    // (RCON 沒密碼不能用;倒數公告/廣播/指令台都靠它。世界設定隨時可改。)
+    if (settings.RCONEnabled) {
+      if (typeof explicitRconPort !== "number") {
+        const avoid = typeof settings.RESTAPIPort === "number" ? [settings.RESTAPIPort] : [];
+        settings.RCONPort = store.nextRconPort(avoid);
+      }
+      if (!settings.AdminPassword) {
+        settings.AdminPassword = crypto.randomBytes(9).toString("base64url");
+      }
     }
     const rec = store.create({
       name: input.name,

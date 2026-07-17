@@ -49,6 +49,9 @@ const QUERY_PORT_BASE = 27015;
 /** REST API 埠的分配起點(Palworld 預設值);往上遞增找沒被占用的。 */
 const REST_PORT_BASE = 8212;
 
+/** RCON 埠的分配起點(Palworld 預設值);往上遞增找沒被占用的。 */
+const RCON_PORT_BASE = 25575;
+
 /**
  * Flat-file store for instance metadata. Container state lives in Docker
  * (labels + inspect); this file is the source of truth for settings only.
@@ -127,6 +130,16 @@ export class InstanceStore {
   nextRestApiPort(): number {
     const used = this.usedTcpPorts();
     let port = REST_PORT_BASE;
+    while (used.has(port)) port++;
+    return port;
+  }
+
+  /** 分配一個沒被任何實例占用(含 REST,同為 TCP)的 RCON 埠(建立實例時用)。
+   *  avoid:同批要建立、還沒進 store 的埠(例:剛分配的 REST 埠)。 */
+  nextRconPort(avoid: Iterable<number> = []): number {
+    const used = this.usedTcpPorts();
+    for (const p of avoid) used.add(p);
+    let port = RCON_PORT_BASE;
     while (used.has(port)) port++;
     return port;
   }

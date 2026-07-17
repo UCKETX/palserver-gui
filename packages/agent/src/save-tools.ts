@@ -56,8 +56,10 @@ const STATS_HISTORY_MAX = 500;
 const TMP_DIR = "health-tmp";
 
 export function palsavAssetName(rec: InstanceRecord): string | null {
-  if (process.arch !== "x64") return null;
+  // 容器後端:轉換器在容器內執行(amd64 映像),與 agent 主機的架構無關。
   if (rec.backend !== "native") return rec.runtime === "wine" ? "palsav-win-x64.exe" : "palsav-linux-x64";
+  // native:二進位直接跑在主機上,才需要看主機架構/平台。
+  if (process.arch !== "x64") return null;
   if (process.platform === "win32") return "palsav-win-x64.exe";
   if (process.platform === "linux") return "palsav-linux-x64";
   return null;

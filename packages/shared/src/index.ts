@@ -637,7 +637,8 @@ export interface BackupSchedule {
 }
 
 export const DEFAULT_BACKUP_SCHEDULE: BackupSchedule = {
-  enabled: false,
+  // 預設啟用:沒動過備份設定的實例自動每小時備份(明確關閉過的照舊)。
+  enabled: true,
   intervalMinutes: 60,
   keep: 10,
   skipWhenEmpty: true,

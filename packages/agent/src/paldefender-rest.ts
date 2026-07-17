@@ -148,6 +148,39 @@ export async function provisionPdToken(
   return fs.existsSync(file);
 }
 
+/** 強化版建立流程用:在「首次啟動前」預先鋪好 REST 設定與 GUI 權杖。
+ * PalDefender 尚未跑過、連 PalDefender/ 目錄都還沒有,所以自己建目錄寫檔;
+ * PalDefender 首次開機讀到 Enabled:true 就直接把 REST API 帶起來,缺的
+ * 欄位由它自己補預設值。伺服器沒在跑,不需要(也無從)reloadcfg。 */
+export function preprovisionPdRest(rec: InstanceRecord, ctx: DriverContext): void {
+  const win64 = path.join(serverRoot(rec, ctx), "Pal", "Binaries", "Win64");
+  const dir = pdDir(rec, ctx) ?? path.join(win64, "PalDefender");
+  const restDir = path.join(dir, "RESTAPI");
+  fs.mkdirSync(restDir, { recursive: true });
+
+  const cfgFile = path.join(restDir, "RESTConfig.json");
+  let cfg: Record<string, unknown> = {};
+  try {
+    cfg = JSON.parse(fs.readFileSync(cfgFile, "utf8"));
+  } catch {
+    /* 尚未生成或壞檔 → 重寫 */
+  }
+  cfg.Enabled = true;
+  cfg.Port ??= 17993;
+  fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 4));
+
+  const tokensDir = path.join(restDir, "Tokens");
+  const tokenFile = path.join(tokensDir, TOKEN_FILE);
+  if (!fs.existsSync(tokenFile)) {
+    fs.mkdirSync(tokensDir, { recursive: true });
+    const token = crypto.randomBytes(32).toString("base64url");
+    fs.writeFileSync(
+      tokenFile,
+      JSON.stringify({ Name: "palserver GUI", Token: token, Permissions: ["REST.*"] }, null, 4),
+    );
+  }
+}
+
 /** Map PalDefender's error codes to something a manager can act on. */
 const PD_ERROR_MESSAGES: Record<string, string> = {
   INVALID_TOKEN: "存取權杖尚未生效 — 請重啟伺服器一次(或確認 RCON 已啟用,讓 agent 能自動載入權杖)",

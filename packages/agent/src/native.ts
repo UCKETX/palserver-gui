@@ -804,6 +804,16 @@ async function autoEnhance(
       log(`[palserver] 強化模式:安裝 ${component}…`);
       const { version } = await mods.installComponent(rec, ctx, component);
       log(`[palserver] ${component} ${version} 安裝完成`);
+      if (component === "paldefender") {
+        // 強化版預設開啟 PalDefender REST API 並先鋪好 GUI 權杖,首次開機即生效
+        try {
+          const pdRest = await import("./paldefender-rest.js");
+          pdRest.preprovisionPdRest(rec, ctx);
+          log("[palserver] PalDefender REST API 已預設啟用(埠 17993),GUI 權杖已就緒");
+        } catch (err) {
+          log(`[palserver] PalDefender REST 預設定失敗(可到 PalDefender 分頁手動開啟):${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     } catch (err) {
       log(
         `[palserver] ${component} 自動安裝失敗(伺服器仍以原生模式啟動,可到「模組」分頁重試):${

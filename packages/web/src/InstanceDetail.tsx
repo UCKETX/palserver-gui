@@ -115,9 +115,9 @@ export function InstanceDetailPage({
       .catch(() => setPalDefender(false));
   }, [client, instanceId]);
   useEffect(() => checkPalDefender(), [checkPalDefender]);
-  // 移除 PalDefender 時人正停在該分頁 → 退回總覽
+  // 移除 PalDefender 時人正停在該分頁 → 退回總覽(帕魯數值不依賴 PalDefender,不在此列)
   useEffect(() => {
-    if ((tab === "paldefender" || tab === "palstats") && !palDefender) setTab("overview");
+    if (tab === "paldefender" && !palDefender) setTab("overview");
   }, [tab, palDefender]);
 
   useEffect(() => {

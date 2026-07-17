@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FiAlertTriangle, FiDownload, FiEdit2, FiList, FiLock, FiStar, FiTrash2 } from "react-icons/fi";
+import { FiAlertTriangle, FiDownload, FiEdit2, FiList, FiStar, FiTrash2 } from "react-icons/fi";
 import { GiSheep } from "react-icons/gi";
 import {
   hasFeature,
@@ -19,7 +19,7 @@ import type { AgentClient } from "./api";
 import { EntityPicker } from "./EntityPicker";
 import { useGameData, palIconUrl, displayName } from "./gameData";
 import { t, useI18n } from "./i18n";
-import { EmptyState, btn, btnGhost, card, errorCls, inputCls, DismissibleWarning } from "./ui";
+import { SponsorLockNotice, EmptyState, btn, btnGhost, card, errorCls, inputCls, DismissibleWarning } from "./ui";
 
 /** 空字串 = 不覆寫(維持既有值 / 交給 PalSchema 原始預設)。 */
 function numOrUndef(v: string): number | undefined {
@@ -122,7 +122,12 @@ export function PalStatsTab({ client, instanceId }: { client: AgentClient; insta
 
   if (!status.schema.supported) {
     return (
-      <EmptyState icon={<GiSheep />}>{status.schema.reason ?? status.reason}</EmptyState>
+      <div className="flex flex-col gap-4">
+        {entitled === false && (
+          <SponsorLockNotice>{t("這是贊助者先行版功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}</SponsorLockNotice>
+        )}
+        <EmptyState icon={<GiSheep />}>{status.schema.reason ?? status.reason}</EmptyState>
+      </div>
     );
   }
 
@@ -206,10 +211,7 @@ export function PalStatsTab({ client, instanceId }: { client: AgentClient; insta
       )}
 
       {locked && (
-        <div className="inline-flex items-center gap-2 rounded-cute border-2 border-sun/40 bg-sun/10 px-3 py-2 text-xs font-bold text-sun">
-          <FiLock className="size-4 shrink-0" />
-          {t("這是贊助者先行版功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}
-        </div>
+        <SponsorLockNotice>{t("這是贊助者先行版功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}</SponsorLockNotice>
       )}
 
       <div className={`${card} flex flex-wrap items-center justify-between gap-2`}>

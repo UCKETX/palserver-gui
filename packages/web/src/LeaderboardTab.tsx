@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiAward, FiDollarSign, FiHelpCircle, FiHome, FiLock, FiRefreshCw, FiTrendingUp, FiUserPlus, FiUsers, FiZap } from "react-icons/fi";
+import { FiAward, FiDollarSign, FiHelpCircle, FiHome, FiRefreshCw, FiTrendingUp, FiUserPlus, FiUsers, FiZap } from "react-icons/fi";
 import type { AutoScanSetting, SaveScanStats, SaveScanGuildStat, SaveScanPlayerStat } from "@palserver/shared";
 import { guildScore, hasFeature, topPalScore } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { displayName, palIconUrl, useGameData, type GameData } from "./gameData";
 import { t, useI18n } from "./i18n";
-import { EmptyState, btnGhost, card, errorCls } from "./ui";
+import { SponsorLockNotice, EmptyState, btnGhost, card, errorCls } from "./ui";
 
 /**
  * 排行榜分頁 — 存檔掃描統計歷史(save-stats-history)驅動。
@@ -133,12 +133,7 @@ export function LeaderboardTab({ client, instanceId }: { client: AgentClient; in
       {error && <p className={errorCls}>{error}</p>}
       {note && !scanning && <EmptyState icon={<FiAward />}>{note}</EmptyState>}
 
-      {locked && (
-        <div className="inline-flex items-center gap-2 rounded-cute border-2 border-sun/40 bg-sun/10 px-3 py-2 text-xs font-bold text-sun">
-          <FiLock className="size-4 shrink-0" />
-          {t("這是贊助者專屬功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}
-        </div>
-      )}
+      {locked && <SponsorLockNotice />}
 
       {!locked && latest && (
         <>

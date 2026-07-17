@@ -41,7 +41,7 @@ import {
 } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { t, useI18n } from "./i18n";
-import { btnGhost, card, errorCls } from "./ui";
+import { EmptyState, btnGhost, card, errorCls } from "./ui";
 
 const fmtUptime = (seconds: number) => {
   const h = Math.floor(seconds / 3600);
@@ -152,11 +152,7 @@ export function PlayersTab({
   if (!live.available) {
     return (
       <div className="flex flex-col gap-4">
-        <div className="rounded-(--radius-cute) border-2 border-dashed border-line px-6 py-10 text-center text-ink-muted">
-          <FiUsers className="mx-auto mb-2 size-11" />
-          <p className="font-bold">{t("目前無法連線到伺服器的 REST API")}</p>
-          <p className="mt-1 text-[13px]">{live.reason}</p>
-        </div>
+        <EmptyState icon={<FiUsers />} title={t("目前無法連線到伺服器的 REST API")}>{live.reason}</EmptyState>
         <KnownPlayersCard
           known={known}
           gameData={gameData}
@@ -489,7 +485,7 @@ function PresenceTimeline({ events }: { events: PresenceEvent[] }) {
         {t("上下線紀錄")}
       </h3>
       {events.length === 0 ? (
-        <p className="px-5 py-8 text-center text-[13px] text-ink-muted">{t("尚無紀錄。")}</p>
+        <EmptyState compact className="m-4">{t("尚無紀錄。")}</EmptyState>
       ) : (
         <div className="max-h-72 overflow-y-auto">
           <div className="flex flex-col divide-y divide-line">

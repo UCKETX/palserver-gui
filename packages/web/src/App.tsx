@@ -35,7 +35,7 @@ import { ThemeToggle } from "./theme";
 import { LangSelect, useI18n, t as translate } from "./i18n";
 import { fmtBytes, fmtDuration, knownCpuSample } from "./PerformanceTab";
 import { WORLD_PRESETS, type WorldPreset } from "@palserver/shared";
-import { InstallProgress, Overlay, Select, StatusBadge, btn, btnGhost, card, errorCls, inputCls, labelCls } from "./ui";
+import { EmptyState, InstallProgress, Overlay, Select, StatusBadge, btn, btnGhost, card, errorCls, inputCls, labelCls } from "./ui";
 
 export default function App() {
   // 全螢幕地圖是前端的另一個入口(/map?instance=<id>),從主介面地圖的外連按鈕開新分頁。
@@ -329,15 +329,9 @@ function Dashboard({ client, onOpen }: { client: AgentClient; onOpen: (id: strin
         <DashboardOverview instances={instances} extras={extras} />
       )}
       {instances === null ? (
-        <div className="rounded-(--radius-cute) border-2 border-dashed border-line px-6 py-12 text-center text-ink-muted">
-          <GiEggClutch className="mx-auto mb-2 size-11 animate-bounce" />
-          {t("載入中…")}
-        </div>
+        <EmptyState icon={<GiEggClutch className="animate-bounce" />}>{t("載入中…")}</EmptyState>
       ) : instances.length === 0 ? (
-        <div className="rounded-(--radius-cute) border-2 border-dashed border-line px-6 py-12 text-center text-ink-muted">
-          <GiSheep className="mx-auto mb-2 size-11" />
-          {t("還沒有伺服器,建立第一個吧!")}
-        </div>
+        <EmptyState icon={<GiSheep />}>{t("還沒有伺服器,建立第一個吧!")}</EmptyState>
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={ordered.map((i) => i.id)} strategy={rectSortingStrategy}>

@@ -19,7 +19,7 @@ import type { AgentClient } from "./api";
 import { EntityPicker } from "./EntityPicker";
 import { useGameData, palIconUrl, displayName } from "./gameData";
 import { t, useI18n } from "./i18n";
-import { btn, btnGhost, card, errorCls, inputCls, DismissibleWarning } from "./ui";
+import { EmptyState, btn, btnGhost, card, errorCls, inputCls, DismissibleWarning } from "./ui";
 
 /** 空字串 = 不覆寫(維持既有值 / 交給 PalSchema 原始預設)。 */
 function numOrUndef(v: string): number | undefined {
@@ -122,10 +122,7 @@ export function PalStatsTab({ client, instanceId }: { client: AgentClient; insta
 
   if (!status.schema.supported) {
     return (
-      <div className="rounded-cute border-2 border-dashed border-line px-6 py-12 text-center text-ink-muted">
-        <GiSheep className="mx-auto mb-2 size-11" />
-        <p className="mt-1 text-[13px]">{status.schema.reason ?? status.reason}</p>
-      </div>
+      <EmptyState icon={<GiSheep />}>{status.schema.reason ?? status.reason}</EmptyState>
     );
   }
 

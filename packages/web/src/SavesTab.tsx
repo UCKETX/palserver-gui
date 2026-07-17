@@ -27,7 +27,7 @@ import type { AgentClient } from "./api";
 import { FileBrowserDialog } from "./FileManager";
 import { HostFixModal } from "./HostFixModal";
 import { t, useI18n } from "./i18n";
-import { btn, btnGhost, card, errorCls, inputCls } from "./ui";
+import { EmptyState, btn, btnGhost, card, errorCls, inputCls } from "./ui";
 
 /** Where a world's .sav files live, relative to the server directory. */
 const worldPath = (guid: string) => `Pal/Saved/SaveGames/0/${guid}`;
@@ -95,11 +95,7 @@ export function SavesTab({
 
   if (!saves.supported && saves.worlds.length === 0 && saves.backups.length === 0) {
     return (
-      <div className="rounded-(--radius-cute) border-2 border-dashed border-line px-6 py-12 text-center text-ink-muted">
-        <FiArchive className="mx-auto mb-2 size-11" />
-        <p className="font-bold">{t("尚無存檔")}</p>
-        <p className="mt-1 text-[13px]">{saves.reason}</p>
-      </div>
+      <EmptyState icon={<FiArchive />} title={t("尚無存檔")}>{saves.reason}</EmptyState>
     );
   }
 
@@ -196,7 +192,7 @@ export function SavesTab({
           {t("備份")}({saves.backups.length})
         </h3>
         {saves.backups.length === 0 ? (
-          <p className="px-5 py-8 text-center text-[13px] text-ink-muted">{t("尚無備份。")}</p>
+          <EmptyState compact className="m-4">{t("尚無備份。")}</EmptyState>
         ) : (
           <div className="flex flex-col divide-y divide-line">
             {saves.backups.map((backup) => (
@@ -369,9 +365,7 @@ function HealthCard({
       )}
 
       {!locked && status && !status.supported && (
-        <div className="rounded-cute border-2 border-dashed border-line px-6 py-6 text-center text-[13px] text-ink-muted">
-          {status.reason}
-        </div>
+        <EmptyState compact>{status.reason}</EmptyState>
       )}
 
       {!locked && error && <p className={errorCls}>{error}</p>}

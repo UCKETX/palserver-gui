@@ -5,7 +5,7 @@ import { guildScore, hasFeature, topPalScore } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { displayName, palIconUrl, useGameData, type GameData } from "./gameData";
 import { t, useI18n } from "./i18n";
-import { btnGhost, card, errorCls } from "./ui";
+import { EmptyState, btnGhost, card, errorCls } from "./ui";
 
 /**
  * 排行榜分頁 — 存檔掃描統計歷史(save-stats-history)驅動。
@@ -126,7 +126,7 @@ export function LeaderboardTab({ client, instanceId }: { client: AgentClient; in
       </div>
 
       {error && <p className={errorCls}>{error}</p>}
-      {note && !scanning && <p className="text-[13px] text-ink-muted">{note}</p>}
+      {note && !scanning && <EmptyState compact>{note}</EmptyState>}
 
       {locked && (
         <div className="inline-flex items-center gap-2 rounded-cute border-2 border-sun/40 bg-sun/10 px-3 py-2 text-xs font-bold text-sun">
@@ -207,10 +207,9 @@ export function LeaderboardTab({ client, instanceId }: { client: AgentClient; in
       )}
 
       {!locked && history && history.length === 0 && (
-        <div className="rounded-cute border-2 border-dashed border-line px-6 py-10 text-center text-ink-muted">
-          <FiAward className="mx-auto mb-2 size-11" />
+        <EmptyState icon={<FiAward />}>
           {t("還沒有排行榜資料。掃描一次存檔就會出現(掃描也會更新健檢與玩家/公會快照)。")}
-        </div>
+        </EmptyState>
       )}
     </div>
   );
@@ -523,7 +522,7 @@ function Board({
         {hint && <HelpTip text={hint} />}
       </p>
       {rows.length === 0 ? (
-        <p className="text-[13px] text-ink-muted">{t("沒有資料")}</p>
+        <EmptyState compact>{t("沒有資料")}</EmptyState>
       ) : (
         <ol className="flex flex-col gap-1.5">
           {rows.map((r, i) => (

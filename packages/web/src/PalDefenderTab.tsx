@@ -15,7 +15,7 @@ import type { AgentClient } from "./api";
 import { FileEditor } from "./FileManager";
 import { RestStatusCard } from "./RestStatusCard";
 import { t, useI18n } from "./i18n";
-import { btn, btnGhost, card, errorCls, inputCls } from "./ui";
+import { EmptyState, btn, btnGhost, card, errorCls, inputCls } from "./ui";
 
 const KEYS = Object.keys(PALDEFENDER_OPTIONS) as PdOptionKey[];
 const RAW_PATH = "Pal/Binaries/Win64/PalDefender/Config.json";
@@ -81,10 +81,7 @@ export function PalDefenderTab({
 
   if (!status.supported) {
     return (
-      <div className="rounded-(--radius-cute) border-2 border-dashed border-line px-6 py-12 text-center text-ink-muted">
-        <FiShield className="mx-auto mb-2 size-11" />
-        <p className="mt-1 text-[13px]">{status.reason}</p>
-      </div>
+      <EmptyState icon={<FiShield />}>{status.reason}</EmptyState>
     );
   }
 

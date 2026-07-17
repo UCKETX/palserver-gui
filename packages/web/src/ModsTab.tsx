@@ -5,7 +5,7 @@ import type { ModComponent, ModsStatus } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { FileBrowserDialog } from "./FileManager";
 import { t, useI18n } from "./i18n";
-import { btn, btnGhost, card, errorCls, DismissibleWarning } from "./ui";
+import { EmptyState, btn, btnGhost, card, errorCls, DismissibleWarning } from "./ui";
 
 const COMPONENTS: {
   id: ModComponent;
@@ -116,10 +116,7 @@ export function ModsTab({
     return (
       <div className="flex flex-col gap-4">
         {error && <p className={errorCls}>{error}</p>}
-        <div className="rounded-(--radius-cute) border-2 border-dashed border-line px-6 py-8 text-center text-ink-muted">
-          <FiPackage className="mx-auto mb-2 size-11" />
-          {mods.reason}
-        </div>
+        <EmptyState icon={<FiPackage />}>{mods.reason}</EmptyState>
         {(mods.serverInstalled ?? true) && (
         <PakModCard
           pakMods={pakMods}
@@ -241,11 +238,11 @@ export function ModsTab({
           </button>
         </div>
         {mods.luaMods.length === 0 ? (
-          <p className="text-[13px] text-ink-muted">
+          <EmptyState compact>
             {mods.luaModsDir === null
               ? t("尚無 Lua 模組。先安裝 UE4SS,之後就能在此上傳與管理模組。")
               : t("尚無 Lua 模組。用上方的「開啟 Lua 模組資料夾」上傳模組資料夾。")}
-          </p>
+          </EmptyState>
         ) : (
           <div className="flex flex-col divide-y divide-line">
             {mods.luaMods.map((m) => (
@@ -279,9 +276,9 @@ export function ModsTab({
           </button>
         </div>
         {mods.pakMods.length === 0 ? (
-          <p className="text-[13px] text-ink-muted">
+          <EmptyState compact>
             {t("尚無 Pak 模組。用上方的「開啟 Paks 資料夾」上傳 .pak 檔(Blueprint 模組放 LogicMods 子資料夾)。")}
-          </p>
+          </EmptyState>
         ) : (
           <ul className="flex flex-col gap-1.5">
             {mods.pakMods.map((name) => (
@@ -352,7 +349,7 @@ function PakModCard({
         {t(".pak 檔放入 Pal/Content/Paks/ 後由遊戲引擎自動載入,不需 UE4SS。透過檔案管理上傳 pak 後在此管理。")}
       </p>
       {pakMods.length === 0 ? (
-        <p className="text-[13px] text-ink-muted">{t("目前沒有 pak 模組。")}</p>
+        <EmptyState compact>{t("目前沒有 pak 模組。")}</EmptyState>
       ) : (
         <ul className="flex flex-col gap-1.5">
           {pakMods.map((mod) => (

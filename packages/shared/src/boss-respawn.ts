@@ -156,9 +156,11 @@ export function bossRespawnInfo(entry: BossStateEntry | null, nowSec: number): B
   };
   if (!entry || entry.alive === null) return none;
   if (entry.alive === true) return { ...none, status: "alive" };
-  // alive === false → 已擊殺
+  // alive === false 是「頭目未實例化」,語意曖昧:可能被擊殺、也可能只是附近沒玩家
+  // 觸發生成。只有「觀測到 活→死 轉變、記下 diedAt」才是確定的擊殺;否則一律未知,
+  // 不可武斷顯示「已擊殺」(否則活著沒玩家在旁的頭目會被誤標為已擊殺)。
   const diedAt = entry.diedAt > 0 ? entry.diedAt : null;
-  if (diedAt === null) return { ...none, status: "dead" };
+  if (diedAt === null) return none;
   const measured = entry.respawnInterval > 0;
   const interval = measured ? entry.respawnInterval : DEFAULT_BOSS_RESPAWN_SECONDS;
   const respawnAt = diedAt + interval;

@@ -58,9 +58,11 @@ test("bossRespawnInfo:有實測 respawnInterval → 優先採用,measured=true",
   assert.equal(r.secondsLeft, measured - 100);
 });
 
-test("bossRespawnInfo:已擊殺但沒觀測到擊殺時間(diedAt<=0)→ dead 但無倒數", () => {
+test("bossRespawnInfo:alive=false 但沒觀測到擊殺(diedAt<=0)→ unknown,不可武斷判已擊殺", () => {
+  // 這是「活著但附近沒玩家、頭目未實例化」與「真被殺但沒目擊」無法區分的曖昧狀態,
+  // 一律當未知,不能顯示「已擊殺」。
   const r = bossRespawnInfo(entry({ alive: false, diedAt: -1 }), 1000);
-  assert.equal(r.status, "dead");
+  assert.equal(r.status, "unknown");
   assert.equal(r.secondsLeft, null);
   assert.equal(r.respawnAt, null);
 });

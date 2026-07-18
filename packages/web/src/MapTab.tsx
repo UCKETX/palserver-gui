@@ -4,7 +4,10 @@ import { GiCrownedSkull, GiMinerals } from "react-icons/gi";
 import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
+  guildColorFromId,
+  hashSeed,
   isWorldTreeCoord,
+  RAID_RADIUS,
   savToMap,
   savToWorldTreeMap,
   type LiveStatus,
@@ -57,12 +60,10 @@ export type MapWorld = "main" | "tree";
 const escapeHtml = (s: string) =>
   s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c);
 
-/** A distinct, stable colour per guild (so a guild's bases and members match). */
-function guildColor(id: string): string {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-  return `hsl(${hash % 360} 70% 52%)`;
-}
+/** A distinct, stable colour per guild (so a guild's bases and members match).
+ * @palserver/shared 的 guildColorFromId —— 公開地圖發布端(packages/agent/src/public-map.ts)
+ * 算據點配色時要用同一顆雜湊,抽到共用套件,這裡改成薄封裝,行為不變。 */
+const guildColor = guildColorFromId;
 
 /** Connection-quality colour from ping (ms): green / amber / red. */
 function pingColor(ping: number): string {
@@ -70,10 +71,6 @@ function pingColor(ping: number): string {
   if (ping < 150) return "#e0a53f";
   return "#e05b5b";
 }
-
-/** How close (in map units, ±1000 span) an online player must be to a base of
- * a *different* guild to flag a possible raid. */
-const RAID_RADIUS = 70;
 
 /** Static landmarks (from paldb.cc's map data; ipos is already in our map coord
  * system). type → colour + i18n label key. */
@@ -116,9 +113,10 @@ interface OreData {
 function avatarIconUrl(seed: string, gameData: GameData | null): string | null {
   const withIcons = gameData?.pals.filter((p) => p.icon) ?? [];
   if (!withIcons.length) return null;
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
-  const pal = withIcons[hash % withIcons.length];
+  // 雜湊演算法抽到 @palserver/shared 的 hashSeed(公開地圖發布端 pickPalAvatarIcon 用同一顆),
+  // 但挑選清單仍是「當下載入的 gameData.pals」(可能被 GitHub raw 背景更新過),不是
+  // shared 那份靜態生成清單 —— 這裡的行為必須跟改之前一模一樣。
+  const pal = withIcons[hashSeed(seed) % withIcons.length];
   return pal.icon ? palIconUrl(pal.icon) : null;
 }
 

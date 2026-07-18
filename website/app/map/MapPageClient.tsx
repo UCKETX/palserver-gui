@@ -3,8 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import dynamic from 'next/dynamic';
-import { getMapDict, pickMapLang, type MapLang } from './i18n';
-import type { MapSnapshotV1, MapWorld, OreData, SnapshotApiResponse, StaticLandmark } from './types';
+import { brandHref, getMapDict, pickMapLang, readStoredMapLang, storeMapLang, type MapLang } from './i18n';
+import MapNav from './MapNav';
+import type { MapSnapshotV1, MapWorld, OreData, SnapshotApiResponse, StaticBoss, StaticLandmark } from './types';
 
 const LeafletMap = dynamic(() => import('./LeafletMap'), { ssr: false });
 
@@ -12,14 +13,6 @@ const PRIMARY_BASE = 'https://stats.iosoftware.ai';
 const BACKUP_BASE = 'https://palserver-stats.iosoftware.workers.dev';
 const POLL_MS = 20_000;
 const STALE_MS = 5 * 60 * 1000;
-
-// 官網品牌延伸:頁首/頁尾的「回官網」連結都指到對應語系首頁,帶 utm 方便日後統計
-// 這個公開地圖幫官網導流多少。/map 不在 [lang] 底下,語系用 MapLang 自己的三碼即可
-// 直接對應官網 locales 的 zh/en/ja(官網另有 zh-CN,地圖沒有就不特別處理)。
-const SITE_URL = 'https://palserver-gui.iosoftware.ai';
-function brandHref(lang: MapLang): string {
-  return `${SITE_URL}/${lang}/?utm_source=public-map`;
-}
 
 type LoadStatus = 'loading' | 'ok' | 'not-found' | 'missing-id' | 'error';
 
@@ -60,12 +53,19 @@ export default function MapPageClient() {
   const shareId = searchParams.get('s');
   const apiOverride = searchParams.get('api');
 
-  // SSR/靜態匯出的第一次渲染沒有 navigator,先用預設繁中,掛載後才切成瀏覽器語言
-  // (避免 hydration 的伺服端/client 文字不一致警告)。
+  // SSR/靜態匯出的第一次渲染沒有 navigator/localStorage,先用預設繁中,掛載後才決定
+  // 真正的顯示語言(避免 hydration 的伺服端/client 文字不一致警告):優先用使用者在
+  // 品牌頂欄手動選過、存在 localStorage 的語言,沒選過才退回瀏覽器語言(pickMapLang)。
   const [lang, setLang] = useState<MapLang>('zh');
   useEffect(() => {
-    setLang(pickMapLang());
+    setLang(readStoredMapLang() ?? pickMapLang());
   }, []);
+  // 品牌頂欄(MapNav)的語言切換行為:跟官網 LangSwitch 不同,官網切站台路由語系,
+  // 這裡切 viewer 自身顯示語言的 client state,並記住選擇。
+  const handleLangChange = (l: MapLang) => {
+    setLang(l);
+    storeMapLang(l);
+  };
   const d = getMapDict(lang);
 
   const [status, setStatus] = useState<LoadStatus>('loading');
@@ -78,15 +78,20 @@ export default function MapPageClient() {
   const [showOffline, setShowOffline] = useState(false);
   const [showBases, setShowBases] = useState(true);
   const [showLandmarks, setShowLandmarks] = useState(true);
+  // 野外頭目預設開:跟 GUI 的呈現方式一致性優先於「預設收合」——這裡沒有 GUI 那邊的
+  // 贊助者 gating(靜態資料,人人可見),沒有理由預設藏起來。
+  const [showBosses, setShowBosses] = useState(true);
   // 礦物層預設關:~3.9k 個點,手機效能考量,使用者要看再自己開。
   const [showOres, setShowOres] = useState(false);
 
   const [landmarks, setLandmarks] = useState<StaticLandmark[]>([]);
   const [treeLandmarks, setTreeLandmarks] = useState<StaticLandmark[]>([]);
+  const [bosses, setBosses] = useState<StaticBoss[]>([]);
+  const [treeBosses, setTreeBosses] = useState<StaticBoss[]>([]);
   const [ores, setOres] = useState<OreData | null>(null);
   const [treeOres, setTreeOres] = useState<OreData | null>(null);
 
-  // 靜態地標/礦物(隨網站一起打包,只載一次;缺檔就當沒有這個圖層)。
+  // 靜態地標/野外頭目/礦物(隨網站一起打包,只載一次;缺檔就當沒有這個圖層)。
   useEffect(() => {
     fetch('/map-assets/landmarks.json')
       .then((r) => (r.ok ? (r.json() as Promise<StaticLandmark[]>) : []))
@@ -96,6 +101,14 @@ export default function MapPageClient() {
       .then((r) => (r.ok ? (r.json() as Promise<StaticLandmark[]>) : []))
       .then((v) => setTreeLandmarks(Array.isArray(v) ? v : []))
       .catch(() => setTreeLandmarks([]));
+    fetch('/map-assets/bosses.json')
+      .then((r) => (r.ok ? (r.json() as Promise<StaticBoss[]>) : []))
+      .then((v) => setBosses(Array.isArray(v) ? v : []))
+      .catch(() => setBosses([]));
+    fetch('/map-assets/worldtree-bosses.json')
+      .then((r) => (r.ok ? (r.json() as Promise<StaticBoss[]>) : []))
+      .then((v) => setTreeBosses(Array.isArray(v) ? v : []))
+      .catch(() => setTreeBosses([]));
     fetch('/map-assets/ores.json')
       .then((r) => (r.ok ? (r.json() as Promise<OreData>) : null))
       .then((v) => setOres(v && Array.isArray(v.spots) ? v : null))
@@ -161,6 +174,7 @@ export default function MapPageClient() {
   const showNames = snapshot?.show?.names !== false;
   const showGuildNames = snapshot?.show?.guildNames !== false;
   const landmarksAvailable = landmarks.length > 0 || treeLandmarks.length > 0;
+  const bossesAvailable = bosses.length > 0 || treeBosses.length > 0;
   const oresAvailable = (ores?.spots.length ?? 0) > 0 || (treeOres?.spots.length ?? 0) > 0;
 
   if (status === 'missing-id') {
@@ -181,20 +195,16 @@ export default function MapPageClient() {
 
   return (
     <div className="map2-page">
-      <header className="map2-header">
-        <a className="map2-brand" href={brandHref(lang)} target="_blank" rel="noopener noreferrer">
-          <span className="map2-brand-mark">
-            <img src="/assets/logo.png" alt="" width={30} height={30} />
-          </span>
-          <span className="map2-brand-name">palserver</span>
-        </a>
-        <div className="map2-spacer" />
+      <MapNav lang={lang} onLangChange={handleLangChange} d={d} />
+
+      <div className="map2-status">
         <div className="map2-title">
           <span className="map2-servername">{snapshot.name || '—'}</span>
           <span className="map2-online">{d.online(snapshot.onlineCount, snapshot.maxPlayers)}</span>
         </div>
+        <div className="map2-spacer" />
         {agoText && <span className="map2-ago">{agoText}</span>}
-      </header>
+      </div>
 
       {isStale && <div className="map2-banner">{d.offlineBanner}</div>}
 
@@ -208,6 +218,9 @@ export default function MapPageClient() {
         {basesAvailable && <ToggleBtn active={showBases} onClick={() => setShowBases((v) => !v)} label={d.bases} />}
         {landmarksAvailable && (
           <ToggleBtn active={showLandmarks} onClick={() => setShowLandmarks((v) => !v)} label={d.landmarks} />
+        )}
+        {bossesAvailable && (
+          <ToggleBtn active={showBosses} onClick={() => setShowBosses((v) => !v)} label={d.fieldBoss} />
         )}
         {oresAvailable && <ToggleBtn active={showOres} onClick={() => setShowOres((v) => !v)} label={d.ores} />}
         {/* 世界切換恆在:即使快照裡沒有任何 m:"tree" 的動態標記(伺服器上沒人在世界樹),
@@ -235,12 +248,15 @@ export default function MapPageClient() {
             snapshot={snapshot}
             landmarks={landmarks}
             treeLandmarks={treeLandmarks}
+            bosses={bosses}
+            treeBosses={treeBosses}
             ores={ores}
             treeOres={treeOres}
             showPlayers={showPlayers}
             showOffline={showOffline}
             showBases={showBases}
             showLandmarks={showLandmarks}
+            showBosses={showBosses}
             showOres={showOres}
             showNames={showNames}
             showGuildNames={showGuildNames}
@@ -266,7 +282,9 @@ function ToggleBtn({ active, onClick, label }: { active: boolean; onClick: () =>
   );
 }
 
-/** 品牌鎖印(logo 徽章 + 「palserver」字標),頭欄與各狀態頁共用,一律連回官網對應語系首頁。 */
+/** 品牌鎖印(logo 徽章 + 「palserver」字標):載入中/缺參數/連結失效等狀態頁共用,
+ * 一律連回官網對應語系首頁。資料載入成功後的正式頁面改用品牌頂欄 MapNav(與官網
+ * Nav.tsx 視覺一致),不再走這個較小的鎖印版本。 */
 function BrandLockup({ lang, className }: { lang: MapLang; className?: string }) {
   return (
     <a

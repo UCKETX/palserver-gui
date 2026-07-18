@@ -9,6 +9,8 @@ export * from "./paldefender-options.js";
 export * from "./pal-stats-options.js";
 export * from "./features.js";
 export * from "./world-presets.js";
+export * from "./map-helpers.js";
+export * from "./pal-avatars.generated.js";
 
 /** Value type an option can hold at runtime. */
 export type WorldOptionValue = string | number | boolean;
@@ -1240,6 +1242,13 @@ export interface PublicMapPlayerPoint {
   x: number;
   y: number;
   m: PublicMapArea;
+  /** 頭像圖示檔名(game-data/pals/ 內的裸檔名,與 GUI PlayerAvatar 同一顆雜湊 +
+   *  同一份候選清單挑出來的 —— 見 pickPalAvatarIcon)。URL 前綴由消費端決定。 */
+  icon?: string;
+  /** 偷襲警告:這個(在線)玩家目前站在「非自己公會」的據點附近(RAID_RADIUS 內)。
+   *  只有 showPlayers 與 showBases 兩個圖層都開啟時才會算、才會出現這個欄位;
+   *  離線玩家一律不計算(對齊 GUI 只對在線玩家判定的行為)。 */
+  warn?: boolean;
 }
 
 /** 快照裡的一個公會據點。 */
@@ -1249,6 +1258,9 @@ export interface PublicMapBasePoint {
   m: PublicMapArea;
   /** 公會名 — 只有「顯示公會名稱」開啟且贊助者授權(guild-map)才有,否則整欄省略。 */
   g?: string;
+  /** 公會配色(HSL 字串,guildColorFromId(guildId) 算好的)。跟 g 是獨立開關 ——
+   *  顏色本身不洩漏公會名稱,showGuildNames 關閉時仍可能帶這個欄位。 */
+  c?: string;
 }
 
 /** 公開地圖快照格式 v1 — 雲端 Worker 與公開 viewer 依此消費,欄位名不可改。

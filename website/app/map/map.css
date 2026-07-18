@@ -56,7 +56,47 @@
   color: var(--ink);
 }
 
-.map2-header {
+/* 品牌頂欄:MapNav.tsx 直接渲染官網 Nav.tsx 同一套 <nav>/.logo/.navctl/.menu 結構,
+   樣式全部繼承 app/globals.css 的 nav 規則(那些是標籤/class 選擇器,沒有 CSS module
+   隔離,任何頁面渲染出同樣的 DOM 就會套用同一份視覺)——這裡不用再重畫一次。
+   `nav`(整個元素)補一個 flex-shrink:0,跟下面幾個 .map2-page 直屬子層一致,避免
+   視窗矮的時候被 flex 演算法擠壓。 */
+.map2-page > nav {
+  flex-shrink: 0;
+}
+/* MapNav 的語言切換用 <button>(沒有網址可切,是純 client state)不是官網 LangSwitch
+   的 <a>,globals.css 的 `nav .lang a` 選擇器扣不到 button 標籤,這裡補一份等價規則,
+   數值逐一對齊 app/globals.css:295-298,視覺上跟官網完全一樣。 */
+nav .lang button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  padding: 4px 11px;
+  border-radius: 999px;
+  white-space: nowrap;
+  line-height: 1;
+  transition: color 0.15s ease, background 0.15s ease;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  appearance: none;
+}
+nav .lang button:hover {
+  color: var(--ink);
+}
+nav .lang button.on {
+  background: var(--pal);
+  color: var(--on-pal);
+}
+
+/* 伺服器狀態列(第二層):伺服器名/在線數/更新時間,在品牌頂欄(MapNav)下面自成一列
+   ——品牌頂欄已經用官網 nav 的視覺語言,這裡維持原本頭欄的排版數值(留白/字級/斷行),
+   只是拿掉了以前擠在同一列的品牌鎖印。 */
+.map2-status {
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -67,8 +107,10 @@
   background: var(--nav);
   backdrop-filter: blur(12px);
 }
-/* 品牌鎖印:尺寸/圓角原樣抄官網 nav .logo(website/app/globals.css:30-32),
-   點擊連回官網對應語系首頁,是這頁「官網品牌延伸」外框的視覺錨點。 */
+/* 品牌鎖印:尺寸/圓角原樣抄官網 nav .logo(website/app/globals.css:30-32)。現在只有
+   載入中/缺參數/連結失效等狀態頁(MapPageClient.tsx 的 BrandLockup)在用這組 class
+   ——資料載入成功後的正式頁面已改用品牌頂欄 MapNav(渲染真正的 nav .logo),不再需要
+   這裡的手刻對照版本。點擊一律連回官網對應語系首頁。 */
 .map2-brand {
   display: inline-flex;
   align-items: center;
@@ -98,8 +140,9 @@
   border-radius: 9px;
   display: block;
 }
-/* 官網 nav 的等效寫法是 `nav .sp{flex:1}`(scoped 在 <nav> 底下),這裡不在 <nav>
-   裡,所以另開一個同義的 class 把品牌鎖印跟伺服器資訊推到頭欄兩端。 */
+/* 官網 nav 的等效寫法是 `nav .sp{flex:1}`(scoped 在 <nav> 底下,MapNav.tsx 的 .sp 就是
+   直接沿用那份規則)。這個 class 是給不在 <nav> 裡的 .map2-status 列用的同義寫法,
+   把伺服器名/在線數跟更新時間推到那一列的兩端。 */
 .map2-spacer {
   flex: 1;
 }
@@ -232,6 +275,12 @@
   padding: 2px 20px 20px;
 }
 .map2-card {
+  /* 地圖底圖周圍的留白 —— 底圖(palworld-full-map.jpg)本身是坐落在近黑深色上的,淺色留白
+     會在深色底圖外圈出一道白邊,很突兀。所以這裡固定用 GUI 深色主題地圖的那個深紫近黑
+     (--color-sky-soft dark = #232030,packages/web/src/styles.css),不跟隨頁面亮/暗主題:
+     頁面外框走官網淺色品牌語言,但地圖畫布本身一律深色,跟遊戲底圖無縫銜接、也對齊使用者
+     慣看的管理員(深色)地圖背景。 */
+  --map2-canvas-bg: #232030;
   flex: 1;
   min-height: 0;
   position: relative;
@@ -239,12 +288,18 @@
   overflow: hidden;
   border: 1.5px solid var(--line);
   box-shadow: var(--shadow);
-  background: var(--card-2);
+  background: var(--map2-canvas-bg);
 }
 .map2-canvas {
   width: 100%;
   height: 100%;
-  background: var(--card-2);
+  /* !important:.map2-canvas 就是 Leaflet 的容器本身(L.map() 綁定的那個 div),Leaflet 會
+     幫它加上 .leaflet-container class;leaflet.css 對 .leaflet-container 定了
+     `background:#ddd`,且 leaflet.css 是 LeafletMap.tsx 用 next/dynamic 動態載入時才注入
+     的(晚於這份靜態 map.css),同特異度下後載入的會贏 —— 實測若不加 !important,畫布背景
+     會被蓋成 leaflet.css 的預設灰底(#ddd),不是這裡指定的 --map2-canvas-bg。跟下面
+     .leaflet-control-zoom 的 !important 是同一個原因。 */
+  background: var(--map2-canvas-bg) !important;
 }
 /* Leaflet 內建縮放控制的外觀重上一層皮,跟卡片圓角/邊框語言一致;
    marker/徽章本身(markerIcon.ts、.pmap2-*)完全沒動,只有這個地圖 UI 控制項。 */
@@ -281,43 +336,40 @@
   opacity: 0.72;
 }
 
-/* 圓形徽章體系 — 玩家/離線玩家/公會據點/地標共用同一套視覺(圓形、描邊、卡片底、陰影),
-   對齊 packages/web/src/MapTab.tsx 的 .pmap-avatar 語言。各類型只靠 inline style(尺寸/
-   描邊色/底色)與少數修飾 class 分化,細節見 markerIcon.ts。 */
-.leaflet-div-icon.pmap2-badge-wrap {
+/* ══ Marker 視覺體系 — 逐一對齊 packages/web/src/MapTab.tsx 的四套系統(玩家頭像
+   .pmap-avatar、公會據點 .pmap-base、野外頭目 .pmap-boss、靜態地標的原生 L.icon 無包裝)。
+   class 前綴 pmap2- 是本站命名空間,規則內容(尺寸/邊框寬度/陰影/hover/動畫)逐一比對
+   styles.css 抄過來;背景色 token 換成本站的 --card/--card-2(語意對應 GUI 的
+   --color-card/--color-card-soft,色值不同但用途相同)。地標(Fast Travel/Tower/Dungeon)
+   GUI 完全沒有徽章包裝,所以這裡沒有對應的 CSS —— 直接是 <img>,見 LeafletMap.tsx。 ══ */
+
+/* ── 玩家 / 離線玩家頭像:對齊 .pmap-avatar 系列(styles.css:433-483)── */
+.leaflet-div-icon.pmap2-avatar-wrap {
   background: transparent;
   border: none;
 }
-.pmap2-badge {
-  position: absolute;
-  left: 0;
-  top: 0;
-  display: flex;
+.pmap2-avatar {
+  position: relative;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
-  padding: 3px;
   border-radius: 9999px;
   border: 2px solid #fff;
-  background: var(--card);
+  background: var(--card-2);
   box-shadow: 0 1px 5px rgb(0 0 0 / 0.45);
   transition: transform 0.1s;
-  overflow: hidden;
 }
-.pmap2-badge-wrap:hover .pmap2-badge {
+.pmap2-avatar-wrap:hover .pmap2-avatar {
   transform: scale(1.12);
 }
-/* 據點/地標的徽章描邊粗一點,跟玩家的細框拉出層級。 */
-.pmap2-badge--thick {
-  border-width: 3px;
-}
-.pmap2-badge img {
+.pmap2-avatar img {
   width: 100%;
   height: 100%;
-  object-fit: contain;
-  filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.4));
+  object-fit: cover;
+  border-radius: 9999px;
 }
-.pmap2-badge-initial {
+.pmap2-avatar-initial {
+  /* font-size 由 markerIcon.ts 用 inline style 依徽章像素尺寸算(見 playerAvatarIcon)。 */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -327,12 +379,111 @@
   font-weight: 800;
   line-height: 1;
 }
-/* 離線玩家:變暗 + 去飽和,同 GUI 的 .pmap-avatar.pmap-offline。 */
-.pmap2-badge-offline {
-  opacity: 0.55;
-  filter: grayscale(0.4);
+/* 離線玩家:變暗 + 去飽和 + 較淡的陰影,同 GUI 的 .pmap-avatar.pmap-offline
+   (這條規則會整個換掉上面 .pmap2-avatar 的 box-shadow,不是疊加 —— 跟 GUI 一致)。 */
+.pmap2-avatar.pmap2-avatar-offline {
+  opacity: 0.5;
+  filter: grayscale(0.45);
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.35);
 }
+/* 偷襲警告:紅色脈動 halo,同 GUI 的 .pmap-avatar.pmap-raid / @keyframes pmap-raid-pulse。 */
+.pmap2-avatar.pmap2-avatar-raid {
+  animation: pmap2-raid-pulse 1.2s ease-in-out infinite;
+}
+@keyframes pmap2-raid-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px rgb(224 91 91 / 0.5), 0 1px 5px rgb(0 0 0 / 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgb(224 91 91 / 0.85), 0 1px 5px rgb(0 0 0 / 0.45);
+  }
+}
+
+/* ── 公會據點:對齊 .pmap-base 系列(styles.css:485-507)── 圓角方形,不是圓形。 */
+.leaflet-div-icon.pmap2-base-wrap {
+  background: transparent;
+  border: none;
+}
+.pmap2-base {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 3px;
+  border-radius: 10px;
+  border: 3px solid #fff; /* 用 inline style 蓋成公會配色 */
+  background: var(--card);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.45);
+}
+.pmap2-base img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.4));
+}
+
+/* ── 野外頭目(Alpha Pal):對齊 .pmap-boss 系列(styles.css:509-567)── 紅框圓形頭像 +
+   金色皇冠徽章 + 等級藥丸,刻意跟玩家頭像/據點都不一樣。 */
+.leaflet-div-icon.pmap2-boss-wrap {
+  background: transparent;
+  border: none;
+}
+.pmap2-boss {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 2.5px solid #e05b5b;
+  background: var(--card-2);
+  box-shadow: 0 0 0 2px rgb(224 91 91 / 0.35), 0 1px 5px rgb(0 0 0 / 0.5);
+  transition: transform 0.1s;
+}
+.pmap2-boss-wrap:hover .pmap2-boss {
+  transform: scale(1.12);
+}
+.pmap2-boss img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 9999px;
+}
+.pmap2-boss .pmap2-boss-badge {
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #e05b5b;
+  color: #ffd94a;
+  border: 1.5px solid var(--card);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+}
+.pmap2-boss .pmap2-boss-lv {
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 20px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 14px;
+  text-align: center;
+  color: #fff;
+  background: #e05b5b;
+  border-radius: 9999px;
+  border: 1.5px solid var(--card);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+}
+
 .pmap2-label {
   /* left/top 由呼叫端(markerIcon.ts 的 nameLabelHtml)依徽章尺寸算好,用 inline style 帶。 */
   position: absolute;
@@ -360,18 +511,13 @@
 }
 
 @media (max-width: 480px) {
-  .map2-header {
+  /* 品牌頂欄(MapNav 渲染的 <nav>)手機收納:跟官網首頁完全同一套斷點/行為(見
+     app/globals.css:66-69 的 860px 斷點,`.navctl` 收進漢堡選單),480px 這層不必
+     另外處理——保持跟官網一致才是「視覺完全一致」的重點。 */
+  /* 伺服器狀態列收成單行:更新時間讓位給伺服器名/在線數。 */
+  .map2-status {
     padding: 8px 12px;
     gap: 6px 10px;
-  }
-  /* 手機頂欄收成單行:字標與更新時間讓位給伺服器名/在線數,logo 徽章仍可點回官網。 */
-  .map2-brand-name {
-    display: none;
-  }
-  .map2-brand-mark {
-    width: 25px;
-    height: 25px;
-    border-radius: 8px;
   }
   .map2-ago {
     display: none;

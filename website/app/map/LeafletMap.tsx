@@ -3,9 +3,9 @@
 import { useEffect, useRef } from 'react';
 import * as L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { getMapDict, type MapLang } from './i18n';
-import type { MapSnapshotV1, MapWorld, OreData, StaticLandmark } from './types';
-import { badgeIcon, initialHtml, letterColor, nameLabelHtml } from './markerIcon';
+import { getMapDict, pickLocalizedName, type MapLang } from './i18n';
+import type { MapSnapshotV1, MapWorld, OreData, StaticBoss, StaticLandmark } from './types';
+import { bossMarkerIcon, baseMarkerIcon, hashColor, nameLabelHtml, playerAvatarIcon, PLAYER_AVATAR_SIZE } from './markerIcon';
 
 // 底圖與座標邊界:原樣抄自 packages/web/src/MapTab.tsx:36-52(GUI 本體的即時地圖用
 // 同一組常數)。快照裡的 x/y 已經是 agent 端算好的「地圖座標」,不是存檔原始世界座標,
@@ -18,16 +18,18 @@ const TREE_IMAGE_BOUNDS = L.latLngBounds([-1000, -1000], [1000, 1000]);
 const escapeHtml = (s: string) =>
   s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c);
 
-/** 每個公會名一個穩定色(同 packages/web/src/MapTab.tsx 的 guildColor)。 */
-function guildColor(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
-  return `hsl(${hash % 360} 70% 52%)`;
-}
+/** 帕魯圖鑑頭像的完整 URL —— 快照/靜態 JSON 裡只帶裸檔名(game-data/pals/ 內的檔名),
+ *  copy-map-assets.mjs 把被引用到的檔案複製進 /map-assets/pal-avatars/。 */
+const palAvatarUrl = (icon: string) => `/map-assets/pal-avatars/${icon}`;
 
-const LANDMARK_ICON: Record<string, { icon: string; size: number }> = {
+/** 靜態地標(Fast Travel / Tower / Dungeon):圖示資產、尺寸原樣照抄
+ * packages/web/src/MapTab.tsx 的 LANDMARK_STYLE(:88-92)。GUI 端這層完全沒有徽章包裝
+ * (L.icon 直接是一張置中的 <img>,無外框/無陰影),這裡刻意不經過 markerIcon.ts 的
+ * badge 產生器,原樣重現。 */
+const LANDMARK_STYLE: Record<string, { icon: string; size: number }> = {
   'Fast Travel': { icon: '/map-assets/landmark-icons/fasttravel.png', size: 26 },
   Tower: { icon: '/map-assets/landmark-icons/tower.png', size: 30 },
+  Dungeon: { icon: '/map-assets/landmark-icons/dungeon.png', size: 22 },
 };
 
 export default function LeafletMap({
@@ -35,12 +37,15 @@ export default function LeafletMap({
   snapshot,
   landmarks,
   treeLandmarks,
+  bosses,
+  treeBosses,
   ores,
   treeOres,
   showPlayers,
   showOffline,
   showBases,
   showLandmarks,
+  showBosses,
   showOres,
   showNames,
   showGuildNames,
@@ -50,12 +55,15 @@ export default function LeafletMap({
   snapshot: MapSnapshotV1;
   landmarks: StaticLandmark[];
   treeLandmarks: StaticLandmark[];
+  bosses: StaticBoss[];
+  treeBosses: StaticBoss[];
   ores: OreData | null;
   treeOres: OreData | null;
   showPlayers: boolean;
   showOffline: boolean;
   showBases: boolean;
   showLandmarks: boolean;
+  showBosses: boolean;
   showOres: boolean;
   showNames: boolean;
   showGuildNames: boolean;
@@ -140,7 +148,7 @@ export default function LeafletMap({
     for (const s of data.spots) {
       const ty = data.types[s.t];
       if (!ty) continue;
-      const name = ty.name[lang] || ty.name.en;
+      const name = pickLocalizedName(ty.name, lang);
       L.circleMarker([s.y, s.x], {
         renderer,
         radius: ty.big ? 6 : 3.5,
@@ -157,7 +165,8 @@ export default function LeafletMap({
     }
   }, [ores, treeOres, showOres, lang, world]);
 
-  // 畫標記:玩家(在線/離線)、據點、靜態地標。快照數量小(<100),DOM marker 就夠。
+  // 畫標記:玩家(在線/離線)、公會據點、野外頭目、靜態地標。快照數量小(<100),
+  // DOM marker 就夠。
   useEffect(() => {
     const group = markersRef.current;
     if (!group) return;
@@ -165,20 +174,22 @@ export default function LeafletMap({
 
     const inWorld = (m: string | undefined) => (m === 'tree') === (world === 'tree');
     const curLandmarks = world === 'tree' ? treeLandmarks : landmarks;
+    const curBosses = world === 'tree' ? treeBosses : bosses;
 
+    // 靜態地標(Fast Travel / Tower / Dungeon):跟 GUI 一樣完全沒有徽章包裝,直接是
+    // 一張置中的 <img>(L.icon,不經過 markerIcon.ts 的 divIcon 產生器)。
     if (showLandmarks) {
       for (const lm of curLandmarks) {
-        const style = LANDMARK_ICON[lm.type];
-        if (!style) continue; // 只顯示 Fast Travel / Tower,其餘(如 Dungeon)這頁不畫
-        const icon = badgeIcon({
-          size: style.size,
-          ring: 'var(--pal)',
-          contentHtml: `<img src="${style.icon}" alt="" />`,
-          wrapClass: 'pmap2-badge-wrap',
-          extraClass: 'pmap2-badge--thick',
+        const style = LANDMARK_STYLE[lm.type];
+        if (!style) continue; // 未知類型:跟 GUI 一樣略過,不畫
+        const icon = L.icon({
+          iconUrl: style.icon,
+          iconSize: [style.size, style.size],
+          iconAnchor: [style.size / 2, style.size / 2],
+          className: 'pmap2-landmark',
         });
-        const name = lm.name[lang] || lm.name.en || '';
-        const typeLabel = lm.type === 'Tower' ? d.tower : d.fastTravel;
+        const name = pickLocalizedName(lm.name, lang);
+        const typeLabel = lm.type === 'Tower' ? d.tower : lm.type === 'Dungeon' ? d.dungeon : d.fastTravel;
         L.marker([lm.y, lm.x], { icon })
           .bindTooltip(
             `<div style="font-weight:800">${escapeHtml(name)}</div>` +
@@ -189,17 +200,30 @@ export default function LeafletMap({
       }
     }
 
+    // 野外頭目(Alpha Pal):紅框頭像 + 皇冠徽章 + 等級,對齊 GUI 的 pmap-boss。
+    if (showBosses) {
+      for (const b of curBosses) {
+        const iconUrl = b.icon ? palAvatarUrl(b.icon) : null;
+        const icon = bossMarkerIcon(iconUrl, b.lv);
+        const name = pickLocalizedName(b.name, lang);
+        L.marker([b.y, b.x], { icon, riseOnHover: true })
+          .bindTooltip(
+            `<div style="font-weight:800">${escapeHtml(name)}</div>` +
+              `<div>${escapeHtml(d.fieldBoss)}${b.lv ? ` · Lv.${b.lv}` : ''}</div>`,
+            { direction: 'top', className: 'pmap2-tooltip' },
+          )
+          .addTo(group);
+      }
+    }
+
+    // 公會據點:Palbox 圖示 + 公會配色圓角方框,對齊 GUI 的 pmap-base。配色優先用
+    // agent 算好的 c(guildColorFromId,跟 GUI 完全同演算法);舊快照沒有 c 時退回
+    // 「依公會名雜湊」的舊版配色(僅供沒有 c 欄位的過渡期快照使用)。
     if (showBases) {
       for (const b of snapshot.bases ?? []) {
         if (!inWorld(b.m)) continue;
-        const color = b.g ? guildColor(b.g) : '#9aa3b5';
-        const icon = badgeIcon({
-          size: 30,
-          ring: color,
-          contentHtml: `<img src="/map-assets/landmark-icons/palbox.webp" alt="" />`,
-          wrapClass: 'pmap2-badge-wrap',
-          extraClass: 'pmap2-badge--thick',
-        });
+        const color = b.c ?? (b.g ? hashColor(b.g) : '#9aa3b5');
+        const icon = baseMarkerIcon(color);
         const marker = L.marker([b.y, b.x], { icon });
         if (showGuildNames && b.g) {
           marker.bindTooltip(`<div style="font-weight:800">${escapeHtml(b.g)}</div><div>${escapeHtml(d.bases)}</div>`, {
@@ -231,10 +255,13 @@ export default function LeafletMap({
     snapshot,
     landmarks,
     treeLandmarks,
+    bosses,
+    treeBosses,
     showPlayers,
     showOffline,
     showBases,
     showLandmarks,
+    showBosses,
     showNames,
     showGuildNames,
     lang,
@@ -244,30 +271,32 @@ export default function LeafletMap({
   return <div ref={containerRef} className="map2-canvas" />;
 }
 
-// 玩家徽章:圓形、雜湊色底 + 名字首字母(見 markerIcon.ts 的說明 —— viewer 沒有真人頭像
-// 可用)。線上白框,離線用灰框 + 變暗,對齊 GUI 的 .pmap-avatar / .pmap-avatar.pmap-offline。
-const PLAYER_SIZE = 32;
+// 玩家徽章:對齊 GUI 的 pmap-avatar —— 有 icon(agent 算好的隨機帕魯頭像)就用圖,
+// 沒有就退回首字母徽章(viewer 既有的 fallback 設計,見 markerIcon.ts 的說明)。線上白框、
+// 離線灰框 + 變暗,偷襲警告紅色脈動 halo,皆對齊 GUI 的 .pmap-avatar 系列樣式。
 
 function addPlayerDot(
   group: L.LayerGroup,
-  p: { n: string; lv: number; x: number; y: number },
+  p: { n: string; lv: number; x: number; y: number; icon?: string; warn?: boolean },
   opts: { offline: boolean; showNames: boolean; lang: MapLang; d: ReturnType<typeof getMapDict> },
 ) {
   const { offline, showNames, d } = opts;
   const name = p.n || '—';
-  const icon = badgeIcon({
-    size: PLAYER_SIZE,
+  const iconUrl = p.icon ? palAvatarUrl(p.icon) : null;
+  const labelHtml = showNames ? nameLabelHtml(escapeHtml(name), PLAYER_AVATAR_SIZE, { offline }) : '';
+  const icon = playerAvatarIcon({
+    iconUrl,
+    name,
     ring: offline ? '#8a94a3' : '#ffffff',
-    background: letterColor(name),
-    contentHtml: initialHtml(name, PLAYER_SIZE),
-    wrapClass: 'pmap2-badge-wrap',
-    extraClass: offline ? 'pmap2-badge-offline' : '',
-    labelHtml: showNames ? nameLabelHtml(escapeHtml(name), PLAYER_SIZE, { offline }) : '',
+    offline,
+    raid: !offline && !!p.warn,
+    labelHtml,
   });
   const marker = L.marker([p.y, p.x], { icon, riseOnHover: true });
   marker.bindTooltip(
     `<div style="font-weight:800">${escapeHtml(name)}</div>` +
-      `<div>${d.lv}${p.lv}${offline ? ` · ${escapeHtml(d.lastSeenAt)}` : ''}</div>`,
+      `<div>${d.lv}${p.lv}${offline ? ` · ${escapeHtml(d.lastSeenAt)}` : ''}</div>` +
+      (p.warn ? `<div style="color:#e05b5b;font-weight:700">${escapeHtml(d.raidWarning)}</div>` : ''),
     { direction: 'top', className: 'pmap2-tooltip' },
   );
   marker.addTo(group);

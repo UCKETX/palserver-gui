@@ -57,3 +57,17 @@ export interface StaticLandmark {
 }
 
 export type MapWorld = 'main' | 'tree';
+
+/** 礦物靜態圖層:抄自 packages/web/src/MapTab.tsx 的 OreData 形狀,資料來源
+ * game-data/ores.json / worldtree-ores.json(scripts/copy-map-assets.mjs 同步)。 */
+export interface OreType {
+  name: { en: string; zh: string; 'zh-CN'?: string; zhCN?: string; ja: string };
+  icon: string;
+  color: string;
+  big?: boolean;
+}
+
+export interface OreData {
+  types: Record<string, OreType>;
+  spots: { t: string; x: number; y: number }[];
+}

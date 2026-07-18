@@ -4,7 +4,8 @@ import { useEffect, useRef } from 'react';
 import * as L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { getMapDict, type MapLang } from './i18n';
-import type { MapSnapshotV1, MapWorld, StaticLandmark } from './types';
+import type { MapSnapshotV1, MapWorld, OreData, StaticLandmark } from './types';
+import { badgeIcon, initialHtml, letterColor, nameLabelHtml } from './markerIcon';
 
 // 底圖與座標邊界:原樣抄自 packages/web/src/MapTab.tsx:36-52(GUI 本體的即時地圖用
 // 同一組常數)。快照裡的 x/y 已經是 agent 端算好的「地圖座標」,不是存檔原始世界座標,
@@ -34,10 +35,13 @@ export default function LeafletMap({
   snapshot,
   landmarks,
   treeLandmarks,
+  ores,
+  treeOres,
   showPlayers,
   showOffline,
   showBases,
   showLandmarks,
+  showOres,
   showNames,
   showGuildNames,
   lang,
@@ -46,10 +50,13 @@ export default function LeafletMap({
   snapshot: MapSnapshotV1;
   landmarks: StaticLandmark[];
   treeLandmarks: StaticLandmark[];
+  ores: OreData | null;
+  treeOres: OreData | null;
   showPlayers: boolean;
   showOffline: boolean;
   showBases: boolean;
   showLandmarks: boolean;
+  showOres: boolean;
   showNames: boolean;
   showGuildNames: boolean;
   lang: MapLang;
@@ -59,6 +66,8 @@ export default function LeafletMap({
   const mapRef = useRef<L.Map | null>(null);
   const boundsRef = useRef<L.LatLngBounds>(IMAGE_BOUNDS);
   const markersRef = useRef<L.LayerGroup | null>(null);
+  const oresGroupRef = useRef<L.LayerGroup | null>(null);
+  const oresRendererRef = useRef<L.Canvas | null>(null);
 
   // 建圖(只跑一次):CRS.Simple + 空的 marker layer group,底圖交給下面的 world effect。
   useEffect(() => {
@@ -71,6 +80,9 @@ export default function LeafletMap({
       maxZoom: 4,
     });
     map.setView(IMAGE_BOUNDS.getCenter(), -2);
+    // 礦物層獨立一組 canvas 渲染器,~3.9k 個點扛不住 DOM marker(同 GUI MapTab 的作法)。
+    oresRendererRef.current = L.canvas({ padding: 0.3 });
+    oresGroupRef.current = L.layerGroup().addTo(map);
     markersRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
 
@@ -93,6 +105,8 @@ export default function LeafletMap({
       map.remove();
       mapRef.current = null;
       markersRef.current = null;
+      oresGroupRef.current = null;
+      oresRendererRef.current = null;
     };
   }, []);
 
@@ -114,6 +128,35 @@ export default function LeafletMap({
     };
   }, [world]);
 
+  // 礦物層:每點一個 canvas 圓點,顏色分礦種,「大型」礦脈畫大顆;白色描邊呼應徽章體系
+  // 的描邊語言。抄自 packages/web/src/MapTab.tsx 的同名 effect。預設關(3.9k 點,手機效能)。
+  useEffect(() => {
+    const group = oresGroupRef.current;
+    const renderer = oresRendererRef.current;
+    if (!group || !renderer) return;
+    group.clearLayers();
+    const data = world === 'tree' ? treeOres : ores;
+    if (!showOres || !data) return;
+    for (const s of data.spots) {
+      const ty = data.types[s.t];
+      if (!ty) continue;
+      const name = ty.name[lang] || ty.name.en;
+      L.circleMarker([s.y, s.x], {
+        renderer,
+        radius: ty.big ? 6 : 3.5,
+        color: '#ffffff',
+        weight: 1,
+        fillColor: ty.color,
+        fillOpacity: 0.95,
+      })
+        .bindTooltip(`<div style="font-weight:800">${escapeHtml(name)}</div>`, {
+          direction: 'top',
+          className: 'pmap2-tooltip',
+        })
+        .addTo(group);
+    }
+  }, [ores, treeOres, showOres, lang, world]);
+
   // 畫標記:玩家(在線/離線)、據點、靜態地標。快照數量小(<100),DOM marker 就夠。
   useEffect(() => {
     const group = markersRef.current;
@@ -127,10 +170,12 @@ export default function LeafletMap({
       for (const lm of curLandmarks) {
         const style = LANDMARK_ICON[lm.type];
         if (!style) continue; // 只顯示 Fast Travel / Tower,其餘(如 Dungeon)這頁不畫
-        const icon = L.icon({
-          iconUrl: style.icon,
-          iconSize: [style.size, style.size],
-          iconAnchor: [style.size / 2, style.size / 2],
+        const icon = badgeIcon({
+          size: style.size,
+          ring: 'var(--pal)',
+          contentHtml: `<img src="${style.icon}" alt="" />`,
+          wrapClass: 'pmap2-badge-wrap',
+          extraClass: 'pmap2-badge--thick',
         });
         const name = lm.name[lang] || lm.name.en || '';
         const typeLabel = lm.type === 'Tower' ? d.tower : d.fastTravel;
@@ -148,14 +193,12 @@ export default function LeafletMap({
       for (const b of snapshot.bases ?? []) {
         if (!inWorld(b.m)) continue;
         const color = b.g ? guildColor(b.g) : '#9aa3b5';
-        const icon = L.divIcon({
-          className: 'pmap2-base-wrap',
-          iconSize: [26, 26],
-          iconAnchor: [13, 13],
-          tooltipAnchor: [0, -13],
-          html:
-            `<span class="pmap2-base" style="border-color:${color}">` +
-            `<img src="/map-assets/landmark-icons/palbox.webp" alt="" /></span>`,
+        const icon = badgeIcon({
+          size: 30,
+          ring: color,
+          contentHtml: `<img src="/map-assets/landmark-icons/palbox.webp" alt="" />`,
+          wrapClass: 'pmap2-badge-wrap',
+          extraClass: 'pmap2-badge--thick',
         });
         const marker = L.marker([b.y, b.x], { icon });
         if (showGuildNames && b.g) {
@@ -201,24 +244,29 @@ export default function LeafletMap({
   return <div ref={containerRef} className="map2-canvas" />;
 }
 
+// 玩家徽章:圓形、雜湊色底 + 名字首字母(見 markerIcon.ts 的說明 —— viewer 沒有真人頭像
+// 可用)。線上白框,離線用灰框 + 變暗,對齊 GUI 的 .pmap-avatar / .pmap-avatar.pmap-offline。
+const PLAYER_SIZE = 32;
+
 function addPlayerDot(
   group: L.LayerGroup,
   p: { n: string; lv: number; x: number; y: number },
   opts: { offline: boolean; showNames: boolean; lang: MapLang; d: ReturnType<typeof getMapDict> },
 ) {
   const { offline, showNames, d } = opts;
-  const icon = L.divIcon({
-    className: 'pmap2-wrap',
-    iconSize: [14, 14],
-    iconAnchor: [7, 7],
-    tooltipAnchor: [7, -7],
-    html:
-      `<span class="pmap2-dot${offline ? ' pmap2-dot-offline' : ''}"></span>` +
-      (showNames ? `<span class="pmap2-label${offline ? ' pmap2-label-offline' : ''}">${escapeHtml(p.n || '—')}</span>` : ''),
+  const name = p.n || '—';
+  const icon = badgeIcon({
+    size: PLAYER_SIZE,
+    ring: offline ? '#8a94a3' : '#ffffff',
+    background: letterColor(name),
+    contentHtml: initialHtml(name, PLAYER_SIZE),
+    wrapClass: 'pmap2-badge-wrap',
+    extraClass: offline ? 'pmap2-badge-offline' : '',
+    labelHtml: showNames ? nameLabelHtml(escapeHtml(name), PLAYER_SIZE, { offline }) : '',
   });
   const marker = L.marker([p.y, p.x], { icon, riseOnHover: true });
   marker.bindTooltip(
-    `<div style="font-weight:800">${escapeHtml(p.n || '—')}</div>` +
+    `<div style="font-weight:800">${escapeHtml(name)}</div>` +
       `<div>${d.lv}${p.lv}${offline ? ` · ${escapeHtml(d.lastSeenAt)}` : ''}</div>`,
     { direction: 'top', className: 'pmap2-tooltip' },
   );

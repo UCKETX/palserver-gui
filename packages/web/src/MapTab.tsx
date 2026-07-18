@@ -571,6 +571,7 @@ export function MapTab({
             onClick={() => setShowPublicMap(true)}
           >
             <FiGlobe className="size-4" /> {t("公開地圖")}
+            <FiStar className="size-3.5 text-pal" />
           </button>
           <button
             className={`${btn} inline-flex items-center gap-1.5`}

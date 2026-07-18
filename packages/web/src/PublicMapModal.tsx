@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { FiGlobe, FiHome, FiMoon, FiRefreshCw, FiUser, FiUsers, FiX } from "react-icons/fi";
-import type { PublicMapSettings, PublicMapStatus } from "@palserver/shared";
+import { FiGlobe, FiHome, FiLock, FiMoon, FiRefreshCw, FiStar, FiUser, FiUsers, FiX } from "react-icons/fi";
+import { hasFeature, type PublicMapSettings, type PublicMapStatus } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { CopyPath } from "./CopyPath";
 import { t, useI18n } from "./i18n";
@@ -13,6 +13,11 @@ import { Overlay, Select, btnGhost, card, errorCls, inputCls } from "./ui";
  *
  * 互動:任何設定變更都直接 PUT,樂觀更新畫面、失敗則還原並顯示錯誤(與地圖分頁其
  * 他即時開關一致的風格)。
+ *
+ * 贊助者先行版(public-map):未解鎖時總開關與細項一律鎖住(pointer-events-none),
+ * 樣式與判斷方式照 TeleportModal 的模式 —— client.license() 拿授權狀態,
+ * hasFeature("public-map", l) 判斷。實際的開關/換連結授權由 agent 端把關,這裡只是
+ * 對應的顯示層引導(見 packages/agent/src/routes.ts 的 public-map 路由)。
  */
 export function PublicMapModal({
   client,
@@ -29,6 +34,14 @@ export function PublicMapModal({
   const [saving, setSaving] = useState(false);
   const [rotating, setRotating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [entitled, setEntitled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    client
+      .license()
+      .then((l) => setEntitled(hasFeature("public-map", l)))
+      .catch(() => setEntitled(false));
+  }, [client, instanceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -51,6 +64,8 @@ export function PublicMapModal({
       cancelled = true;
     };
   }, [client, instanceId]);
+
+  const locked = entitled === false;
 
   const patch = async (partial: Partial<PublicMapSettings>) => {
     if (!status) return;
@@ -100,6 +115,9 @@ export function PublicMapModal({
         <div className="flex shrink-0 items-center justify-between">
           <h2 className="inline-flex items-center gap-2 text-lg font-extrabold">
             <FiGlobe className="size-5 text-pal" /> {t("公開地圖")}
+            <span className="inline-flex items-center gap-1 rounded-full bg-pal/10 px-2 py-0.5 text-xs font-bold text-pal">
+              <FiStar className="size-3" /> {t("贊助者")}
+            </span>
           </h2>
           <button className="text-ink-muted transition hover:text-ink" onClick={onClose} aria-label={t("關閉")}>
             <FiX className="size-5" />
@@ -109,8 +127,15 @@ export function PublicMapModal({
         {loading && <p className="text-sm text-ink-muted">{t("載入中…")}</p>}
         {error && <p className={errorCls}>{error}</p>}
 
+        {locked && (
+          <div className="inline-flex items-center gap-2 rounded-cute border-2 border-sun/40 bg-sun/10 px-3 py-2 text-xs font-bold text-sun">
+            <FiLock className="size-4 shrink-0" />
+            {t("這是贊助者先行版功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}
+          </div>
+        )}
+
         {settings && (
-          <>
+          <div className={locked ? "pointer-events-none flex flex-col gap-3 opacity-55" : "flex flex-col gap-3"}>
             <div className="flex items-start justify-between gap-3 rounded-xl border-2 border-line bg-card-soft px-3 py-2.5">
               <div className="min-w-0">
                 <p className="text-sm font-extrabold">{t("公開這個地圖")}</p>
@@ -233,7 +258,7 @@ export function PublicMapModal({
                 </div>
               </>
             )}
-          </>
+          </div>
         )}
       </div>
     </Overlay>

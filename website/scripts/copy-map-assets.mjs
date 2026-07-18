@@ -1,15 +1,16 @@
 #!/usr/bin/env node
-// /map viewer 頁需要的底圖/地標素材,單一素材來源是 packages/web/public(GUI 本體也用同一份)。
-// 這支腳本在 dev/build 前(見 package.json 的 predev/prebuild)把需要的檔案複製到
-// website/public/map-assets/ —— 該目錄不進 git(.gitignore),每次都是新複製的。
+// /map viewer 頁需要的底圖/地標/礦物素材,單一素材來源是 packages/web/public(GUI 本體也
+// 用同一份)。這支腳本在 dev/build 前(見 package.json 的 predev/prebuild)把需要的檔案複製到
+// website/public/map-assets/ —— 該目錄現在直接進 git(見 website/.gitignore 的說明:實測
+// Zeabur 建置環境拿不到 sibling packages/,素材缺了就得先 commit),所以 packages/web 的
+// 底圖/地標/礦物更新後,記得在本機重跑這支腳本並把 website/public/map-assets/ 的變動一併
+// commit。
 //
 // 為什麼不讓 Next.js 直接讀 ../packages/web/public:App Router 靜態匯出只會打包
 // public/ 底下的檔案,跨套件路徑無法被 next build 收進 out/,所以用複製而非引用。
 //
-// 若 build 環境(例如 Zeabur 用「Root Directory: website」的沙盒)沒有 sibling
-// packages/ 目錄,這支腳本會印警告後直接結束(exit 0),不讓行銷首頁的 build 因此失敗
-// —— 代價是 /map 頁的底圖/地標會缺檔。若實測發現 Zeabur 確實拿不到 ../packages,
-// 改成把這些檔案直接複製進 website/public/map-assets/ 並提交進 git(不再靠這支腳本)。
+// 若 build 環境沒有 sibling packages/ 目錄,這支腳本會印警告後直接結束(exit 0),不讓
+// 行銷首頁的 build 因此失敗 —— 代價是本機忘記重跑時,/map 頁會用 git 裡的舊素材。
 import { existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -27,6 +28,8 @@ const FILES = [
   ['game-data/landmark-icons/fasttravel.png', 'landmark-icons/fasttravel.png'],
   ['game-data/landmark-icons/tower.png', 'landmark-icons/tower.png'],
   ['game-data/landmark-icons/palbox.webp', 'landmark-icons/palbox.webp'],
+  ['game-data/ores.json', 'ores.json'],
+  ['game-data/worldtree-ores.json', 'worldtree-ores.json'],
 ];
 
 if (!existsSync(SRC_ROOT)) {

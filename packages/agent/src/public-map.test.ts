@@ -221,7 +221,7 @@ test("PublicMapPublisher:assemble 途中世代號被改變 → tick 放棄送出
   });
 
   const { driver, resolve } = makeDeferredDriver();
-  const publisher = new PublicMapPublisher(store, () => driver, fakePresence, dataDir);
+  const publisher = new PublicMapPublisher(store, () => driver, fakePresence, dataDir, () => true);
 
   let publishCalls = 0;
   const restoreFetch = stubFetch(async (input) => {
@@ -263,7 +263,7 @@ test("PublicMapPublisher:世代號沒變時 tick 照常送出(對照組)", async
     secret: "secret-gen-ok",
   });
 
-  const publisher = new PublicMapPublisher(store, () => stoppedDriver, fakePresence, dataDir);
+  const publisher = new PublicMapPublisher(store, () => stoppedDriver, fakePresence, dataDir, () => true);
   let publishCalls = 0;
   const restoreFetch = stubFetch(async (input) => {
     if (String(input).includes("/api/map/publish")) publishCalls++;
@@ -273,6 +273,73 @@ test("PublicMapPublisher:世代號沒變時 tick 照常送出(對照組)", async
   try {
     await (publisher as unknown as { tick: () => Promise<void> }).tick();
     assert.equal(publishCalls, 1, "世代號沒變,這輪應該正常送出一次");
+  } finally {
+    restoreFetch();
+    fs.rmSync(instanceDir, { recursive: true, force: true });
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+// ── 贊助者 gating(public-map):授權過期時背景 tick 自動跳過發布 ──
+
+test("PublicMapPublisher:featureEnabledFn 回傳 false(未授權)時 tick 不發布,設定原封不動(public-map gating)", async () => {
+  const instanceDir = tempDir("public-map-gate-");
+  const dataDir = tempDir("public-map-gate-data-");
+  const rec = makeRec("inst-gate");
+  const store = makeStore(instanceDir, rec);
+  const initialState = {
+    settings: settings({ enabled: true, shareId: "share-gate", delayMinutes: 0 }),
+    secret: "secret-gate",
+  };
+  writeStateFile(instanceDir, initialState);
+
+  // 明確注入「未授權」,不依賴這台機器上真的沒有 license.json(那只是巧合成立的假設)。
+  const publisher = new PublicMapPublisher(store, () => stoppedDriver, fakePresence, dataDir, () => false);
+  let publishCalls = 0;
+  const restoreFetch = stubFetch(async (input) => {
+    if (String(input).includes("/api/map/publish")) publishCalls++;
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  });
+
+  try {
+    await (publisher as unknown as { tick: () => Promise<void> }).tick();
+    assert.equal(publishCalls, 0, "未授權時這輪不該送出任何 publish 請求");
+
+    // 設定檔本身不被動:enabled/shareId/secret 都原封不動(不清設定、不 unpublish)。
+    const stateFile = path.join(instanceDir, "public-map.json");
+    const onDisk = JSON.parse(fs.readFileSync(stateFile, "utf8")) as typeof initialState;
+    assert.deepEqual(onDisk.settings.enabled, true);
+    assert.deepEqual(onDisk.settings.shareId, "share-gate");
+    assert.deepEqual(onDisk.secret, "secret-gate");
+  } finally {
+    restoreFetch();
+    fs.rmSync(instanceDir, { recursive: true, force: true });
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("PublicMapPublisher:未授權時 publishNow 也不發布(設定變更的即時發布不能繞過 gate)", async () => {
+  const instanceDir = tempDir("public-map-gate2-");
+  const dataDir = tempDir("public-map-gate2-data-");
+  const rec = makeRec("inst-gate2");
+  const store = makeStore(instanceDir, rec);
+  const s = settings({ enabled: true, shareId: "share-gate2", delayMinutes: 0 });
+  writeStateFile(instanceDir, { settings: s, secret: "secret-gate2" });
+
+  const publisher = new PublicMapPublisher(store, () => stoppedDriver, fakePresence, dataDir, () => false);
+  let publishCalls = 0;
+  const restoreFetch = stubFetch(async (input) => {
+    if (String(input).includes("/api/map/publish")) publishCalls++;
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  });
+
+  try {
+    await (
+      publisher as unknown as {
+        publishNow: (r: typeof rec, st: typeof s, sec: string) => Promise<void>;
+      }
+    ).publishNow(rec, s, "secret-gate2");
+    assert.equal(publishCalls, 0, "未授權時 publishNow 不該送出 publish 請求");
   } finally {
     restoreFetch();
     fs.rmSync(instanceDir, { recursive: true, force: true });

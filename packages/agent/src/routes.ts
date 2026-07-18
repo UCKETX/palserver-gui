@@ -1876,14 +1876,16 @@ export function registerRoutes(
     return { externalAddress: updated.externalAddress ?? null };
   });
 
-  // ── 公開地圖:服主一鍵把地圖公開到全網(免費功能,不做贊助 gating)。
+  // ── 公開地圖:服主一鍵把地圖公開到全網(贊助者先行版 public-map)。
   // 過濾在 agent 端(public-map.ts)完成,這裡只是薄薄一層 CRUD + 立即發布觸發。
+  // gating 只擋「新開啟」與「換連結」:關閉與查看狀態永遠放行,授權過期的服主
+  // 才能把已公開的地圖關掉;背景 tick 另外會在授權過期時自動跳過發布(見 public-map.ts)。
   app.get("/api/instances/:id/public-map", async (req) => {
     const rec = getOr404((req.params as { id: string }).id);
     return publicMap.status(rec);
   });
 
-  app.put("/api/instances/:id/public-map", async (req) => {
+  app.put("/api/instances/:id/public-map", async (req, reply) => {
     const rec = getOr404((req.params as { id: string }).id);
     const { settings } = z
       .object({
@@ -1898,10 +1900,22 @@ export function registerRoutes(
         }),
       })
       .parse(req.body);
+    // 只擋「從關閉開啟」這個轉換;已經開啟時改子設定(或重送 enabled:true)不擋,
+    // 讓授權過期但先前已開啟的服主仍能調整顯示內容(實際發布與否由 tick 的 gate 把關)。
+    if (settings.enabled === true && !publicMap.status(rec).settings.enabled && !featureEnabled("public-map")) {
+      return reply
+        .code(403)
+        .send({ error: "此功能為贊助者先行版,請在設定頁輸入贊助者識別碼解鎖。" });
+    }
     return publicMap.updateSettings(rec, settings);
   });
 
-  app.post("/api/instances/:id/public-map/rotate", async (req) => {
+  app.post("/api/instances/:id/public-map/rotate", async (req, reply) => {
+    if (!featureEnabled("public-map")) {
+      return reply
+        .code(403)
+        .send({ error: "此功能為贊助者先行版,請在設定頁輸入贊助者識別碼解鎖。" });
+    }
     const rec = getOr404((req.params as { id: string }).id);
     return publicMap.rotate(rec);
   });

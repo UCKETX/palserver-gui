@@ -23,11 +23,16 @@ import { featureEnabled } from "./license.js";
 import type { PresenceTracker } from "./presence.js";
 
 /**
- * 公開地圖:服主一鍵把地圖公開到全網。
+ * 公開地圖:服主一鍵把地圖公開到全網。贊助者先行版功能(public-map,見 @palserver/shared
+ * 的 features.ts)。
  *
  * 資料流向:agent 定期(每 60 秒)組一份「已依設定過濾」的快照,推到雲端 Worker
  * (`POST {STATS_URL}/api/map/publish`);公開 viewer 只讀 Worker,從不直連 agent。
  * **過濾一律在這裡完成** —— 絕不把未過濾的原始資料送出去再指望前端藏欄位。
+ *
+ * 授權:開啟(enabled false→true)與換連結(rotate)在 routes.ts 那層擋;已經開啟後
+ * 授權過期,tickOne 會自動跳過發布(不清設定、不 unpublish),授權恢復就自動續發 ——
+ * 關閉與查看狀態則永遠放行,讓過期的服主仍能把已公開的地圖關掉。
  *
  * 持久化:每實例的設定(PublicMapSettings,前端可見)與發布金鑰(secret,前端不可見)
  * 存在 `<instanceDir>/public-map.json`,存放慣例比照 backup-schedule.json / presence.json
@@ -345,6 +350,11 @@ export class PublicMapPublisher {
     private driverFor: (rec: InstanceRecord) => ServerDriver,
     private presence: PresenceTracker,
     private dataDir: string = DATA_DIR,
+    /** 授權判斷注入點(測試用;預設走真正的 license 模組)。只有背景 tick 用這個把關
+     *  —— enable/rotate 已經在 routes.ts 那層擋過了,這裡是「授權期間內開啟、之後過期」
+     *  這個場景的第二道防線,讓已開啟的實例授權過期後自動停止發布(設定不清、不 unpublish,
+     *  等授權恢復自動續發)。 */
+    private featureEnabledFn: (id: string) => boolean = featureEnabled,
   ) {}
 
   start(): void {
@@ -544,6 +554,8 @@ export class PublicMapPublisher {
       // 排到我們才真的執行:重新讀一次狀態,若已經被 disable/rotate 搶先關掉/換掉,放棄。
       const fresh = readState(this.store, rec.id);
       if (!fresh.settings.enabled || fresh.settings.shareId !== shareId || fresh.secret !== secret) return;
+      // 授權過期:跳過這輪發布,不動設定也不 unpublish —— 等授權恢復,下個 tick 自動續發。
+      if (!this.featureEnabledFn("public-map")) return;
 
       const snapshot = await this.assemble(rec, fresh.settings);
       if (this.generationOf(rec.id) !== generation) return; // assemble 期間被插隊,放棄這次發布
@@ -569,6 +581,9 @@ export class PublicMapPublisher {
   /** 立即發布一次(啟用當下 / rotate 當下用)。呼叫端(updateSettings/rotate)已經透過
    *  enqueue 排隊,這裡的世代號檢查是防禦性的第二道防線。 */
   private async publishNow(rec: InstanceRecord, settings: PublicMapSettings, secret: string): Promise<void> {
+    // 與 tickOne 同一道 gate:授權失效時任何發布路徑都不得推送(否則設定 PUT 觸發的
+    // 即時發布會變成繞過 tick gate 的後門);unpublish 不在此限。
+    if (!this.featureEnabledFn("public-map")) return;
     const generation = this.generationOf(rec.id);
     try {
       const snapshot = await this.assemble(rec, settings);
@@ -636,7 +651,8 @@ export class PublicMapPublisher {
 
     let bases: PublicMapRawBase[] = [];
     if (settings.showBases) {
-      // 據點「位置」對公開地圖一律免費(此功能不做贊助 gating);公會「名稱」才是贊助者
+      // 公開地圖本身開關是贊助者先行版(public-map,見 tickOne 的 gate),但「開啟之後
+      // 顯示哪些圖層」這件事裡,據點「位置」一律免費,公會「名稱」才另外是贊助者
       // 先行版功能(guild-map)。所以這裡永遠用 detailed=true 拿完整據點資料,名稱是否
       // 附上由 assemblePublicMapSnapshot 依 guildNamesUnlocked 自己過濾,而不是靠
       // getPdGuilds 的 detailed 旗標(那個旗標是全有全無,會連位置都拿不到)。

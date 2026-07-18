@@ -32,6 +32,7 @@ interface MapDict {
   offlinePlayers: string;
   bases: string;
   landmarks: string;
+  ores: string;
   mainWorld: string;
   worldTree: string;
   lv: string;
@@ -60,6 +61,7 @@ const dict: Record<MapLang, MapDict> = {
     offlinePlayers: '離線玩家',
     bases: '公會據點',
     landmarks: '地標',
+    ores: '礦物',
     mainWorld: '主世界',
     worldTree: '世界樹',
     lv: 'Lv.',
@@ -86,6 +88,7 @@ const dict: Record<MapLang, MapDict> = {
     offlinePlayers: 'Offline players',
     bases: 'Guild bases',
     landmarks: 'Landmarks',
+    ores: 'Ores',
     mainWorld: 'Main World',
     worldTree: 'World Tree',
     lv: 'Lv.',
@@ -112,6 +115,7 @@ const dict: Record<MapLang, MapDict> = {
     offlinePlayers: 'オフラインプレイヤー',
     bases: 'ギルド拠点',
     landmarks: 'ランドマーク',
+    ores: '鉱石',
     mainWorld: 'メインワールド',
     worldTree: '世界樹',
     lv: 'Lv.',

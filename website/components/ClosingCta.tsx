@@ -1,9 +1,8 @@
-import { GitHubIcon, DiscordIcon } from './icons';
+import { GitHubIcon } from './icons';
 import DownloadLink from './DownloadLink';
-import { DISCORD_INVITE, DiscordLiveBadge } from './DiscordPresence';
 import type { Dictionary } from '@/i18n/dictionaries';
 
-export default function ClosingCta({ d, discord }: { d: Dictionary['closing']; discord: Dictionary['discord'] }) {
+export default function ClosingCta({ d }: { d: Dictionary['closing'] }) {
   return (
     <section>
       <div className="wrap">
@@ -19,10 +18,8 @@ export default function ClosingCta({ d, discord }: { d: Dictionary['closing']; d
               <GitHubIcon />
               GitHub
             </a>
-            <a className="btn btn-g" href={DISCORD_INVITE}>
-              <DiscordIcon />
+            <a className="btn btn-g" href="https://discord.gg/sgMMdUZd3V">
               Discord
-              <DiscordLiveBadge d={discord} />
             </a>
           </div>
           <div className="note">

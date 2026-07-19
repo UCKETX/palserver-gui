@@ -230,14 +230,20 @@ export function BossRespawnTab({
   const dungeonDead = dungeonRows.filter((r) => r.info.status === "dead").length;
   const shownDungeons = dungeonOnlyDead ? dungeonRows.filter((r) => r.info.status === "dead") : dungeonRows;
 
+  // 贊助者限定:未解鎖只顯示先行版說明,下面的內容(安裝卡、頭目清單)一律不顯示、也不預覽。
+  if (locked) {
+    return (
+      <div className="flex flex-col gap-4">
+        <SponsorLockNotice>{t("這是贊助者先行版功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}</SponsorLockNotice>
+      </div>
+    );
+  }
+
   if (!status) return <p className="text-ink-muted">{error ?? t("載入中…")}</p>;
 
   if (!status.supported) {
     return (
       <div className="flex flex-col gap-4">
-        {locked && (
-          <SponsorLockNotice>{t("這是贊助者先行版功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}</SponsorLockNotice>
-        )}
         <EmptyState icon={<GiBossKey />}>{status.reason}</EmptyState>
       </div>
     );
@@ -265,11 +271,7 @@ export function BossRespawnTab({
         <p className="rounded-xl bg-grass/10 px-3 py-2 text-[13px] font-bold text-grass">{notice}</p>
       )}
 
-      {locked && (
-        <SponsorLockNotice>{t("這是贊助者先行版功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}</SponsorLockNotice>
-      )}
-
-      <div className={locked ? "pointer-events-none opacity-55" : undefined}>
+      <div>
         <ModInstallCard
           title={t("頭目重生時間")}
           titleExtra={

@@ -16,6 +16,8 @@ export interface BreedingNode {
   passiveMask: number;
   generation: number;
   breedCount: number;
+  captureCount: number;
+  requiredCapture?: true;
   source?: SaveBreedingPal;
   parents?: readonly [BreedingNode, BreedingNode];
 }
@@ -23,6 +25,7 @@ export interface BreedingNode {
 export interface BreedingSolution {
   target: BreedingNode | null;
   reachableSpecies: number;
+  requiredCaptures: BreedingNode[];
 }
 
 function canonicalSpecies(id: string, names: Map<string, string>): string {
@@ -55,6 +58,7 @@ function sourceScore(node: BreedingNode): number {
 
 function better(candidate: BreedingNode, current?: BreedingNode): boolean {
   if (!current) return true;
+  if (candidate.captureCount !== current.captureCount) return candidate.captureCount < current.captureCount;
   if (candidate.generation !== current.generation) return candidate.generation < current.generation;
   if (candidate.breedCount !== current.breedCount) return candidate.breedCount < current.breedCount;
   return sourceScore(candidate) > sourceScore(current);
@@ -74,8 +78,8 @@ function compatibleParents(a: BreedingNode, requiredA: BreedingGender, b: Breedi
 }
 
 /**
- * PalCalc 配方上的有界動態規劃。先最小化最長代數,再最小化整棵樹的配種次數;
- * 詞條按遊戲的「雙親詞條去重後繼承」規則合併。新生帕魯視為可孵出任一性別。
+ * PalCalc 配方上的有界動態規劃。普通路線先最小化最長代數,再最小化整棵樹的配種次數;
+ * 補充路線先最小化需捕捉數。詞條按「雙親詞條去重後繼承」合併,新生帕魯可孵出任一性別。
  */
 export function solveBreeding(
   data: BreedingData,
@@ -91,67 +95,111 @@ export function solveBreeding(
     canonical.set(child.toLowerCase(), child);
   }
 
-  const states = new Map<string, BreedingNode>();
-  const add = (node: BreedingNode, dest = states) => {
-    const key = stateKey(node);
-    if (better(node, dest.get(key))) dest.set(key, node);
-  };
+  const targetSpecies = canonicalSpecies(targetId, canonical);
+  const fullMask = (1 << desiredPassives.length) - 1;
 
-  for (const pal of owned) {
-    if (!pal.gender) continue;
-    add({
-      species: canonicalSpecies(pal.characterId, canonical),
-      gender: pal.gender === "male" ? "m" : "f",
-      passiveMask: maskFor(pal.passives, desiredPassives),
-      generation: 0,
-      breedCount: 0,
-      source: pal,
-    });
-  }
+  const search = (allowCaptures: boolean) => {
+    const states = new Map<string, BreedingNode>();
+    const add = (node: BreedingNode, dest = states) => {
+      const key = stateKey(node);
+      if (better(node, dest.get(key))) dest.set(key, node);
+    };
 
-  for (let generation = 1; generation <= Math.max(0, maxGenerations); generation++) {
-    const bySpecies = new Map<string, BreedingNode[]>();
-    for (const node of states.values()) {
-      const list = bySpecies.get(node.species) ?? [];
-      list.push(node);
-      bySpecies.set(node.species, list);
+    for (const pal of owned) {
+      if (!pal.gender) continue;
+      add({
+        species: canonicalSpecies(pal.characterId, canonical),
+        gender: pal.gender === "male" ? "m" : "f",
+        passiveMask: maskFor(pal.passives, desiredPassives),
+        generation: 0,
+        breedCount: 0,
+        captureCount: 0,
+        source: pal,
+      });
     }
-    const staged = new Map<string, BreedingNode>();
 
-    for (const [parent1, gender1, parent2, gender2, child] of data.recipes) {
-      const left = bySpecies.get(parent1);
-      const right = bySpecies.get(parent2);
-      if (!left || !right) continue;
-      for (const a of left) {
-        for (const b of right) {
-          if (!compatibleParents(a, gender1, b, gender2)) continue;
-          const childGeneration = Math.max(a.generation, b.generation) + 1;
-          if (childGeneration !== generation) continue;
-          add(
-            {
-              species: child,
-              gender: "*",
-              passiveMask: a.passiveMask | b.passiveMask,
-              generation: childGeneration,
-              breedCount: a.breedCount + b.breedCount + 1,
-              parents: [a, b],
-            },
-            staged,
-          );
+    if (allowCaptures) {
+      for (const species of new Set(canonical.values())) {
+        // 補充路線應說明要抓哪些親代,而不是退化成「直接捕捉目標」。
+        if (species === targetSpecies) continue;
+        for (const gender of ["m", "f"] as const) {
+          add({
+            species,
+            gender,
+            passiveMask: 0,
+            generation: 0,
+            breedCount: 0,
+            captureCount: 1,
+            requiredCapture: true,
+          });
         }
       }
     }
-    for (const node of staged.values()) add(node);
-  }
 
-  const targetSpecies = canonicalSpecies(targetId, canonical);
-  const fullMask = (1 << desiredPassives.length) - 1;
-  const candidates = [...states.values()].filter(
-    (node) => node.species === targetSpecies && node.passiveMask === fullMask,
-  );
-  candidates.sort((a, b) =>
-    a.generation - b.generation || a.breedCount - b.breedCount || sourceScore(b) - sourceScore(a),
-  );
-  return { target: candidates[0] ?? null, reachableSpecies: new Set([...states.values()].map((n) => n.species)).size };
+    for (let generation = 1; generation <= Math.max(0, maxGenerations); generation++) {
+      const bySpecies = new Map<string, BreedingNode[]>();
+      for (const node of states.values()) {
+        const list = bySpecies.get(node.species) ?? [];
+        list.push(node);
+        bySpecies.set(node.species, list);
+      }
+      const staged = new Map<string, BreedingNode>();
+
+      for (const [parent1, gender1, parent2, gender2, child] of data.recipes) {
+        const left = bySpecies.get(parent1);
+        const right = bySpecies.get(parent2);
+        if (!left || !right) continue;
+        for (const a of left) {
+          for (const b of right) {
+            if (!compatibleParents(a, gender1, b, gender2)) continue;
+            const childGeneration = Math.max(a.generation, b.generation) + 1;
+            if (childGeneration !== generation) continue;
+            add(
+              {
+                species: child,
+                gender: "*",
+                passiveMask: a.passiveMask | b.passiveMask,
+                generation: childGeneration,
+                breedCount: a.breedCount + b.breedCount + 1,
+                captureCount: a.captureCount + b.captureCount,
+                parents: [a, b],
+              },
+              staged,
+            );
+          }
+        }
+      }
+      for (const node of staged.values()) add(node);
+    }
+
+    const candidates = [...states.values()].filter(
+      (node) =>
+        node.species === targetSpecies &&
+        node.passiveMask === fullMask &&
+        Boolean(node.parents),
+    );
+    candidates.sort((a, b) =>
+      a.captureCount - b.captureCount ||
+      a.generation - b.generation ||
+      a.breedCount - b.breedCount ||
+      sourceScore(b) - sourceScore(a),
+    );
+    return { target: candidates[0] ?? null, states };
+  };
+
+  const ownedOnly = search(false);
+  const target = ownedOnly.target ?? search(true).target;
+  const captures = new Map<string, BreedingNode>();
+  const collectCaptures = (node: BreedingNode | null) => {
+    if (!node) return;
+    if (node.requiredCapture) captures.set(`${node.species}\u0000${node.gender}`, node);
+    node.parents?.forEach(collectCaptures);
+  };
+  collectCaptures(target);
+
+  return {
+    target,
+    reachableSpecies: new Set([...ownedOnly.states.values()].map((node) => node.species)).size,
+    requiredCaptures: [...captures.values()],
+  };
 }
-

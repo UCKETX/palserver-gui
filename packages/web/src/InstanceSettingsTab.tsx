@@ -29,7 +29,7 @@ export function InstanceSettingsTab({
   const stopped = detail.status === "exited" || detail.status === "created" || detail.status === "missing";
 
   return (
-    <div className="flex max-w-2xl flex-col gap-4">
+    <div className="flex w-full flex-col gap-4">
       <AutoStartCard client={client} detail={detail} />
 
       <ServerFilesCard client={client} instanceId={detail.id} />

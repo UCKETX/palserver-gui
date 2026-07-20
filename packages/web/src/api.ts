@@ -231,6 +231,15 @@ export class AgentClient {
     return body as T;
   }
 
+  /** 目前連線的 base URL 與存取權杖 —— 給「Discord bot / 其他工具」設定用。
+   *  token 是 agent 的完整存取權杖,顯示時務必遮蔽(見 DiscordBotTab)。 */
+  get baseUrl(): string {
+    return this.conn.url;
+  }
+  get token(): string {
+    return this.conn.token;
+  }
+
   info(): Promise<AgentInfo> {
     return this.request("/api/info");
   }

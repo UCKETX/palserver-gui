@@ -14,6 +14,7 @@ import { PalStatsTab } from "./PalStatsTab";
 import { BossRespawnTab } from "./BossRespawnTab";
 import { BreedingTab } from "./BreedingTab";
 import { WebhookSettingsTab } from "./WebhookSettingsTab";
+import { DiscordBotTab } from "./DiscordBotTab";
 import { PlayersTab } from "./PlayersTab";
 import { GuildsTab } from "./GuildsTab";
 import { LeaderboardTab } from "./LeaderboardTab";
@@ -619,6 +620,7 @@ export function InstanceDetailPage({
       )}
       {tab === "restart" && <RestartCard client={client} instanceId={detail.id} />}
       {tab === "webhooks" && <WebhookSettingsTab client={client} instanceId={detail.id} />}
+      {tab === "discord-bot" && <DiscordBotTab client={client} instanceId={detail.id} />}
       {tab === "instance" && (
         <InstanceSettingsTab client={client} detail={detail} onChanged={refresh} onDeleted={onDeleted} />
       )}

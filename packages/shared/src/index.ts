@@ -204,6 +204,12 @@ export interface MessageBridgeRules {
   notifyJoinLeave: boolean;
   notifyCapture: boolean;
   notifyDeath: boolean;
+  /** 頭目擊殺 / 重生(需頭目回報模組)。 */
+  notifyBoss: boolean;
+  /** 伺服器開機/關機/崩潰重啟中,以及偵測到新版本可更新。 */
+  notifyServerStatus: boolean;
+  /** 排程備份完成 / 失敗。 */
+  notifyBackup: boolean;
   relayPrefix: string;
   commandPrefix: string;
 }

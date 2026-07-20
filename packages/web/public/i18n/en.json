@@ -1789,5 +1789,15 @@
   "防具欄": "Armor",
   "食物欄": "Food",
   "掉落欄": "Drop Slot",
-  "存檔快照沒有背包資料。請到玩家頁面按「從存檔刷新」重新掃描。": "The save snapshot has no inventory data. Open the Players page and click \"Refresh from Save\" to scan again."
+  "存檔快照沒有背包資料。請到玩家頁面按「從存檔刷新」重新掃描。": "The save snapshot has no inventory data. Open the Players page and click \"Refresh from Save\" to scan again.",
+  "頭目擊殺/重生提示": "Boss kill/respawn alerts",
+  "伺服器狀態提示": "Server status alerts",
+  "備份完成提示": "Backup completion alerts",
+  "頭目 [{name}] 已被擊敗": "Boss [{name}] has been defeated",
+  "頭目 [{name}] 已重生": "Boss [{name}] has respawned",
+  "伺服器已上線": "Server is online",
+  "伺服器啟動中": "Server is starting",
+  "伺服器已停止": "Server has stopped",
+  "備份完成:{detail}": "Backup completed: {detail}",
+  "備份失敗:{detail}": "Backup failed: {detail}"
 }

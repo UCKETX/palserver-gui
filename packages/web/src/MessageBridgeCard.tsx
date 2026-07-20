@@ -49,7 +49,7 @@ const toDraft = (config: MessageBridgeConfig): Draft => ({ channels: config.chan
 
 const newChannel = (platform: Platform): DraftChannel => {
   const id = `${platform}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  const common = { ...rulePatch({ relayGroupToGame: true, relayGameToGroup: true, notifyJoinLeave: true, notifyCapture: true, notifyDeath: true, relayPrefix: "", commandPrefix: "/" }), id, enabled: true, adminIds: [], language: "zh-CN" as const };
+  const common = { ...rulePatch({ relayGroupToGame: true, relayGameToGroup: true, notifyJoinLeave: true, notifyCapture: true, notifyDeath: true, notifyBoss: true, notifyServerStatus: true, notifyBackup: true, relayPrefix: "", commandPrefix: "/" }), id, enabled: true, adminIds: [], language: "zh-CN" as const };
   if (platform === "onebot") return { ...common, platform, wsUrl: "ws://127.0.0.1:3001", groupId: "", accessTokenSet: false, accessToken: "" };
   if (platform === "discord") return { ...common, platform, channelId: "", proxyEnabled: false, proxyUrlSet: false, tokenSet: false, proxyUrl: "", token: "" };
   if (platform === "telegram") return { ...common, platform, chatId: "", tokenSet: false, token: "" };
@@ -62,6 +62,9 @@ const rulePatch = (channel: MessageBridgeRules): MessageBridgeRules => ({
   notifyJoinLeave: channel.notifyJoinLeave,
   notifyCapture: channel.notifyCapture,
   notifyDeath: channel.notifyDeath,
+  notifyBoss: channel.notifyBoss,
+  notifyServerStatus: channel.notifyServerStatus,
+  notifyBackup: channel.notifyBackup,
   relayPrefix: channel.relayPrefix,
   commandPrefix: channel.commandPrefix,
 });
@@ -303,6 +306,9 @@ function ChannelRulesForm({ value, onChange }: { value: MessageBridgeRules; onCh
       <Check checked={value.notifyJoinLeave} onChange={(notifyJoinLeave) => onChange({ notifyJoinLeave })} label={t("玩家進出提示")} />
       <Check checked={value.notifyCapture} onChange={(notifyCapture) => onChange({ notifyCapture })} label={t("抓捕帕魯提示")} />
       <Check checked={value.notifyDeath} onChange={(notifyDeath) => onChange({ notifyDeath })} label={t("玩家死亡提示")} />
+      <Check checked={value.notifyBoss} onChange={(notifyBoss) => onChange({ notifyBoss })} label={t("頭目擊殺/重生提示")} />
+      <Check checked={value.notifyServerStatus} onChange={(notifyServerStatus) => onChange({ notifyServerStatus })} label={t("伺服器狀態提示")} />
+      <Check checked={value.notifyBackup} onChange={(notifyBackup) => onChange({ notifyBackup })} label={t("備份完成提示")} />
       <label className="flex items-center gap-2 text-[13px] font-bold">
         {t("訊息轉發前綴")}
         <input className={`${inputCls} w-24 py-1.5`} value={value.relayPrefix} maxLength={20} placeholder={t("留空時全部轉發")} onChange={(event) => onChange({ relayPrefix: event.target.value })} />

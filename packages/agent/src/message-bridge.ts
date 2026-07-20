@@ -6,8 +6,8 @@ import WebSocket from "ws";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { localizePalName } from "@palserver/shared";
-import type { KnownPlayer, MessageBridgeChannelConfig, MessageBridgeChannelPatch, MessageBridgeConfig, MessageBridgeLanguage, MessageBridgePatch, MessageBridgePlatform, MessageBridgeRules, MessageBridgeStatus, PdItemSlot, PdPal, PdPalIvs, SavePalRow, SavePlayerInventory, SavePlayerProfile } from "@palserver/shared";
-import type { ServerDriver } from "./driver.js";
+import type { BackupSchedule, InstanceStatus, KnownPlayer, MessageBridgeChannelConfig, MessageBridgeChannelPatch, MessageBridgeConfig, MessageBridgeLanguage, MessageBridgePatch, MessageBridgePlatform, MessageBridgeRules, MessageBridgeStatus, PdItemSlot, PdPal, PdPalIvs, SavePalRow, SavePlayerInventory, SavePlayerProfile } from "@palserver/shared";
+import type { DriverContext, ServerDriver } from "./driver.js";
 import type { InstanceRecord, InstanceStore } from "./store.js";
 import type { PresenceTracker } from "./presence.js";
 import { getLiveStatus, rest } from "./restapi.js";
@@ -17,9 +17,13 @@ import { localizeItem, localizePassive, t } from "./i18n.js";
 import { activeWorldGuidAsync } from "./saves.js";
 import { getPlayerProfile, getPlayersSummary } from "./save-tools.js";
 import { renderMessageBridgeCards } from "./message-card-renderer.js";
+import { readBossState } from "./boss-reporter.js";
+import { cachedVersionSummary } from "./version.js";
 
 const API_TIMEOUT_MS = 10_000;
 const RECONNECT_MS = 5_000;
+/** boss/server/backup 事件輪詢間隔;與頭目回報模組的寫檔頻率(~15s)對齊。 */
+const EVENTS_POLL_MS = 15_000;
 
 type StoredChannelBase = MessageBridgeRules & { id: string; platform: MessageBridgePlatform; enabled: boolean; adminIds: string[]; language: MessageBridgeLanguage };
 type StoredOneBotChannel = StoredChannelBase & { platform: "onebot"; wsUrl: string; groupId: string; accessToken: string };
@@ -64,6 +68,9 @@ const defaultRules = (): MessageBridgeRules => ({
   notifyJoinLeave: true,
   notifyCapture: true,
   notifyDeath: true,
+  notifyBoss: true,
+  notifyServerStatus: true,
+  notifyBackup: true,
   relayPrefix: "",
   commandPrefix: "/",
 });
@@ -91,6 +98,9 @@ export function resolveMessageBridgeRules(channel: Partial<MessageBridgeRules> |
     notifyJoinLeave: channel?.notifyJoinLeave ?? legacy?.notifyJoinLeave ?? fallback.notifyJoinLeave,
     notifyCapture: channel?.notifyCapture ?? legacy?.notifyCapture ?? fallback.notifyCapture,
     notifyDeath: channel?.notifyDeath ?? legacy?.notifyDeath ?? fallback.notifyDeath,
+    notifyBoss: channel?.notifyBoss ?? legacy?.notifyBoss ?? fallback.notifyBoss,
+    notifyServerStatus: channel?.notifyServerStatus ?? legacy?.notifyServerStatus ?? fallback.notifyServerStatus,
+    notifyBackup: channel?.notifyBackup ?? legacy?.notifyBackup ?? fallback.notifyBackup,
     relayPrefix: cleanText(channel?.relayPrefix ?? legacy?.relayPrefix ?? fallback.relayPrefix, 20),
     commandPrefix: cleanText(channel?.commandPrefix ?? legacy?.commandPrefix ?? fallback.commandPrefix, 3) || "/",
   };
@@ -410,6 +420,32 @@ export function formatJoinLeave(isJoin: boolean, name: string, language: Message
   const sign = isJoin ? "[+]" : "[-]";
   const key = isJoin ? "玩家 [{name}] 加入了伺服器" : "玩家 [{name}] 離開了伺服器";
   return `${sign} ${t(language, key, { name })}`;
+}
+
+/** 頭目擊殺/重生播报(頭目回報模組;spawner 名稱直接顯示,不做名稱解析)。 */
+export function formatBoss(killed: boolean, name: string, language: MessageBridgeLanguage): string {
+  const sign = killed ? "☠" : "✦";
+  const key = killed ? "頭目 [{name}] 已被擊敗" : "頭目 [{name}] 已重生";
+  return `${sign} ${t(language, key, { name })}`;
+}
+
+export type ServerStatusEvent = "running" | "starting" | "exited" | "update";
+
+/** 伺服器開機/關機/崩潰重啟中,以及偵測到新版本可更新的播报。 */
+export function formatServerStatus(event: ServerStatusEvent, language: MessageBridgeLanguage): string {
+  const sign = event === "running" ? "▲" : event === "starting" ? "…" : event === "exited" ? "▼" : "⇧";
+  const key = event === "running" ? "伺服器已上線"
+    : event === "starting" ? "伺服器啟動中"
+    : event === "exited" ? "伺服器已停止"
+    : "有新版本可更新"; // 沿用既有 badge/label 文案(web/public/i18n 已有三語翻譯),避免重複維護
+  return `${sign} ${t(language, key)}`;
+}
+
+/** 排程備份完成/失敗播报;detail 取自 backup-schedule.json 的 lastResult(已去除成功/失敗前綴)。 */
+export function formatBackup(ok: boolean, detail: string, language: MessageBridgeLanguage): string {
+  const sign = ok ? "✔" : "✘";
+  const key = ok ? "備份完成:{detail}" : "備份失敗:{detail}";
+  return `${sign} ${t(language, key, { detail })}`;
 }
 
 /** /players 列表的单行:`1. Alice - Lv.30 - 42.00ms`。4 语言共用同一模板。 */
@@ -835,16 +871,29 @@ export class MessageBridgeService {
   private runtimes = new Map<string, Runtime>();
   private states = new Map<string, MessageBridgeStatus>();
   private presenceTimer: NodeJS.Timeout | null = null;
+  private eventsTimer: NodeJS.Timeout | null = null;
+  /** instanceId → (boss spawner 名稱 → 上次已知 alive)。用來偵測頭目擊殺/重生轉移。 */
+  private lastBossAlive = new Map<string, Map<string, boolean>>();
+  /** instanceId → 上次觀測到的伺服器狀態。只在記憶體,agent 重啟後以當下狀態重建基準。 */
+  private lastServerStatus = new Map<string, InstanceStatus>();
+  /** instanceId → 上次觀測到的「有無可用更新」。只在 false→true 時通知一次。 */
+  private lastUpdateAvailable = new Map<string, boolean>();
+  /** instanceId → 上次觀測到的 backup-schedule.json lastRunAt。用來偵測排程備份跑完。 */
+  private lastBackupRunAt = new Map<string, string>();
   constructor(private store: InstanceStore, private presence: PresenceTracker, private driverOf: (rec: InstanceRecord) => ServerDriver) {}
 
   start(): void {
     for (const rec of this.store.list()) void this.restart(rec.id);
     this.presenceTimer = setInterval(() => void this.pollPresence(), 5_000);
     this.presenceTimer.unref();
+    this.eventsTimer = setInterval(() => void this.pollEvents(), EVENTS_POLL_MS);
+    this.eventsTimer.unref();
   }
   stop(): void {
     if (this.presenceTimer) clearInterval(this.presenceTimer);
     this.presenceTimer = null;
+    if (this.eventsTimer) clearInterval(this.eventsTimer);
+    this.eventsTimer = null;
     for (const id of [...this.runtimes.keys()]) this.stopRuntime(id);
   }
   private file(id: string): string { return path.join(this.store.instanceDir(id), "message-bridge.json"); }
@@ -868,6 +917,9 @@ export class MessageBridgeService {
       notifyJoinLeave: channel.notifyJoinLeave,
       notifyCapture: channel.notifyCapture,
       notifyDeath: channel.notifyDeath,
+      notifyBoss: channel.notifyBoss,
+      notifyServerStatus: channel.notifyServerStatus,
+      notifyBackup: channel.notifyBackup,
       relayPrefix: channel.relayPrefix,
       commandPrefix: channel.commandPrefix,
     };
@@ -951,6 +1003,11 @@ export class MessageBridgeService {
     runtime.stopLog?.();
     for (const adapter of runtime.adapters) adapter.stop();
     this.runtimes.delete(id);
+    // 重建基準,避免下次啟動時把「重啟前後的落差」誤判成一次真的事件轉移。
+    this.lastBossAlive.delete(id);
+    this.lastServerStatus.delete(id);
+    this.lastUpdateAvailable.delete(id);
+    this.lastBackupRunAt.delete(id);
   }
   private async attachLogs(rec: InstanceRecord, runtime: Runtime): Promise<void> {
     if (runtime.attachingLog || this.runtimes.get(rec.id) !== runtime) return;
@@ -1005,6 +1062,93 @@ export class MessageBridgeService {
   }
   private presenceKey(event: { at: string; type: string; userId: string }): string {
     return `${event.at}\0${event.type}\0${event.userId}`;
+  }
+  /** boss/server/backup 事件輪詢:對每個有渠道在跑(runtimes)的實例做一次 reconcile;
+   *  broadcast() 內部依 ruleFlag 過濾實際收訊人,這裡不需要提前判斷「有沒有人訂閱」。 */
+  private async pollEvents(): Promise<void> {
+    for (const id of [...this.runtimes.keys()]) {
+      const rec = this.store.get(id);
+      if (!rec) continue;
+      const ctx: DriverContext = { instanceDir: this.store.instanceDir(id) };
+      await this.reconcileBoss(id, rec, ctx);
+      await this.reconcileServer(id, rec, ctx);
+      this.reconcileBackup(id, ctx);
+    }
+  }
+  /** 讀頭目回報模組狀態檔,偵測每個 spawner 的 alive 轉移:true→false=擊殺、false→true=重生。
+   *  alive=null(未知)保留上次已知值當基準、不判轉移;首次觀測只建基準。需頭目回報模組,
+   *  讀不到狀態(未安裝/非 Windows)就自然不通知。 */
+  private async reconcileBoss(id: string, rec: InstanceRecord, ctx: DriverContext): Promise<void> {
+    const state = await readBossState(rec, ctx).catch(() => null);
+    if (!state || !Array.isArray(state.bosses)) return;
+    const prev = this.lastBossAlive.get(id) ?? new Map<string, boolean>();
+    const next = new Map<string, boolean>();
+    for (const boss of state.bosses) {
+      if (typeof boss.alive !== "boolean") {
+        const carried = prev.get(boss.name);
+        if (carried !== undefined) next.set(boss.name, carried);
+        continue;
+      }
+      next.set(boss.name, boss.alive);
+      const was = prev.get(boss.name);
+      if (was === true && boss.alive === false) {
+        await this.broadcast(id, (language) => formatBoss(true, boss.name, language), undefined, "notifyBoss");
+      } else if (was === false && boss.alive === true) {
+        await this.broadcast(id, (language) => formatBoss(false, boss.name, language), undefined, "notifyBoss");
+      }
+    }
+    this.lastBossAlive.set(id, next);
+  }
+  /** 偵測伺服器狀態轉移(開機/關機/啟動中)與「有新版本可更新」(false→true)。
+   *  首次觀測只建基準,不補發啟動時就已存在的狀態。 */
+  private async reconcileServer(id: string, rec: InstanceRecord, ctx: DriverContext): Promise<void> {
+    let status: InstanceStatus;
+    try {
+      ({ status } = await this.driverOf(rec).status(rec, ctx));
+    } catch {
+      return;
+    }
+    const prevStatus = this.lastServerStatus.get(id);
+    this.lastServerStatus.set(id, status);
+    if (prevStatus !== undefined && prevStatus !== status) {
+      const event: ServerStatusEvent | null =
+        status === "running" ? "running"
+        : status === "starting" || status === "restarting" ? "starting"
+        : status === "exited" ? "exited"
+        : null;
+      if (event) await this.broadcast(id, (language) => formatServerStatus(event, language), undefined, "notifyServerStatus");
+    }
+
+    const { updateAvailable } = cachedVersionSummary(rec, ctx);
+    if (typeof updateAvailable === "boolean") {
+      const prevUpdate = this.lastUpdateAvailable.get(id);
+      this.lastUpdateAvailable.set(id, updateAvailable);
+      if (prevUpdate === false && updateAvailable === true) {
+        await this.broadcast(id, (language) => formatServerStatus("update", language), undefined, "notifyServerStatus");
+      }
+    }
+  }
+  /** 輪詢 backup-schedule.json 的 lastRunAt 變化:改變且 lastResult 以「成功」開頭=完成、
+   *  以「失敗」開頭=失敗,「略過」開頭不通知。首次觀測只建基準。message-bridge 不擁有
+   *  backup-scheduler,故直接讀檔而非跨模組呼叫。 */
+  private reconcileBackup(id: string, ctx: DriverContext): void {
+    let schedule: BackupSchedule;
+    try {
+      schedule = JSON.parse(fs.readFileSync(path.join(ctx.instanceDir, "backup-schedule.json"), "utf8")) as BackupSchedule;
+    } catch {
+      return;
+    }
+    if (!schedule.lastRunAt || !schedule.lastResult) return;
+    const lastRunAt = schedule.lastRunAt;
+    const lastResult = schedule.lastResult;
+    const prev = this.lastBackupRunAt.get(id);
+    this.lastBackupRunAt.set(id, lastRunAt);
+    if (prev === undefined || prev === lastRunAt) return;
+    if (lastResult.startsWith("成功")) {
+      void this.broadcast(id, (language) => formatBackup(true, lastResult.slice("成功:".length), language), undefined, "notifyBackup");
+    } else if (lastResult.startsWith("失敗")) {
+      void this.broadcast(id, (language) => formatBackup(false, lastResult.slice("失敗:".length), language), undefined, "notifyBackup");
+    }
   }
   private async handleIncoming(id: string, message: IncomingMessage): Promise<void> {
     const runtime = this.runtimes.get(id);

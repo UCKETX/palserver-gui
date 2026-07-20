@@ -57,7 +57,7 @@ async function readBossMarker(rec: InstanceRecord, ctx: DriverContext): Promise<
 }
 
 /** 讀模組寫出的狀態檔;缺檔或壞檔回 null。 */
-async function readBossState(rec: InstanceRecord, ctx: DriverContext): Promise<BossRespawnState | null> {
+export async function readBossState(rec: InstanceRecord, ctx: DriverContext): Promise<BossRespawnState | null> {
   try {
     const parsed = JSON.parse(await runtimeReadText(rec, ctx, BOSS_STATE_REL)) as BossRespawnState;
     if (!parsed || !Array.isArray(parsed.bosses)) return null;

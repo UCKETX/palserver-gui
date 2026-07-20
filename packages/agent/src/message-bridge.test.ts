@@ -254,7 +254,7 @@ test("migrates global bridge rules while preserving channel overrides", () => {
       { relayGameToGroup: true, commandPrefix: "!" },
       { relayGroupToGame: false, relayGameToGroup: false, notifyJoinLeave: false, notifyCapture: true, notifyDeath: false, commandPrefix: "/" },
     ),
-    { relayGroupToGame: false, relayGameToGroup: true, notifyJoinLeave: false, notifyCapture: true, notifyDeath: false, relayPrefix: "", commandPrefix: "!" },
+    { relayGroupToGame: false, relayGameToGroup: true, notifyJoinLeave: false, notifyCapture: true, notifyDeath: false, notifyBoss: true, notifyServerStatus: true, notifyBackup: true, relayPrefix: "", commandPrefix: "!" },
   );
 });
 
@@ -266,7 +266,7 @@ test("migrates legacy single-platform bridge config into channel instances", () 
   assert.equal(config.channels.length, 1);
   assert.deepEqual(config.channels[0], {
     id: "onebot", platform: "onebot", enabled: true,
-    relayGroupToGame: true, relayGameToGroup: false, notifyJoinLeave: true, notifyCapture: true, notifyDeath: true, relayPrefix: "", commandPrefix: "/",
+    relayGroupToGame: true, relayGameToGroup: false, notifyJoinLeave: true, notifyCapture: true, notifyDeath: true, notifyBoss: true, notifyServerStatus: true, notifyBackup: true, relayPrefix: "", commandPrefix: "/",
     adminIds: [], language: "zh-CN", wsUrl: "ws://127.0.0.1:3001", groupId: "10001", accessToken: "secret",
   });
 });

@@ -156,6 +156,10 @@ app.addHook("onRequest", async (req, reply) => {
 // Warm the Steam version cache so the first instance listing already knows
 // whether an update is available (it only ever reads the cache).
 void fetchLatest().catch(() => {});
+// 每 6 小時重新抓一次最新版本,讓 message-bridge 的 reconcileServer 能偵測到
+// updateAvailable 由 false→true(新版釋出)並發「有新版本」通知 —— 否則快取只停在
+// 啟動當下,執行期間永遠不會變、update 通知永遠不觸發。
+setInterval(() => void fetchLatest(true).catch(() => {}), 6 * 60 * 60_000).unref();
 
 const presence = new PresenceTracker(store);
 presence.start();

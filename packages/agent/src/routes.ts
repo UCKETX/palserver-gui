@@ -2421,7 +2421,8 @@ export function registerRoutes(
     id: z.string().trim().regex(/^[A-Za-z0-9_-]{1,64}$/), enabled: z.boolean(),
     adminIds: z.array(z.string().trim().min(1).max(128)).max(50), language: MessageBridgeLanguageSchema,
     relayGroupToGame: z.boolean(), relayGameToGroup: z.boolean(), notifyJoinLeave: z.boolean(),
-    notifyCapture: z.boolean(), notifyDeath: z.boolean(), relayPrefix: z.string().trim().max(20),
+    notifyCapture: z.boolean(), notifyDeath: z.boolean(), notifyBoss: z.boolean(),
+    notifyServerStatus: z.boolean(), notifyBackup: z.boolean(), relayPrefix: z.string().trim().max(20),
     commandPrefix: z.string().trim().min(1).max(3),
   };
   const MessageBridgePatchSchema = z.object({ channels: z.array(z.discriminatedUnion("platform", [

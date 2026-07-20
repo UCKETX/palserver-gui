@@ -99,7 +99,7 @@ export function MessageBridgeTab({ client, instanceId }: { client: AgentClient; 
   const platformCounts = useMemo(() => new Map(PLATFORMS.map((platform) => [platform.id, draft?.channels.filter((channel) => channel.platform === platform.id).length ?? 0])), [draft]);
 
   if (!draft) {
-    return <div className="max-w-3xl">{error ? <p className={errorCls}>{error}</p> : <p className="text-sm text-ink-muted">{t("載入中…")}</p>}</div>;
+    return <div className="w-full">{error ? <p className={errorCls}>{error}</p> : <p className="text-sm text-ink-muted">{t("載入中…")}</p>}</div>;
   }
 
   const setChannel = (channelId: string, patch: Partial<DraftChannel>) => {
@@ -161,7 +161,7 @@ export function MessageBridgeTab({ client, instanceId }: { client: AgentClient; 
   };
 
   return (
-    <div className="flex max-w-3xl flex-col gap-4">
+    <div className="flex w-full flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="inline-flex items-center gap-2 text-lg font-extrabold"><FiMessageCircle className="text-pal" /> {t("群服互通")}</h2>

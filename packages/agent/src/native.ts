@@ -1205,6 +1205,14 @@ function followNewestInDir(dir: string, onLine: (line: string) => void, replay =
 /** Tail -f a file: replay the last `replay` lines once it exists, then
  * follow appended bytes. Handles truncation/rotation (position reset) and
  * files that appear later. Returns a cleanup fn. */
+/** attach 時要補送哪些既有行:replay>0 給最後 replay 行(UI 補脈絡用),replay=0 完全不補。
+ *  ⚠️ 陷阱:`arr.slice(-0)` === `arr.slice(0)` === 整個陣列(因 `-0 === 0`);replay=0 必須明確回 []。
+ *  之前這裡直接 `slice(-replay)`,replay=0 的 log-event-tracker 一 attach 就把整個當下 log 全部
+ *  當新事件重發(重啟時舊捕捉/死亡誤報的根因)。純函式,方便回歸測試。 */
+export function linesToReplay(existing: string[], replay: number): string[] {
+  return replay > 0 ? existing.slice(-replay) : [];
+}
+
 function followFile(file: string, onLine: (line: string) => void, replay = 200): () => void {
   let attached = false;
   let position = 0;
@@ -1218,8 +1226,10 @@ function followFile(file: string, onLine: (line: string) => void, replay = 200):
       return;
     }
     if (!attached) {
-      const existing = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
-      for (const line of existing.slice(-replay)) onLine(line);
+      // replay=0(如 log-event-tracker)只跟新行,連讀檔都跳過、直接位移到檔尾;
+      // replay>0(如 UI log 視窗)才讀出既有行、補送最後 replay 行。
+      const existing = replay > 0 ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
+      for (const line of linesToReplay(existing, replay)) onLine(line);
       position = size;
       buffer = "";
       attached = true;

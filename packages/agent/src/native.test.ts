@@ -1,6 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyServerExit } from "./native.js";
+import { classifyServerExit, linesToReplay } from "./native.js";
+
+test("linesToReplay: replay=0 不補任何歷史(slice(-0)=整包 的陷阱)", () => {
+  // 這是「重啟時舊捕捉/死亡誤報」的根因:log-event-tracker 用 replay=0,必須真的回 []。
+  assert.deepEqual(linesToReplay(["a", "b", "c"], 0), []);
+  assert.deepEqual(linesToReplay([], 0), []);
+  assert.deepEqual(linesToReplay(["a", "b", "c"], 2), ["b", "c"]);
+  assert.deepEqual(linesToReplay(["a", "b", "c"], 10), ["a", "b", "c"]);
+});
 
 test("classifyServerExit: 我們要求的停止一律算正常 exited", () => {
   assert.equal(classifyServerExit(0, null, true), "exited");

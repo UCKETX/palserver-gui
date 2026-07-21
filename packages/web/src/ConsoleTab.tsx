@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiTerminal, FiPlay, FiSearch, FiTrash2, FiMapPin } from "react-icons/fi";
+import { FiTerminal, FiPlay, FiSearch, FiTrash2, FiStar, FiMapPin } from "react-icons/fi";
 import { GiShield } from "react-icons/gi";
 import {
   COMMAND_CATEGORY_LABELS,

@@ -29,6 +29,7 @@ import { SHOW_SPONSOR_FEATURES, SHOW_BOSS_RESPAWN } from "./flags";
 import { PerformanceTab } from "./PerformanceTab";
 import { EngineTab } from "./EngineTab";
 import { maskSteamIdsInText } from "./SteamId";
+import { hasFeature } from "@palserver/shared";
 import { classifyLine, categoryColor, formatLine, genericLine, translateTarget, useLogPrefs } from "./logHighlight";
 import { STATUS_LABELS } from "./labels";
 import { TABS, LOCKED_TABS, defaultHiddenTabs, useHiddenTabs, useHiddenCards, useTabOrder, type Tab } from "./tabPrefs";
@@ -803,6 +804,7 @@ function LogToggle({
 
 function LogsTab({ client, instanceId }: { client: AgentClient; instanceId: string }) {
   useI18n();
+  const [entitled, setEntitled] = useState<boolean | null>(null);
   const [sources, setSources] = useState<LogSource[]>([]);
   const [source, setSource] = useState<LogSourceId | "">("");
   const [lines, setLines] = useState<string[]>([]);
@@ -827,6 +829,13 @@ function LogsTab({ client, instanceId }: { client: AgentClient; instanceId: stri
       setSending(false);
     }
   };
+
+  useEffect(() => {
+    client
+      .license()
+      .then((license) => setEntitled(hasFeature("log-tools", license)))
+      .catch(() => setEntitled(false));
+  }, [client]);
 
   useEffect(() => {
     client
@@ -858,7 +867,7 @@ function LogsTab({ client, instanceId }: { client: AgentClient; instanceId: stri
   // 一個請求翻很多行 → 即時感),結果快取,同句不重複。格式化開著就只翻套不了版的一般行訊息
   // (事件行已中文套版);沒開就整行送翻。英文介面不翻。開著時新行進來會再補翻。
   useEffect(() => {
-    if (!prefs.translate) return;
+    if (entitled !== true || !prefs.translate) return;
     const tlv = translateTarget();
     if (tlv === "en") return;
     // 收集近 300 行裡還沒翻的句子(去重)。
@@ -896,7 +905,7 @@ function LogsTab({ client, instanceId }: { client: AgentClient; instanceId: stri
       }
       bumpTrans((v) => v + 1);
     })();
-  }, [prefs.translate, prefs.format, lines, client]);
+  }, [entitled, prefs.translate, prefs.format, lines, client]);
 
   // 只看重點:錯誤/警告過濾(重用 classifyLine 分類);聊天=chat/join/leave/death/capture
   const [logFilter, setLogFilter] = useState<"all" | "issues" | "chat">("all");
@@ -920,7 +929,7 @@ function LogsTab({ client, instanceId }: { client: AgentClient; instanceId: stri
 
   const highlight = prefs.highlight; // 免費
   const format = prefs.format; // 免費
-  const translate = prefs.translate;
+  const translate = entitled === true && prefs.translate;
   const tl = translateTarget();
 
   return (

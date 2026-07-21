@@ -217,6 +217,16 @@ export function DetailsToggle({
   );
 }
 
+/** 未解鎖贊助者詳細資訊時的共用提示。 */
+export function SponsorHint() {
+  useI18n();
+  return (
+    <div className="rounded-cute border-2 border-sun/40 bg-sun/10 px-3 py-2 text-xs font-bold text-sun">
+      {t("詳細資訊是贊助者功能。到「設定 → 贊助者識別碼」輸入識別碼即可使用。")}
+    </div>
+  );
+}
+
 const DETAILS_KEY = "palserver.showDetails";
 
 /** 「詳細資訊」開關的記憶(localStorage):關掉彈窗重開不會跳回收合狀態。 */

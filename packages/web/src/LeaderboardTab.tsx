@@ -24,6 +24,13 @@ export function LeaderboardTab({ client, instanceId }: { client: AgentClient; in
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    client
+      .license()
+      .then((license) => setEntitled(hasFeature("leaderboard", license)))
+      .catch(() => setEntitled(false));
+  }, [client]);
+
   const load = useCallback(async () => {
     try {
       const res = await client.statsHistory(instanceId);
@@ -78,6 +85,7 @@ export function LeaderboardTab({ client, instanceId }: { client: AgentClient; in
 
   const latest = history && history.length > 0 ? history[history.length - 1] : null;
   const prev = history && history.length > 1 ? history[history.length - 2] : null;
+  const locked = entitled === false;
 
   return (
     <div className="flex flex-col gap-4">

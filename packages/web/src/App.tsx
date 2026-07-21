@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GiSheep, GiEggClutch } from "react-icons/gi";
-import { FiActivity, FiAlertTriangle, FiClock, FiCpu, FiDownload, FiHardDrive, FiHeart, FiHelpCircle, FiPlus, FiServer, FiSettings, FiUsers, FiZap } from "react-icons/fi";
-import type { Backend, ExternalWorldCandidate, InstanceStats, InstanceSummary, LiveStatus } from "@palserver/shared";
+import { FiActivity, FiAlertTriangle, FiClock, FiCpu, FiDownload, FiHardDrive, FiHeart, FiHelpCircle, FiPlus, FiServer, FiSettings, FiStar, FiUsers, FiZap } from "react-icons/fi";
+import { hasFeature, type Backend, type ExternalWorldCandidate, type InstanceStats, type InstanceSummary, type LiveStatus } from "@palserver/shared";
 import {
   DndContext,
   closestCenter,
@@ -203,11 +203,19 @@ function Dashboard({ client, onOpen }: { client: AgentClient; onOpen: (id: strin
   const [listSearch, setListSearch] = useState("");
   const [showReview, setShowReview] = useState(false); // 配置評估健檢彈窗
   const [extras, setExtras] = useState<Record<string, CardExtra>>({});
+  const [entitled, setEntitled] = useState(false);
   const toggleAdvanced = () =>
     setAdvanced((v) => {
       localStorage.setItem(ADVANCED_KEY, v ? "0" : "1");
       return !v;
     });
+
+  useEffect(() => {
+    client
+      .license()
+      .then((license) => setEntitled(hasFeature("dashboard-stats", license)))
+      .catch(() => setEntitled(false));
+  }, [client]);
 
   const ordered = instances ? sortByOrder(instances, order) : [];
   // 台數多時的名稱搜尋(6 台以上才顯示輸入框);搜尋中仍可拖曳,但只影響顯示順序

@@ -5,13 +5,13 @@ import { ConsoleTab } from "./ConsoleTab";
 import { CustomPalModal } from "./CustomPalModal";
 import { GiveItemsModal } from "./GiveItemsModal";
 import { TeleportModal } from "./TeleportModal";
-import { SHOW_ADVANCED_FEATURES } from "./flags";
+import { SHOW_SPONSOR_FEATURES } from "./flags";
 import { t, useI18n } from "./i18n";
 import { Overlay, card, btn, btnGhost } from "./ui";
 
 /** 「操作」選單:每一項對應一條指令(預選 + 預填玩家),或自訂帕魯/帕魯蛋彈窗。
  *  cmd = ConsoleTab 要預選的指令名;customPalMode = 開 CustomPalModal(pal / egg)。
- *  進階項目可由 SHOW_ADVANCED_FEATURES 整組切換。 */
+ *  進階項目可由 SHOW_SPONSOR_FEATURES 整組切換。 */
 const PLAYER_ACTIONS: {
   label: string;
   cmd?: string;
@@ -23,7 +23,7 @@ const PLAYER_ACTIONS: {
   { label: "給予道具", cmd: "give" },
   { label: "給予帕魯", cmd: "givepal" },
   { label: "給予帕魯蛋", cmd: "giveegg" },
-  ...(SHOW_ADVANCED_FEATURES
+  ...(SHOW_SPONSOR_FEATURES
     ? ([
         { label: "傳送此玩家", teleport: "source" },
         { label: "傳送到此玩家位置", teleport: "target" },

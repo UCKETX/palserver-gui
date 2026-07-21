@@ -36,6 +36,7 @@ import { startAutoScanLoop } from "./save-tools.js";
 import { activeWorldGuidAsync } from "./saves.js";
 import { announceBoot, trackPlayers } from "./telemetry.js";
 import { cleanupOldBinaries, startUpdateChecker, type UpdateOps } from "./self-update.js";
+import { refreshLicense } from "./license.js";
 import { startTray } from "./tray.js";
 
 // 啟動流程包在 async main() 內,讓 entry 沒有頂層 await —— 這樣才能打包成

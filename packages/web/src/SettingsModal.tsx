@@ -6,6 +6,7 @@ import { copyText } from "./clipboard";
 import { PrivacyModal } from "./PrivacyModal";
 import { UpdateCard } from "./UpdateCard";
 import { useI18n } from "./i18n";
+import { SHOW_SPONSOR_FEATURES } from "./flags";
 import { ThemePicker } from "./ThemePicker";
 import { useHiddenCards } from "./tabPrefs";
 import { STATS_URL } from "./stats";
@@ -33,6 +34,9 @@ export function SettingsModal({
   const [showToken, setShowToken] = useState(false);
   const [telemetry, setTelemetry] = useState<TelemetryStatus | null>(null);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [lic, setLic] = useState<LicenseStatus | null>(null);
+  const [licInput, setLicInput] = useState("");
+  const [licBusy, setLicBusy] = useState(false);
   const [showThemes, setShowThemes] = useState(false);
   const [afdianNo, setAfdianNo] = useState("");
   const [afdianBusy, setAfdianBusy] = useState(false);
@@ -42,6 +46,7 @@ export function SettingsModal({
     client.pairingCode().then((r) => setCode(r.pairingCode)).catch(() => setCode(null));
     client.agentAddresses().then((r) => setAddrs(r.addresses)).catch(() => setAddrs([]));
     client.telemetry().then(setTelemetry).catch(() => setTelemetry(null));
+    client.license().then(setLic).catch(() => setLic(null));
   }, [client]);
 
   const saveLicense = async () => {

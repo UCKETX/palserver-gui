@@ -6,6 +6,7 @@ import {
   FiClock,
   FiDownload,
   FiFolder,
+  FiLock,
   FiPlay,
   FiRotateCcw,
   FiSave,
@@ -15,6 +16,7 @@ import {
 } from "react-icons/fi";
 import {
   COOP_HOST_UID,
+  hasFeature,
   type BackupSchedule,
   type InstanceSummary,
   type SaveHealthStatus,
@@ -282,10 +284,18 @@ function HealthCard({
   running: boolean;
 }) {
   useI18n();
+  const [entitled, setEntitled] = useState<boolean | null>(null);
   const [worldGuid, setWorldGuid] = useState(() => (worlds.find((w) => w.active) ?? worlds[0]).guid);
   const [status, setStatus] = useState<SaveHealthStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+
+  useEffect(() => {
+    client
+      .license()
+      .then((license) => setEntitled(hasFeature("save-slim", license)))
+      .catch(() => setEntitled(false));
+  }, [client, instanceId]);
 
   // 選中的世界被刪掉時退回啟用世界
   useEffect(() => {
@@ -304,8 +314,8 @@ function HealthCard({
   }, [client, instanceId, worldGuid]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (entitled) void refresh();
+  }, [entitled, refresh]);
 
   const checking = status !== null && status.phase !== "idle";
   useEffect(() => {
@@ -330,6 +340,7 @@ function HealthCard({
     return "";
   };
 
+  const locked = entitled === false;
   const report = status?.report ?? null;
 
   return (

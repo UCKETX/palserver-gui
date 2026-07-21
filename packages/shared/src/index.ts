@@ -935,6 +935,8 @@ export interface SavePlayersSummary {
 export interface SaveBreedingPal extends SavePalRow {
   ownerUid: string;
   ownerName: string;
+  /** 主人所屬公會;選定玩家時用來自動納入同公會據點帕魯。 */
+  ownerGuildId?: string;
 }
 
 export interface SaveBreedingSnapshot {

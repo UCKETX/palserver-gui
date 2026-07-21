@@ -332,10 +332,25 @@ export function BreedingTab({ client, instanceId, onShowOnMap }: { client: Agent
 
   const owners = useMemo(() => {
     const map = new Map<string, string>();
-    for (const pal of pals) map.set(pal.ownerUid, pal.ownerName);
+    for (const pal of pals) {
+      if (!pal.base) map.set(pal.ownerUid, pal.ownerName);
+    }
     return [...map].sort((a, b) => a[1].localeCompare(b[1]));
   }, [pals]);
-  const available = ownerUid ? pals.filter((pal) => pal.ownerUid === ownerUid) : pals;
+  const available = useMemo(() => {
+    if (!ownerUid) return pals;
+    const normalizeId = (id: string) => id.replace(/[^0-9a-f]/gi, "").toLowerCase();
+    const guildIds = new Set(
+      pals
+        .filter((pal) => !pal.base && pal.ownerUid === ownerUid && pal.ownerGuildId)
+        .map((pal) => normalizeId(pal.ownerGuildId!)),
+    );
+    return pals.filter(
+      (pal) =>
+        pal.ownerUid === ownerUid ||
+        (pal.base !== undefined && guildIds.has(normalizeId(pal.base.guildId))),
+    );
+  }, [ownerUid, pals]);
 
   const scan = async () => {
     if (!worldGuid) return;
@@ -433,7 +448,7 @@ export function BreedingTab({ client, instanceId, onShowOnMap }: { client: Agent
               setSolution(null);
             }}
           >
-            <option value="">{t("全服玩家的帕魯")}</option>
+            <option value="">{t("全服玩家及公會據點的帕魯")}</option>
             {owners.map(([uid, name]) => <option key={uid} value={uid}>{name}</option>)}
           </Select>
         </label>

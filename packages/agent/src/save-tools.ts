@@ -211,6 +211,12 @@ function readSnapshots(ctx: DriverContext): Record<string, SavePlayersSnapshot> 
 /** 配種工具只需要個體與主人,不回傳背包/公會等大型玩家檔案。 */
 export function getBreedingSnapshot(ctx: DriverContext, worldGuid: string): SaveBreedingSnapshot {
   const snapshot = readSnapshots(ctx)[worldGuid];
+  const guildIdByMemberUid = new Map<string, string>();
+  const guildIdByName = new Map<string, string>();
+  for (const guild of snapshot?.guilds ?? []) {
+    guildIdByName.set(guild.name, guild.id);
+    for (const member of guild.members) guildIdByMemberUid.set(normGuid(member.uid), guild.id);
+  }
   const pals: SaveBreedingSnapshot["pals"] = [];
   const seen = new Set<string>();
   const add = (pal: SaveBreedingSnapshot["pals"][number]) => {
@@ -226,7 +232,12 @@ export function getBreedingSnapshot(ctx: DriverContext, worldGuid: string): Save
     });
   }
   for (const player of snapshot?.players ?? []) {
-    for (const pal of player.pals) add({ ...pal, ownerUid: player.uid, ownerName: player.name });
+    const ownerGuildId =
+      guildIdByMemberUid.get(normGuid(player.uid)) ??
+      (player.guildName ? guildIdByName.get(player.guildName) : undefined);
+    for (const pal of player.pals) {
+      add({ ...pal, ownerUid: player.uid, ownerName: player.name, ownerGuildId });
+    }
   }
   return {
     worldGuid,

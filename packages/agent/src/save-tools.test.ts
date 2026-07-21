@@ -79,7 +79,7 @@ test("getBreedingSnapshot:攤平玩家與據點帕魯並保留來源", () => {
           generatedAt: "2026-07-18T00:00:00Z",
           levelSavMtime: "2026-07-18T00:00:00Z",
           players: [{
-            uid: "owner-1", name: "Alice", pals: [
+            uid: "owner-1", name: "Alice", guildName: "Builders", pals: [
               { instanceId: "pal-1", characterId: "SheepBall", slotIndex: 35 },
               { instanceId: "base-pal-1", characterId: "Kitsunebi" },
             ],
@@ -88,6 +88,11 @@ test("getBreedingSnapshot:攤平玩家與據點帕魯並保留來源", () => {
             instanceId: "base-pal-1",
             characterId: "Kitsunebi",
             base: { id: "base-1", name: "Farm", guildId: "guild-1", guildName: "Builders", x: 100, y: 200 },
+          }],
+          guilds: [{
+            id: "guild-1",
+            name: "Builders",
+            members: [{ uid: "OWNER-1", name: "Alice", lastOnlineDaysAgo: 0 }],
           }],
         },
       }),
@@ -104,6 +109,7 @@ test("getBreedingSnapshot:攤平玩家與據點帕魯並保留來源", () => {
       },
       {
         instanceId: "pal-1", characterId: "SheepBall", slotIndex: 35, ownerUid: "owner-1", ownerName: "Alice",
+        ownerGuildId: "guild-1",
       },
     ]);
   } finally {

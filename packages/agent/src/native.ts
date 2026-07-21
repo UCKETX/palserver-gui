@@ -10,6 +10,7 @@ import type { InstanceRecord } from "./store.js";
 import { renderPalWorldSettingsIni, diffIniAgainstSnapshot } from "./settings-ini.js";
 import { mergeEnginePatch } from "./engine-ini-merge.js";
 import { rest } from "./restapi.js";
+import { emitAgentEvent } from "./events.js";
 import { DATA_DIR } from "./env.js";
 
 const execFileP = promisify(execFile);
@@ -707,6 +708,61 @@ async function getNativeStatus(
   return { status: "created", runtimeId: null };
 }
 
+// ── 精準的伺服器生命週期 webhook 事件(取代 supervisor 30s 輪詢的粗略判斷)──
+// starting:spawn 當下發。running:啟動後探測遊戲 REST /info,第一次通=真的可連才發。
+// exited/crash:child exit 事件即時發,靠 expectedStops 分辨「我們要求的停止」vs 崩潰。
+// agent 重啟後 detached 存活的行程沒有 child handle → 由 supervisor 輪詢兜底(見 supervisor.ts)。
+type ServerChild = ReturnType<typeof spawn>;
+const serverChildren = new Map<string, ServerChild>();
+const expectedStops = new Set<string>();
+const readyProbes = new Map<string, NodeJS.Timeout>();
+const READY_PROBE_MS = 3_000;
+const READY_PROBE_MAX = 40; // 逾此(~2 分鐘)即使 REST 未通也兜底發一次 running
+
+/** child 結束時判定「正常停止」vs「崩潰」:被我們要求停 或 exit code 0 = 正常;被 signal 砍
+ *  或 exit code 非 0 = 崩潰。純函式,方便測試。 */
+export function classifyServerExit(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  expected: boolean,
+): "exited" | "crash" {
+  if (expected) return "exited";
+  if (signal) return "crash";
+  return code === 0 ? "exited" : "crash";
+}
+
+/** 啟動後每 3s 探測遊戲 REST /info;第一次成功 = 遊戲真的可連 → 發 server.running。
+ *  逾時(REST/RCON 未開)兜底發一次。行程中途結束由 exit handler 取消本探測。 */
+function startReadyProbe(rec: InstanceRecord): void {
+  const existing = readyProbes.get(rec.id);
+  if (existing) clearInterval(existing);
+  let attempts = 0;
+  const timer = setInterval(() => {
+    void (async () => {
+      attempts += 1;
+      let version: string | undefined;
+      let reachable = false;
+      try {
+        const info = await rest.info(rec);
+        reachable = !!info;
+        version = info?.version;
+      } catch {
+        reachable = false;
+      }
+      if (!readyProbes.has(rec.id)) return; // 已被 exit handler 取消
+      if (reachable || attempts >= READY_PROBE_MAX) {
+        clearInterval(timer);
+        readyProbes.delete(rec.id);
+        if (serverChildren.has(rec.id)) {
+          emitAgentEvent("server.running", rec.id, version ? { version } : {});
+        }
+      }
+    })();
+  }, READY_PROBE_MS);
+  timer.unref();
+  readyProbes.set(rec.id, timer);
+}
+
 async function spawnServer(rec: InstanceRecord, ctx: DriverContext): Promise<void> {
   writeIni(rec, ctx);
   const root = serverRoot(rec, ctx);
@@ -751,6 +807,54 @@ async function spawnServer(rec: InstanceRecord, ctx: DriverContext): Promise<voi
   // 記下 PID + 建立時間當身分指紋,之後 isAlive/停止前都靠它辨認,避免 PID 重用誤殺。
   const id = await processIdentity(child.pid).catch(() => null);
   writePidRecord(ctx, { pid: child.pid, startedAt: id?.startedAt ?? null });
+
+  // 精準生命週期:spawn = starting;掛 exit 事件;啟動 REST readiness 探測。
+  emitAgentEvent("server.starting", rec.id, {});
+  serverChildren.set(rec.id, child);
+  child.on("exit", (code, signal) => {
+    if (serverChildren.get(rec.id) === child) serverChildren.delete(rec.id);
+    const probe = readyProbes.get(rec.id);
+    if (probe) {
+      clearInterval(probe);
+      readyProbes.delete(rec.id);
+    }
+    if (expectedStops.delete(rec.id)) {
+      // 我們主動要求的停止(且已 sweep 殘留行程)→ 直接發 exited。
+      emitAgentEvent("server.exited", rec.id, { code: code ?? undefined });
+    } else {
+      // 非預期退出:child exit 未必代表伺服器真的掛了(Windows 上 shipping 可能 spawn 真正的
+      // 伺服器子行程後自己退出、或啟動途中 re-exec 換 PID)。先確認再發,避免誤報「已停止」。
+      void verifyThenEmitExit(rec, ctx, code, signal);
+    }
+  });
+  startReadyProbe(rec);
+}
+
+/** child exit 後,以 getNativeStatus(GUI 也用它,是可靠來源)確認伺服器是否真的掛了才發 exited/crash;
+ *  仍在跑(re-exec/子行程接手)就當誤報、不發。等幾秒讓過渡狀態落定。 */
+async function verifyThenEmitExit(
+  rec: InstanceRecord,
+  ctx: DriverContext,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    let status: InstanceStatus;
+    try {
+      status = (await getNativeStatus(rec, ctx)).status;
+    } catch {
+      continue;
+    }
+    if (status === "running") return; // 其實還活著 → 誤報,不發
+    // 非 running 且非過渡態(starting/restarting/installing)→ 確定掛了,跳出去發。
+    if (status !== "starting" && status !== "restarting" && status !== "installing") break;
+  }
+  const kind = classifyServerExit(code, signal, false);
+  emitAgentEvent(kind === "crash" ? "server.crash" : "server.exited", rec.id, {
+    code: code ?? undefined,
+    ...(kind === "crash" && signal ? { detail: `signal ${signal}` } : {}),
+  });
 }
 
 /** 每實例的 CPU 取樣歷史(instanceDir → 上一筆);行程結束就清掉。 */
@@ -905,6 +1009,9 @@ export const nativeDriver: ServerDriver = {
       return;
     }
 
+    // 這是我們主動要求的停止:標記一下,讓 child exit handler 把退出判為正常(exited)而非崩潰。
+    expectedStops.add(rec.id);
+
     if (await requestGracefulShutdown(rec)) {
       // 等它自己收 —— 這期間用便宜的 isAlive 即可:行程還活著就不可能被重用。
       for (let i = 0; i < 20 && isAlive(pid); i++) {
@@ -943,6 +1050,11 @@ export const nativeDriver: ServerDriver = {
     }
     fs.rmSync(pidFile(ctx), { force: true });
     await sweepLeftovers();
+    // agent 重啟後 detached 存活的行程沒有 child handle → exit event 不會發,這裡兜底補一次
+    // server.exited;有 handle 的正常情況由 exit handler 發(此條件為 false,不會重複)。
+    if (!serverChildren.has(rec.id) && expectedStops.delete(rec.id)) {
+      emitAgentEvent("server.exited", rec.id, {});
+    }
   },
 
   async remove(rec, ctx) {
@@ -1010,10 +1122,10 @@ export const nativeDriver: ServerDriver = {
     return [{ id: "game" as const, label: "遊戲(原生)", available: fs.existsSync(gameLogFile(ctx)) }];
   },
 
-  async streamLogs(rec, ctx, onLine, _onEnd, source = "agent") {
+  async streamLogs(rec, ctx, onLine, _onEnd, source = "agent", replay = 200) {
     // Files may not exist yet (first boot) — the followers attach when they
     // appear, so the socket stays open instead of closing early.
-    if (source === "game") return followFile(gameLogFile(ctx), onLine, 200);
+    if (source === "game") return followFile(gameLogFile(ctx), onLine, replay);
     if (source === "paldefender") {
       const dir = palDefenderLogDir(rec, ctx);
       if (!dir) {
@@ -1022,10 +1134,10 @@ export const nativeDriver: ServerDriver = {
       }
       // PalDefender writes a new, timestamped file per run; follow the newest
       // and switch over when it rotates.
-      return followNewestInDir(dir, onLine);
+      return followNewestInDir(dir, onLine, replay);
     }
     // "agent": our own capture — install progress and server stdout.
-    return followFile(logFile(ctx), onLine);
+    return followFile(logFile(ctx), onLine, replay);
   },
 };
 
@@ -1094,7 +1206,7 @@ function newestFile(dir: string, sinceMs?: number): string | null {
 }
 
 /** Follow whichever file in `dir` is newest, re-attaching when it rotates. */
-function followNewestInDir(dir: string, onLine: (line: string) => void): () => void {
+function followNewestInDir(dir: string, onLine: (line: string) => void, replay = 200): () => void {
   let current: string | null = null;
   let stopCurrent: (() => void) | null = null;
   const timer = setInterval(() => {
@@ -1102,14 +1214,17 @@ function followNewestInDir(dir: string, onLine: (line: string) => void): () => v
     if (newest && newest !== current) {
       stopCurrent?.();
       current = newest;
+      // A rotation mid-run means a new server process — replay a little so the
+      // consumer doesn't miss lines written between polls (UI wants context;
+      // replay=0 consumers still get only genuinely new lines going forward).
       onLine(`— 跟隨日誌檔:${path.basename(newest)} —`);
-      stopCurrent = followFile(newest, onLine, 200);
+      stopCurrent = followFile(newest, onLine, replay);
     }
   }, 1000);
   const initial = newestFile(dir);
   if (initial) {
     current = initial;
-    stopCurrent = followFile(initial, onLine, 200);
+    stopCurrent = followFile(initial, onLine, replay);
   }
   return () => {
     clearInterval(timer);
@@ -1120,6 +1235,14 @@ function followNewestInDir(dir: string, onLine: (line: string) => void): () => v
 /** Tail -f a file: replay the last `replay` lines once it exists, then
  * follow appended bytes. Handles truncation/rotation (position reset) and
  * files that appear later. Returns a cleanup fn. */
+/** attach 時要補送哪些既有行:replay>0 給最後 replay 行(UI 補脈絡用),replay=0 完全不補。
+ *  ⚠️ 陷阱:`arr.slice(-0)` === `arr.slice(0)` === 整個陣列(因 `-0 === 0`);replay=0 必須明確回 []。
+ *  之前這裡直接 `slice(-replay)`,replay=0 的 log-event-tracker 一 attach 就把整個當下 log 全部
+ *  當新事件重發(重啟時舊捕捉/死亡誤報的根因)。純函式,方便回歸測試。 */
+export function linesToReplay(existing: string[], replay: number): string[] {
+  return replay > 0 ? existing.slice(-replay) : [];
+}
+
 function followFile(file: string, onLine: (line: string) => void, replay = 200): () => void {
   let attached = false;
   let position = 0;
@@ -1133,8 +1256,10 @@ function followFile(file: string, onLine: (line: string) => void, replay = 200):
       return;
     }
     if (!attached) {
-      const existing = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
-      for (const line of existing.slice(-replay)) onLine(line);
+      // replay=0(如 log-event-tracker)只跟新行,連讀檔都跳過、直接位移到檔尾;
+      // replay>0(如 UI log 視窗)才讀出既有行、補送最後 replay 行。
+      const existing = replay > 0 ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
+      for (const line of linesToReplay(existing, replay)) onLine(line);
       position = size;
       buffer = "";
       attached = true;

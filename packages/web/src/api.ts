@@ -24,9 +24,6 @@ import type {
   LaunchOptions,
   LicenseStatus,
   LiveStatus,
-  MessageBridgeConfig,
-  MessageBridgePatch,
-  MessageBridgeStatus,
   LogSource,
   LogSourceId,
   ModComponent,
@@ -58,6 +55,9 @@ import type {
   SaveScanStats,
   SavesStatus,
   VersionStatus,
+  WebhookConfigPublic,
+  WebhookDelivery,
+  WebhookFormat,
   WorldSettings,
 } from "@palserver/shared";
 
@@ -231,6 +231,15 @@ export class AgentClient {
     return body as T;
   }
 
+  /** 目前連線的 base URL 與存取權杖 —— 給「Discord bot / 其他工具」設定用。
+   *  token 是 agent 的完整存取權杖,顯示時務必遮蔽(見 DiscordBotTab)。 */
+  get baseUrl(): string {
+    return this.conn.url;
+  }
+  get token(): string {
+    return this.conn.token;
+  }
+
   info(): Promise<AgentInfo> {
     return this.request("/api/info");
   }
@@ -314,18 +323,6 @@ export class AgentClient {
 
   getInstance(id: string): Promise<InstanceDetail> {
     return this.request(`/api/instances/${id}`);
-  }
-
-  messageBridge(id: string): Promise<{ config: MessageBridgeConfig; status: MessageBridgeStatus }> {
-    return this.request(`/api/instances/${id}/message-bridge`);
-  }
-
-  updateMessageBridge(id: string, patch: MessageBridgePatch): Promise<{ config: MessageBridgeConfig; status: MessageBridgeStatus }> {
-    return this.request(`/api/instances/${id}/message-bridge`, { method: "PUT", body: JSON.stringify(patch) });
-  }
-
-  messageBridgeWebhookUrl(id: string, channelId?: string): string {
-    return `${this.conn.url}/api/instances/${id}/message-bridge/webhook${channelId ? `/${encodeURIComponent(channelId)}` : ""}`;
   }
 
   createInstance(input: CreateInstanceInput): Promise<InstanceSummary> {
@@ -567,6 +564,51 @@ export class AgentClient {
   /** 撤銷舊分享連結、產生新的;回傳同 publicMap()。 */
   rotatePublicMapLink(id: string): Promise<PublicMapStatus> {
     return this.request(`/api/instances/${id}/public-map/rotate`, { method: "POST" });
+  }
+
+  /** Webhook 設定清單(贊助者先行版 webhooks)。 */
+  webhooks(id: string): Promise<WebhookConfigPublic[]> {
+    return this.request(`/api/instances/${id}/webhooks`);
+  }
+
+  /** 新增 webhook;回傳的 secret 只在建立當下給一次,之後看不到,要當場顯示給使用者複製。 */
+  createWebhook(
+    id: string,
+    input: { url: string; events: string[]; format?: WebhookFormat; label?: string; enabled?: boolean },
+  ): Promise<{ config: WebhookConfigPublic; secret: string }> {
+    return this.request(`/api/instances/${id}/webhooks`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  updateWebhook(
+    id: string,
+    whId: string,
+    patch: Partial<{ url: string; events: string[]; format: WebhookFormat; enabled: boolean; label: string }>,
+  ): Promise<WebhookConfigPublic> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    });
+  }
+
+  deleteWebhook(id: string, whId: string): Promise<{ ok: true }> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}`, { method: "DELETE" });
+  }
+
+  /** 換發 HMAC 簽章密鑰;舊密鑰立即失效。回傳的新 secret 一樣只顯示這一次。 */
+  rotateWebhookSecret(id: string, whId: string): Promise<{ secret: string }> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}/rotate-secret`, { method: "POST" });
+  }
+
+  /** 手動送一次測試事件(webhook.ping)。 */
+  testWebhook(id: string, whId: string): Promise<{ result: { ok: boolean; status?: number; error?: string } }> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}/test`, { method: "POST" });
+  }
+
+  webhookDeliveries(id: string, whId: string): Promise<WebhookDelivery[]> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}/deliveries`);
   }
 
   palDefenderRest(id: string): Promise<PdRestStatus> {

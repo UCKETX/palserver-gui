@@ -1645,6 +1645,8 @@
   "未知位置": "Unknown location",
   "第 {n} 代配種結果": "Generation {n} result",
   "{owner} · {location} · Lv.{level}": "{owner} · {location} · Lv.{level}",
+  "帕魯箱第 {page} 頁": "Palbox page {page}",
+  "據點:{base}": "Base: {base}",
   "存檔掃描於 {when} · 可用帕魯 {n} 隻": "Save scanned {when} · {n} available Pals",
   "尚未掃描存檔。先從存檔刷新以載入全服帕魯。": "No save scan yet. Refresh from the save to load all server Pals.",
   "目標帕魯": "Target Pal",

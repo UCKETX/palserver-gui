@@ -33,6 +33,7 @@ import type {
   PalDefenderConfigStatus,
   PalSchemaStatus,
   PalStatsStatus,
+  BossRespawnStatus,
   PalStatValues,
   PdGuildList,
   PdGuildDetail,
@@ -40,16 +41,23 @@ import type {
   PdRestStatus,
   PlayerDetail,
   PresenceEvent,
+  PublicMapSettings,
+  PublicMapStatus,
   RconCommandsResponse,
   RestartPolicy,
   RestartStatus,
+  AutoScanSetting,
   SaveGuild,
+  SaveBreedingSnapshot,
   SaveHealthStatus,
   SavePlayerProfile,
   SavePlayersSummary,
   SaveScanStats,
   SavesStatus,
   VersionStatus,
+  WebhookConfigPublic,
+  WebhookDelivery,
+  WebhookFormat,
   WorldSettings,
 } from "@palserver/shared";
 
@@ -80,6 +88,8 @@ export interface AgentSettingsStatus {
   autoOpenBrowser: AgentSettingField<boolean>;
   /** 免安裝執行檔可一鍵重啟;開發模式為 false(需手動重啟)。 */
   canRestart: boolean;
+  /** Windows 免安裝執行檔:登入時自動啟動 agent(讀自 Run key)。其他情境為 null(UI 不顯示)。 */
+  bootStart: boolean | null;
 }
 export interface AgentSettingsPatch {
   requireToken?: boolean;
@@ -88,6 +98,33 @@ export interface AgentSettingsPatch {
   agentHost?: string;
   webOrigins?: string;
   autoOpenBrowser?: boolean;
+  bootStart?: boolean;
+}
+
+/** 配置評估健檢(對應 agent 的 system-review.ts;rating 由前端翻成文字與顏色)。 */
+export type ReviewRating = "good" | "ok" | "poor";
+export interface SystemReview {
+  specs: {
+    platform: string;
+    arch: string;
+    cpuModel: string;
+    cpuCores: number;
+    cpuSpeedMHz: number;
+    ramTotalBytes: number;
+    ramFreeBytes: number;
+    diskTotalBytes: number;
+    diskFreeBytes: number;
+    diskWriteMBps: number;
+    netAvgMs: number | null;
+    netMinMs: number | null;
+    netJitterMs: number | null;
+  };
+  ram: { rating: ReviewRating; score: number };
+  cpu: { rating: ReviewRating; score: number };
+  disk: { rating: ReviewRating; score: number };
+  network: { rating: ReviewRating; score: number };
+  overall: number;
+  generatedAt: string;
 }
 
 export interface ConfigSnapshotResult {
@@ -101,6 +138,21 @@ export interface ConfigSnapshotRestoreResult {
   reason?: string;
   snapshot?: ConfigSnapshotInfo;
   safetySnapshot?: ConfigSnapshotInfo;
+}
+
+/** 埠檢查結果(agent GET /ports/check)。 */
+export interface PortCheckEntry {
+  key: "game" | "query" | "rest" | "rcon" | "paldefender";
+  port: number;
+  protocol: "udp" | "tcp";
+  free: boolean;
+  suggestion?: number;
+}
+export interface PortsCheckResult {
+  supported: boolean;
+  reason?: string;
+  ports: PortCheckEntry[];
+  anyConflict: boolean;
 }
 
 const STORAGE_KEY = "palserver.connection";
@@ -179,6 +231,15 @@ export class AgentClient {
     return body as T;
   }
 
+  /** 目前連線的 base URL 與存取權杖 —— 給「Discord bot / 其他工具」設定用。
+   *  token 是 agent 的完整存取權杖,顯示時務必遮蔽(見 DiscordBotTab)。 */
+  get baseUrl(): string {
+    return this.conn.url;
+  }
+  get token(): string {
+    return this.conn.token;
+  }
+
   info(): Promise<AgentInfo> {
     return this.request("/api/info");
   }
@@ -228,6 +289,10 @@ export class AgentClient {
   saveAgentSettings(patch: AgentSettingsPatch): Promise<{ ok: boolean }> {
     return this.request("/api/settings", { method: "PUT", body: JSON.stringify(patch) });
   }
+  /** 配置評估健檢(進階顯示/贊助者):主機硬體+網路實測與評分。會實跑磁碟/網路測試,約 2-5 秒。 */
+  systemReview(): Promise<SystemReview> {
+    return this.request("/api/system-review");
+  }
   /** 重啟 agent 以套用系統設定;restarting=false 表示開發模式,需手動重啟。 */
   restartAgent(): Promise<{ restarting: boolean }> {
     return this.request("/api/restart", { method: "POST", body: JSON.stringify({}) });
@@ -270,10 +335,15 @@ export class AgentClient {
     id: string,
     action: "start" | "stop" | "restart",
     announceTemplate?: string,
+    /** true = 中止進行中的倒數公告,立即執行(「立即停止」按第二下)。 */
+    immediate?: boolean,
   ): Promise<InstanceSummary> {
     return this.request(`/api/instances/${id}/${action}`, {
       method: "POST",
-      body: announceTemplate ? JSON.stringify({ announceTemplate }) : undefined,
+      body:
+        announceTemplate || immediate
+          ? JSON.stringify({ announceTemplate, immediate })
+          : undefined,
     });
   }
 
@@ -319,8 +389,34 @@ export class AgentClient {
     return this.request(`/api/instances/${id}/stats`);
   }
 
+  /** 存檔解鎖:全體玩家快速傳送全開(贊助者;需伺服器停止)。 */
+  unlockFastTravel(id: string): Promise<{ worldGuid: string; players: { file: string; ok: boolean; detail: string }[]; total: number }> {
+    return this.request(`/api/instances/${id}/save-unlocks/fast-travel`, { method: "POST", body: "{}" });
+  }
+
+  /** agent 啟動時自動開服(每實例)。 */
+  setAutoStart(id: string, enabled: boolean): Promise<{ autoStart: boolean }> {
+    return this.request(`/api/instances/${id}/auto-start`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    });
+  }
+
   mods(id: string): Promise<ModsStatus> {
     return this.request(`/api/instances/${id}/mods`);
+  }
+
+  /** 各模組元件的最新穩定版 tag(agent 端快取;查詢失敗值為 null)。 */
+  modsLatest(): Promise<{ ue4ss: string | null; paldefender: string | null }> {
+    return this.request("/api/mods/latest");
+  }
+
+  /** 暫時停用/啟用模組(不刪檔,改名主 DLL)。 */
+  setModEnabled(id: string, component: ModComponent, enabled: boolean): Promise<ModsStatus> {
+    return this.request(`/api/instances/${id}/mods/${component}/enabled`, {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    });
   }
 
   installMod(
@@ -452,6 +548,69 @@ export class AgentClient {
     return this.request(`/api/instances/${id}/guilds/${encodeURIComponent(guildId)}`);
   }
 
+  /** 公開地圖目前設定 + 分享連結 + 最後一次發布結果。 */
+  publicMap(id: string): Promise<PublicMapStatus> {
+    return this.request(`/api/instances/${id}/public-map`);
+  }
+
+  /** 更新公開地圖設定(局部);回傳同 publicMap()。 */
+  updatePublicMap(id: string, settings: Partial<PublicMapSettings>): Promise<PublicMapStatus> {
+    return this.request(`/api/instances/${id}/public-map`, {
+      method: "PUT",
+      body: JSON.stringify({ settings }),
+    });
+  }
+
+  /** 撤銷舊分享連結、產生新的;回傳同 publicMap()。 */
+  rotatePublicMapLink(id: string): Promise<PublicMapStatus> {
+    return this.request(`/api/instances/${id}/public-map/rotate`, { method: "POST" });
+  }
+
+  /** Webhook 設定清單(贊助者先行版 webhooks)。 */
+  webhooks(id: string): Promise<WebhookConfigPublic[]> {
+    return this.request(`/api/instances/${id}/webhooks`);
+  }
+
+  /** 新增 webhook;回傳的 secret 只在建立當下給一次,之後看不到,要當場顯示給使用者複製。 */
+  createWebhook(
+    id: string,
+    input: { url: string; events: string[]; format?: WebhookFormat; label?: string; enabled?: boolean },
+  ): Promise<{ config: WebhookConfigPublic; secret: string }> {
+    return this.request(`/api/instances/${id}/webhooks`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  updateWebhook(
+    id: string,
+    whId: string,
+    patch: Partial<{ url: string; events: string[]; format: WebhookFormat; enabled: boolean; label: string }>,
+  ): Promise<WebhookConfigPublic> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    });
+  }
+
+  deleteWebhook(id: string, whId: string): Promise<{ ok: true }> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}`, { method: "DELETE" });
+  }
+
+  /** 換發 HMAC 簽章密鑰;舊密鑰立即失效。回傳的新 secret 一樣只顯示這一次。 */
+  rotateWebhookSecret(id: string, whId: string): Promise<{ secret: string }> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}/rotate-secret`, { method: "POST" });
+  }
+
+  /** 手動送一次測試事件(webhook.ping)。 */
+  testWebhook(id: string, whId: string): Promise<{ result: { ok: boolean; status?: number; error?: string } }> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}/test`, { method: "POST" });
+  }
+
+  webhookDeliveries(id: string, whId: string): Promise<WebhookDelivery[]> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}/deliveries`);
+  }
+
   palDefenderRest(id: string): Promise<PdRestStatus> {
     return this.request(`/api/instances/${id}/paldefender-rest`);
   }
@@ -502,6 +661,14 @@ export class AgentClient {
     return this.request(`/api/instances/${id}/palschema/uninstall`, { method: "POST" });
   }
 
+  /** 暫時停用/啟用 PalSchema(不刪檔);回傳最新 pal-stats 狀態。 */
+  setPalSchemaEnabled(id: string, enabled: boolean): Promise<PalStatsStatus> {
+    return this.request(`/api/instances/${id}/palschema/enabled`, {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    });
+  }
+
   /** 物種數值(PalSchema DataTable patch)目前狀態 + 各 row 已寫入的值。 */
   palStats(id: string): Promise<PalStatsStatus> {
     return this.request(`/api/instances/${id}/pal-stats`);
@@ -518,6 +685,20 @@ export class AgentClient {
   /** 清空所有物種數值調整(改回原本設定)。 */
   clearPalStats(id: string): Promise<PalStatsStatus> {
     return this.request(`/api/instances/${id}/pal-stats`, { method: "DELETE" });
+  }
+
+  /** 頭目重生時間(PalserverBossReporter Lua 模組)狀態 + 最新回報。 */
+  bossRespawns(id: string): Promise<BossRespawnStatus> {
+    return this.request(`/api/instances/${id}/boss-respawns`);
+  }
+
+  /** 安裝/更新頭目回報模組(必要時一併裝 UE4SS)。需先停伺服器(409);非贊助者回 403。 */
+  installBossReporter(id: string): Promise<{ installed: string; version: string; applied: string }> {
+    return this.request(`/api/instances/${id}/boss-respawns/install`, { method: "POST" });
+  }
+
+  uninstallBossReporter(id: string): Promise<{ removed: string }> {
+    return this.request(`/api/instances/${id}/boss-respawns/uninstall`, { method: "POST" });
   }
 
   configHealth(id: string): Promise<ConfigHealth> {
@@ -632,6 +813,11 @@ export class AgentClient {
     return this.request(`/api/instances/${id}/saves/players-snapshot${q}`);
   }
 
+  breedingSnapshot(id: string, worldGuid?: string): Promise<SaveBreedingSnapshot> {
+    const q = worldGuid ? `?worldGuid=${encodeURIComponent(worldGuid)}` : "";
+    return this.request(`/api/instances/${id}/saves/breeding-snapshot${q}`);
+  }
+
   /** 帕魯歸屬過戶:把共玩殘留 uid 名下的帕魯過戶給指定玩家(需停服,會先強制備份)。 */
   palOwnerFix(
     id: string,
@@ -663,10 +849,34 @@ export class AgentClient {
     return this.request(`/api/instances/${id}/saves/guilds-snapshot${q}`);
   }
 
-  /** 掃描統計歷史(排行榜/週報;每次健檢追加一筆)。 */
-  statsHistory(id: string, worldGuid?: string): Promise<{ worldGuid: string; history: SaveScanStats[] }> {
+  /** 掃描統計歷史(排行榜/週報;每次健檢追加一筆)+ 自動掃描設定。 */
+  statsHistory(
+    id: string,
+    worldGuid?: string,
+  ): Promise<{ worldGuid: string; history: SaveScanStats[]; autoScan: AutoScanSetting }> {
     const q = worldGuid ? `?worldGuid=${encodeURIComponent(worldGuid)}` : "";
     return this.request(`/api/instances/${id}/saves/stats-history${q}`);
+  }
+
+  /** 啟動前埠占用檢查(遺戲/查詢/REST/RCON/PalDefender)。 */
+  portsCheck(id: string): Promise<PortsCheckResult> {
+    return this.request(`/api/instances/${id}/ports/check`);
+  }
+
+  /** 套用埠修改(啟動前衝突面板)。 */
+  portsUpdate(
+    id: string,
+    patch: Partial<Record<"game" | "query" | "rest" | "rcon" | "paldefender", number>>,
+  ): Promise<{ gamePort: number; queryPort: number | null }> {
+    return this.request(`/api/instances/${id}/ports`, { method: "PUT", body: JSON.stringify(patch) });
+  }
+
+  /** 每小時自動掃描開關。 */
+  setAutoScan(id: string, enabled: boolean): Promise<AutoScanSetting> {
+    return this.request(`/api/instances/${id}/saves/auto-scan`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    });
   }
 
   saveHealth(id: string, worldGuid: string): Promise<SaveHealthStatus> {
@@ -824,6 +1034,14 @@ export class AgentClient {
     const wsUrl = this.conn.url.replace(/^http/, "ws");
     return new WebSocket(
       `${wsUrl}/api/instances/${id}/logs?token=${encodeURIComponent(this.conn.token)}&source=${source}`,
+    );
+  }
+
+  // 玩家頁面即時推播(合併live/known/events/moderation)。
+  playersFeedSocket(id: string): WebSocket {
+    const wsUrl = this.conn.url.replace(/^http/, "ws");
+    return new WebSocket(
+      `${wsUrl}/api/instances/${id}/players/feed?token=${encodeURIComponent(this.conn.token)}`,
     );
   }
 }

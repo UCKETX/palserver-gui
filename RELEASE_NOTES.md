@@ -1,8 +1,8 @@
-# palserver GUI — v2.2.6
+# palserver GUI — v2.6.0
 
-更新/重灌失敗完整修復包(彙整 v2.2.4–v2.2.6):下載工具損毀自我修復、崩潰殘留程序自動清除(更新前+停止時)、失敗訊息直接顯示診斷輸出
-Complete fix pack for failing updates/reinstalls (v2.2.4–v2.2.6 combined): downloader self-repair, automatic cleanup of crash-leftover processes (before updates & on stop), diagnostic output shown inline on failure
-更新/再インストール失敗の完全修正パック(v2.2.4–v2.2.6 まとめ):ダウンローダー自動修復、クラッシュ残留プロセスの自動終了(更新前+停止時)、失敗時に診断出力を直接表示
+贊助者新功能:頭目重生時間 —— 一鍵安裝純伺服器端模組,顯示全服野外頭目與地下城頭目的死活與重生時間,並疊到 GUI 地圖與公開地圖上。玩家端不需安裝。
+New supporter feature: Boss Respawn Timers — one-click install a server-side mod that shows which overworld and dungeon bosses are alive or down (with respawn timers), overlaid on both the in-app map and the public map. Nothing to install on players' machines.
+サポーター向け新機能:ボスのリスポーン時間 —— サーバー側モジュールをワンクリック導入し、フィールドボスとダンジョンボスの生死・リスポーン時間を表示、アプリ内マップと公開マップに重ねて表示。プレイヤー側の導入は不要です。
 
 > 有開自動更新會自己抓,或依下方手動下載。
 > The in-app updater fetches it automatically, or download below.
@@ -11,71 +11,51 @@ Complete fix pack for failing updates/reinstalls (v2.2.4–v2.2.6 combined): dow
 <details>
 <summary><b>🇹🇼 繁體中文</b></summary>
 
-本版彙整 v2.2.3 之後的所有修復,針對「伺服器更新/重灌一直失敗」的完整處置:
+### 新功能(贊助者先行)
+- **頭目重生時間** — 新分頁一鍵安裝純伺服器端的 UE4SS Lua 模組,顯示全伺服器野外頭目與地下城頭目的死活與重生時間;還會疊到 GUI 地圖與公開地圖上——已擊殺的頭目 marker 變灰,滑過看重生時刻或倒數。模組只讀取遊戲狀態、不改遊戲內容,玩家端不需安裝任何東西。
+  - **狀態黏著**:只要有人經過看到頭目活著,就會一直記著,不會因為玩家離開該區就變回「未知」;擊殺後的重生倒數也不會因為玩家離開而中斷。
+  - 野外頭目綁「遊戲內時間」重生(約下個遊戲日),沒有固定秒數——本模組實測到一輪完整重生後才顯示精準倒數;地下城頭目的重生時間由遊戲內建、精準。
 
-### 修正
-- **崩潰殘留程序鎖檔(最常見的真兇)** — 伺服器崩潰後,UE 的崩潰回報程式(CrashReportClient.exe)或殭屍 PalServer 會殘留在背景鎖住遊戲檔案(如 `dbghelp.dll`);GUI 顯示「已停止」,但更新一開檔就失敗(`0xE0434352`)、重灌刪檔 `EPERM`。現在**更新/重灌前**與**每次停止伺服器時**都會自動找出並結束這些殘留程序(記錄在日誌);若仍撞到鎖檔,錯誤訊息直接指引「結束 CrashReportClient 或重開機」。
-- **下載工具損毀自我修復** — DepotDownloader 首次下載若不完整(斷線/磁碟滿/防毒攔截),損毀檔會被永久快取,之後每次安裝都敗在同一顆壞檔。現在下載加完整性檢查,偵測到「下載器啟動即崩潰」自動重置快取並重試。
-- **安裝失敗直接顯示死因** — 失敗訊息附上下載器輸出的尾段(含例外堆疊摘要),不用再翻日誌檔。
-
-### 安全邊界
-- 自動清場只適用 GUI 自管的伺服器目錄;「採用既有安裝」的自訂目錄不會動(可能有你自己手動啟動的程序)。
-
-### 建議
-- 曾遇到更新失敗的島主:更新到本版後,直接再按一次「立即更新」即可,以上機制會自動處理。
+### 修正與改進
+- 地圖:兩張底圖移除礦物圖層;野外頭目改用正式名稱,並區分「Alpha 頭目」與「封印領域」兩類。
 
 </details>
 
 <details>
 <summary><b>🇨🇳 简体中文</b></summary>
 
-本版汇整 v2.2.3 之后的所有修复,针对「服务器更新/重装一直失败」的完整处置:
+### 新功能(赞助者先行)
+- **头目重生时间** — 新分页一键安装纯服务器端的 UE4SS Lua 模块,显示全服务器野外头目与地下城头目的死活与重生时间;还会叠加到 GUI 地图与公开地图上——已击杀的头目标记变灰,滑过查看重生时刻或倒数。模块只读取游戏状态、不改游戏内容,玩家端无需安装任何东西。
+  - **状态黏着**:只要有人经过看到头目活着,就会一直记住,不会因为玩家离开该区就变回「未知」;击杀后的重生倒数也不会因为玩家离开而中断。
+  - 野外头目绑「游戏内时间」重生(约下个游戏日),没有固定秒数——本模块实测到一轮完整重生后才显示精准倒数;地下城头目的重生时间由游戏内建、精准。
 
-### 修复
-- **崩溃残留程序锁档(最常见的真凶)** — 服务器崩溃后,UE 的崩溃报告程序(CrashReportClient.exe)或僵尸 PalServer 会残留在后台锁住游戏档案(如 `dbghelp.dll`);GUI 显示「已停止」,但更新一开档就失败(`0xE0434352`)、重装删档 `EPERM`。现在**更新/重装前**与**每次停止服务器时**都会自动找出并结束这些残留程序(记录在日志);若仍撞到锁档,错误信息直接指引「结束 CrashReportClient 或重启电脑」。
-- **下载工具损坏自我修复** — DepotDownloader 首次下载若不完整(断线/磁盘满/杀毒拦截),损坏档会被永久缓存,之后每次安装都败在同一颗坏档。现在下载加完整性检查,检测到「下载器启动即崩溃」自动重置缓存并重试。
-- **安装失败直接显示死因** — 失败信息附上下载器输出的尾段(含异常堆栈摘要),不用再翻日志档。
-
-### 安全边界
-- 自动清场只适用 GUI 自管的服务器目录;「采用既有安装」的自定义目录不会动(可能有你自己手动启动的程序)。
-
-### 建议
-- 曾遇到更新失败的岛主:更新到本版后,直接再按一次「立即更新」即可,以上机制会自动处理。
+### 修正与改进
+- 地图:两张底图移除矿物图层;野外头目改用正式名称,并区分「Alpha 头目」与「封印领域」两类。
 
 </details>
 
 <details>
 <summary><b>🇬🇧 English</b></summary>
 
-This release combines all fixes since v2.2.3 — the complete treatment for persistently failing server updates/reinstalls:
+### New features (supporters first)
+- **Boss Respawn Timers** — A new tab installs a server-side UE4SS Lua mod with one click and shows which overworld and dungeon bosses are alive or down, plus their respawn times — overlaid on both the in-app map and the public map (a downed boss's marker greys out; hover to see its respawn time or countdown). The mod only reads game state and changes nothing in-game; players don't install anything.
+  - **Sticky status**: once anyone passing by sees a boss alive, it stays remembered — it won't flip back to "unknown" just because the player left the area, and a post-kill countdown keeps running even after they leave.
+  - Overworld bosses respawn on in-game time (around the next in-game day) with no fixed timer — a precise countdown appears only after the mod has measured one full respawn; dungeon boss respawn times are game-native and precise.
 
-### Fixes
-- **Crash-leftover processes locking files (the most common culprit)** — after a server crash, UE's crash reporter (CrashReportClient.exe) or a zombie PalServer lingers in the background holding locks on game files (e.g. `dbghelp.dll`); the GUI shows "stopped", but updates fail on file open (`0xE0434352`) and reinstalls hit `EPERM`. These leftovers are now automatically found and terminated **before every update/reinstall** and **on every server stop** (logged); if a lock is still hit, the error points straight to "end CrashReportClient or reboot".
-- **Downloader self-repair** — if DepotDownloader's first download was incomplete (network drop / full disk / antivirus), the corrupted binary was cached forever and every install failed on it. Downloads now have integrity checks, and a crash-on-startup triggers an automatic cache reset + retry.
-- **Install failures show the cause inline** — the error message includes the tail of the downloader output (with the exception summary); no more digging through log files.
-
-### Safety boundary
-- Automatic process cleanup only applies to GUI-managed server directories; adopted custom directories are never touched (they may contain processes you started yourself).
-
-### Recommendation
-- If updates kept failing for you: after updating to this version, just press "Update Now" once more — the mechanisms above handle the rest.
+### Fixes & improvements
+- Map: removed the ore layer from both base maps; overworld bosses now use their proper names and are split into "Alpha" bosses and "Sealed Realm" bosses.
 
 </details>
 
 <details>
 <summary><b>🇯🇵 日本語</b></summary>
 
-本バージョンは v2.2.3 以降の修正をまとめた、「サーバー更新/再インストールが失敗し続ける」問題への完全対応版です:
+### 新機能(サポーター先行)
+- **ボスのリスポーン時間** — 新しいタブからサーバー側の UE4SS Lua モジュールをワンクリックで導入し、サーバー上のフィールドボスとダンジョンボスの生死・リスポーン時間を表示します。アプリ内マップと公開マップにも重ねて表示され、討伐済みのボスはマーカーがグレーになり、ホバーでリスポーン時刻またはカウントダウンを確認できます。モジュールはゲーム状態を読み取るだけでゲーム内容は一切変更せず、プレイヤー側の導入も不要です。
+  - **状態の記憶**:誰かが近くを通ってボスが生きているのを確認すれば、その状態を記憶し続けます。プレイヤーがエリアを離れても「不明」に戻らず、討伐後のカウントダウンも中断されません。
+  - フィールドボスはゲーム内時間(おおよそ翌ゲーム内日)でリポップし、固定タイマーはありません——正確なカウントダウンは一度リポップを実測した後のみ表示されます。ダンジョンボスのリスポーン時間はゲーム内蔵で正確です。
 
-### 修正
-- **クラッシュ残留プロセスによるファイルロック(最多の真因)** — サーバークラッシュ後、UE のクラッシュレポーター(CrashReportClient.exe)やゾンビ PalServer がバックグラウンドに残り、ゲームファイル(`dbghelp.dll` など)をロックします。GUI は「停止中」と表示しますが、更新はファイルオープンで失敗(`0xE0434352`)、再インストールは `EPERM` に。**更新/再インストール前**と**サーバー停止のたび**に残留プロセスを自動検出・終了するようにしました(ログに記録)。それでもロックに当たる場合は「CrashReportClient を終了するか再起動」と明確に案内します。
-- **ダウンローダーの自動修復** — DepotDownloader の初回取得が不完全だった場合(回線切断/ディスク満杯/ウイルス対策)、破損バイナリが恒久キャッシュされ以後のインストールがすべて失敗していました。取得時の整合性チェックを追加し、起動即クラッシュを検出したら自動でキャッシュをリセットして再試行します。
-- **インストール失敗時に原因を直接表示** — エラーメッセージにダウンローダー出力の末尾(例外の要約含む)を添付。ログファイルを掘る必要はありません。
-
-### 安全境界
-- プロセスの自動終了は GUI 管理のサーバーディレクトリのみが対象。既存インストールを指定したカスタムディレクトリには触れません(ご自身で起動したプロセスがある可能性があるため)。
-
-### おすすめ
-- 更新失敗にお困りだった方:本バージョンへ更新後、もう一度「今すぐ更新」を押すだけで、上記の仕組みが自動対応します。
+### 修正・改善
+- マップ:2 つのベースマップから鉱石レイヤーを削除。フィールドボスは正式名称に変更し、「アルファ」ボスと「封印領域」ボスに分類しました。
 
 </details>

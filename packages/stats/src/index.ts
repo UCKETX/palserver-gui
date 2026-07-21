@@ -21,6 +21,16 @@ export interface Env {
   ADMIN_TOKEN?: string;
   /** Buy Me a Coffee webhook 簽章密鑰(wrangler secret put BMC_WEBHOOK_SECRET)。 */
   BMC_WEBHOOK_SECRET?: string;
+  /** 愛發電(Afdian/ifdian.net)開發者頁的 user_id 與 API Token。
+   *  webhook 本身沒有簽章,收到通知後必須用 Token 算 sign 回打 query-order 驗真,
+   *  兩者任一沒設,webhook 與 redeem 一律拒絕(避免無驗證發碼)。 */
+  AFDIAN_USER_ID?: string;
+  AFDIAN_TOKEN?: string;
+  /** 選填:逗號分隔的包月方案 plan_id 白名單;未設=所有常規方案(product_type=0)都算贊助。 */
+  AFDIAN_PLAN_IDS?: string;
+  /** 選填:愛發電開放 API 網域,預設 https://afdian.com(舊域 afdian.net 已停用);
+   *  帳號在 ifdian.net 可覆寫成 https://ifdian.net。三者同一套系統。 */
+  AFDIAN_API_BASE?: string;
   /** Brevo(app.brevo.com)交易信 API key(wrangler secret put BREVO_API_KEY);沒設就不寄碼(仍會建碼)。 */
   BREVO_API_KEY?: string;
   /** 寄件信箱(需先在 Brevo 驗證寄件者/網域),預設 palserver-gui@iosoftware.ai。 */
@@ -38,18 +48,33 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-const json = (data: unknown, status = 200) =>
+/** map/publish、map/unpublish 是伺服器對伺服器端點(agent 直連,從不被瀏覽器呼叫),
+ *  不帶 Access-Control-Allow-Origin,避免任意網頁能用受害者瀏覽器發request。 */
+const NO_CORS_HEADERS = {
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+/** cors=false 時不附加 Access-Control-Allow-Origin 等標頭(見上)。預設 true 維持既有端點行為不變。 */
+const json = (data: unknown, status = 200, extraHeaders: Record<string, string> = {}, cors = true) =>
   new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+    headers: { "Content-Type": "application/json", ...(cors ? CORS_HEADERS : {}), ...extraHeaders },
   });
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
-    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
+    if (req.method === "OPTIONS") {
+      const noCors = url.pathname === "/api/map/publish" || url.pathname === "/api/map/unpublish";
+      return new Response(null, { status: 204, headers: noCors ? NO_CORS_HEADERS : CORS_HEADERS });
+    }
     if (req.method === "POST" && url.pathname === "/api/event") return handleEvent(req, env);
     if (req.method === "GET" && url.pathname === "/api/stats") return handleStats(env);
+    // 公開地圖快照
+    if (req.method === "POST" && url.pathname === "/api/map/publish") return handleMapPublish(req, env);
+    if (req.method === "GET" && url.pathname === "/api/map/snapshot") return handleMapSnapshot(req, env);
+    if (req.method === "POST" && url.pathname === "/api/map/unpublish") return handleMapUnpublish(req, env);
     // 贊助者識別碼(先行版授權)
     if (req.method === "POST" && url.pathname === "/api/license/activate") return handleLicenseActivate(req, env);
     if (req.method === "POST" && url.pathname === "/api/license/deactivate") return handleLicenseDeactivate(req, env);
@@ -58,6 +83,9 @@ export default {
     if (req.method === "POST" && url.pathname === "/api/license/reset") return handleLicenseReset(req, env);
     if (req.method === "POST" && url.pathname === "/api/license/delete") return handleLicenseDelete(req, env);
     if (req.method === "POST" && url.pathname === "/api/license/bmc-webhook") return handleBmcWebhook(req, env);
+    // 愛發電(Afdian/ifdian.net):webhook 自動發碼/續期 + 自助查碼(無 email,靠訂單號換碼)
+    if (req.method === "POST" && url.pathname === "/api/license/afdian-webhook") return handleAfdianWebhook(req, env);
+    if (req.method === "GET" && url.pathname === "/api/license/afdian-redeem") return handleAfdianRedeem(req, env);
     // 管理後台(發碼 / 管理);頁面本身公開,操作靠頁內輸入 ADMIN_TOKEN。
     if (req.method === "GET" && (url.pathname === "/admin" || url.pathname === "/admin/")) {
       return new Response(ADMIN_HTML, {
@@ -175,6 +203,162 @@ async function githubDownloads(env: Env): Promise<number | null> {
   } catch {
     return cached?.total ?? null;
   }
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * 公開地圖快照
+ *  - POST /api/map/publish   {id, key, snapshot} — agent 每 60 秒推送(伺服器端呼叫,免 CORS)
+ *  - GET  /api/map/snapshot  ?id=...             — 公開讀取,viewer 頁用(開放 CORS)
+ *  - POST /api/map/unpublish {id, key}           — 服主下架
+ * id = shareId,首次出現即註冊(存 key 的 SHA-256 雜湊,不存明碼);之後同 id 須帶對的
+ * key 才能覆寫或下架。snapshot 原樣以 JSON 字串存,GET 回傳時還原成物件。
+ *
+ * 濫用防護:
+ *  - 新 id 註冊(還沒被人用過的 id)才會計入 per-IP 節流與總量上限,已存在 id 的更新/
+ *    下架不受影響(那條路徑已經有 key 驗證與 10 秒節流擋著)。
+ *  - unpublish 是「墓碑」(revoked=1 + 清空 snapshot),不是真的刪列 —— 避免任何人(含
+ *    拿舊 key 的殘留背景程序)再對同一個已下架的 id 重新 publish,把它當「首次註冊」復活。
+ * ──────────────────────────────────────────────────────────────────────── */
+
+const MAP_ID_RE = /^[A-Za-z0-9_-]{8,32}$/;
+const MAP_SNAPSHOT_MAX_BYTES = 131072;
+const MAP_PUBLISH_MIN_INTERVAL_MS = 10_000;
+/** 同一個 IP 24 小時內最多能註冊幾個「新」id(更新既有 id 不算)。 */
+const MAP_REG_RATE_LIMIT = 10;
+const MAP_REG_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** map_reg 節流紀錄的保留期限,超過就在下一次新註冊時順手清掉。 */
+const MAP_REG_RETENTION_MS = 48 * 60 * 60 * 1000;
+/** 全站同時存在的地圖分享數上限,超過就拒絕新註冊(更新既有 id 不受影響)。 */
+const MAP_SHARES_CAPACITY = 50_000;
+/** 超過這麼久沒更新的快照視為過期,在新註冊路徑順手清掉(含已撤銷的墓碑列)。 */
+const MAP_SHARES_TTL_MS = 60 * 24 * 60 * 60 * 1000;
+
+interface MapShareRow {
+  id: string;
+  key_hash: string;
+  updated_at: number;
+  snapshot: string;
+  revoked: number;
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function handleMapPublish(req: Request, env: Env): Promise<Response> {
+  let body: { id?: unknown; key?: unknown; snapshot?: unknown };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: "invalid json" }, 400, {}, false);
+  }
+  const id = typeof body.id === "string" ? body.id.slice(0, 64) : "";
+  const key = typeof body.key === "string" ? body.key.slice(0, 256) : "";
+  if (!MAP_ID_RE.test(id)) return json({ error: "bad id" }, 400, {}, false);
+  if (!key) return json({ error: "bad key" }, 400, {}, false);
+  if (typeof body.snapshot !== "object" || body.snapshot === null) {
+    return json({ error: "bad snapshot" }, 400, {}, false);
+  }
+
+  const snapshotJson = JSON.stringify(body.snapshot);
+  if (new TextEncoder().encode(snapshotJson).length > MAP_SNAPSHOT_MAX_BYTES) {
+    return json({ error: "snapshot too large" }, 413, {}, false);
+  }
+
+  const now = Date.now();
+  const existing = await env.DB.prepare("SELECT key_hash, updated_at, revoked FROM map_shares WHERE id = ?1")
+    .bind(id)
+    .first<Pick<MapShareRow, "key_hash" | "updated_at" | "revoked">>();
+
+  if (!existing) {
+    // 新 id:先擋濫用註冊,再寫入。
+    const ip = req.headers.get("CF-Connecting-IP") ?? "unknown";
+    const ipHash = await sha256Hex(ip);
+    const regCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM map_reg WHERE ip_hash = ?1 AND created_at >= ?2",
+    )
+      .bind(ipHash, now - MAP_REG_RATE_WINDOW_MS)
+      .first<{ n: number }>();
+    if ((regCount?.n ?? 0) >= MAP_REG_RATE_LIMIT) {
+      return json({ error: "rate-limited" }, 429, {}, false);
+    }
+
+    const totalCount = await env.DB.prepare("SELECT COUNT(*) AS n FROM map_shares").first<{ n: number }>();
+    if ((totalCount?.n ?? 0) >= MAP_SHARES_CAPACITY) {
+      return json({ error: "capacity" }, 503, {}, false);
+    }
+
+    // 註冊此 id,只存 key 的雜湊。
+    const keyHash = await sha256Hex(key);
+    await env.DB.prepare(`INSERT INTO map_shares (id, key_hash, updated_at, snapshot) VALUES (?1, ?2, ?3, ?4)`)
+      .bind(id, keyHash, now, snapshotJson)
+      .run();
+    await env.DB.prepare("INSERT INTO map_reg (ip_hash, created_at) VALUES (?1, ?2)").bind(ipHash, now).run();
+    // 頻率低的路徑,順手清過期資料(節流紀錄、逾期未更新的快照與已撤銷的墓碑列)。
+    await env.DB.prepare("DELETE FROM map_reg WHERE created_at < ?1").bind(now - MAP_REG_RETENTION_MS).run();
+    await env.DB.prepare("DELETE FROM map_shares WHERE updated_at < ?1").bind(now - MAP_SHARES_TTL_MS).run();
+    return json({ ok: true }, 200, {}, false);
+  }
+
+  // 已撤銷的墓碑:不論 key 對不對一律拒絕,擋住舊 key 重新註冊復活。
+  if (existing.revoked) return json({ error: "revoked" }, 410, {}, false);
+
+  const keyHash = await sha256Hex(key);
+  if (!timingSafeEqual(keyHash, existing.key_hash)) return json({ error: "bad-key" }, 401, {}, false);
+  if (now - existing.updated_at < MAP_PUBLISH_MIN_INTERVAL_MS) {
+    return json({ error: "too many requests" }, 429, {}, false);
+  }
+
+  await env.DB.prepare("UPDATE map_shares SET updated_at = ?1, snapshot = ?2 WHERE id = ?3")
+    .bind(now, snapshotJson, id)
+    .run();
+  return json({ ok: true }, 200, {}, false);
+}
+
+/** 公開讀取,viewer 頁用:開放 CORS,15 秒可快取。 */
+async function handleMapSnapshot(req: Request, env: Env): Promise<Response> {
+  const url = new URL(req.url);
+  const id = (url.searchParams.get("id") ?? "").slice(0, 64);
+  if (!MAP_ID_RE.test(id)) return json({ error: "bad id" }, 400);
+
+  const row = await env.DB.prepare("SELECT updated_at, snapshot, revoked FROM map_shares WHERE id = ?1")
+    .bind(id)
+    .first<Pick<MapShareRow, "updated_at" | "snapshot" | "revoked">>();
+  if (!row || row.revoked) return json({ error: "not found" }, 404);
+
+  let snapshot: unknown;
+  try {
+    snapshot = JSON.parse(row.snapshot);
+  } catch {
+    snapshot = null;
+  }
+  return json({ updatedAt: row.updated_at, snapshot }, 200, { "Cache-Control": "public, max-age=15" });
+}
+
+async function handleMapUnpublish(req: Request, env: Env): Promise<Response> {
+  let body: { id?: unknown; key?: unknown };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: "invalid json" }, 400, {}, false);
+  }
+  const id = typeof body.id === "string" ? body.id.slice(0, 64) : "";
+  const key = typeof body.key === "string" ? body.key.slice(0, 256) : "";
+  if (!MAP_ID_RE.test(id) || !key) return json({ error: "bad request" }, 400, {}, false);
+
+  const row = await env.DB.prepare("SELECT key_hash FROM map_shares WHERE id = ?1")
+    .bind(id)
+    .first<Pick<MapShareRow, "key_hash">>();
+  if (!row) return json({ error: "not found" }, 404, {}, false);
+
+  const keyHash = await sha256Hex(key);
+  if (!timingSafeEqual(keyHash, row.key_hash)) return json({ error: "bad-key" }, 401, {}, false);
+
+  // 墓碑,不是真的刪列:擋住之後任何人(含拿舊 key 的殘留背景程序)對同 id 重新
+  // publish 時被當「首次註冊」復活這個 id(見 handleMapPublish 的 revoked 檢查)。
+  await env.DB.prepare("UPDATE map_shares SET revoked = 1, snapshot = '' WHERE id = ?1").bind(id).run();
+  return json({ ok: true }, 200, {}, false);
 }
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -449,36 +633,120 @@ function pickEmail(data: Record<string, unknown>): string | null {
  *  成功/失敗與原因回報出來,方便排查(否則 Brevo 拒絕也看不到)。 */
 type Lang = "zh" | "en" | "ja";
 
-/** 贊助碼信件的三語文案。html(code) 產生信件內文。 */
-const EMAIL_I18N: Record<Lang, { subject: string; html: (code: string) => string }> = {
+interface EmailStrings {
+  subject: string;
+  eyebrow: string;
+  title: string;
+  intro: string;
+  codeLabel: string;
+  notes: string;
+  footerNote: string;
+  footerNoReply: string;
+}
+
+/** 贊助碼信件的三語文案(外觀由 renderCodeEmail 統一套用 io Software 品牌樣式)。 */
+const EMAIL_I18N: Record<Lang, EmailStrings> = {
   zh: {
-    subject: "你的 palserver GUI 先行版識別碼",
-    html: (code) => `
-    <p>感謝你的贊助!以下是你的 palserver GUI 先行版識別碼:</p>
-    <p style="font-size:20px;font-weight:800;font-family:monospace">${code}</p>
-    <p>在 GUI 的「設定 → 贊助者識別碼」貼上即可解鎖先行版功能。<br>
-    一組識別碼同時只能綁定一台伺服器;要換機時,先在舊伺服器移除識別碼,再到新伺服器貼上即可。<br>
-    月費有效期間持續解鎖,取消後於當期到期時停用。</p>`,
+    subject: "您的 palserver GUI 先行版識別碼",
+    eyebrow: "贊助者識別碼",
+    title: "感謝您的支持",
+    intro:
+      "以下為您的 palserver GUI 先行版識別碼。請於 GUI 的「設定 → 贊助者識別碼」中貼上,即可解鎖先行版功能。",
+    codeLabel: "您的識別碼",
+    notes:
+      "每組識別碼同一時間僅能綁定一台伺服器。如需更換伺服器,請先於原伺服器移除識別碼,再於新伺服器貼上。<br>月費訂閱有效期間將持續啟用;取消訂閱後,將於當期結束時停止授權。",
+    footerNote: "本信件由 palserver GUI 系統自動發送。",
+    footerNoReply: "請勿直接回覆本信件,此信箱不受理回覆。",
   },
   en: {
     subject: "Your palserver GUI early-access code",
-    html: (code) => `
-    <p>Thank you for your support! Here is your palserver GUI early-access code:</p>
-    <p style="font-size:20px;font-weight:800;font-family:monospace">${code}</p>
-    <p>Paste it into <b>Settings → Sponsor code</b> in the GUI to unlock the early-access features.<br>
-    One code binds to a single server at a time — to move it, remove the code on the old server first, then paste it on the new one.<br>
-    It stays unlocked while your membership is active and stops at the end of the period after you cancel.</p>`,
+    eyebrow: "Sponsor code",
+    title: "Thank you for your support",
+    intro:
+      "Below is your palserver GUI early-access code. In the GUI, open Settings → Sponsor code and paste it to unlock the early-access features.",
+    codeLabel: "Your code",
+    notes:
+      "Each code can be bound to only one server at a time. To move it to another server, first remove the code on the original server, then paste it on the new one.<br>Access remains active for the duration of your subscription and ends at the close of the current billing period after cancellation.",
+    footerNote: "This message was sent automatically by palserver GUI.",
+    footerNoReply: "Please do not reply to this email; this mailbox is not monitored.",
   },
   ja: {
-    subject: "palserver GUI 先行アクセスコード",
-    html: (code) => `
-    <p>ご支援ありがとうございます!palserver GUI の先行アクセスコードはこちらです:</p>
-    <p style="font-size:20px;font-weight:800;font-family:monospace">${code}</p>
-    <p>GUI の「設定 → スポンサーコード」に貼り付けると先行アクセス機能が解除されます。<br>
-    1つのコードは同時にサーバー1台のみに紐づきます。別のサーバーへ移す場合は、先に旧サーバーでコードを削除してから新しいサーバーで貼り付けてください。<br>
-    メンバーシップが有効な間は解除され、解約後は当期の終了時に無効になります。</p>`,
+    subject: "palserver GUI 先行アクセスコードのご案内",
+    eyebrow: "スポンサーコード",
+    title: "ご支援ありがとうございます",
+    intro:
+      "palserver GUI の先行アクセスコードをお送りいたします。GUI の「設定 → スポンサーコード」に貼り付けていただくと、先行アクセス機能が有効になります。",
+    codeLabel: "お客様のコード",
+    notes:
+      "1 つのコードは、同時に 1 台のサーバーにのみ紐づけできます。別のサーバーへ移行される場合は、先に元のサーバーでコードを削除してから、新しいサーバーで貼り付けてください。<br>メンバーシップが有効な期間中は機能をご利用いただけ、解約後は当期の終了をもって無効となります。",
+    footerNote: "本メールは palserver GUI より自動送信されています。",
+    footerNoReply: "本メールへの返信はご遠慮ください(受信専用です)。",
   },
 };
+
+const EMAIL_LOGO_URL = "https://palserver-gui.iosoftware.ai/assets/iosoftware-logo-email.png";
+const EMAIL_ORANGE = "#f5811f";
+
+function renderCodeEmail(code: string, s: EmailStrings): string {
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light only">
+</head>
+<body style="margin:0;padding:0;background:#f2f3f5;-webkit-text-size-adjust:100%;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f2f3f5;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:100%;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,'PingFang TC','Microsoft JhengHei',sans-serif;">
+          <tr>
+            <td align="center" style="background:#0b0b0d;padding:34px 24px 26px;">
+              <img src="${EMAIL_LOGO_URL}" alt="io Software" width="248" style="display:block;width:248px;max-width:74%;height:auto;margin:0 auto;border:0;">
+              <div style="margin-top:14px;font-size:17px;font-weight:800;letter-spacing:.3px;color:${EMAIL_ORANGE};">palserver GUI</div>
+            </td>
+          </tr>
+          <tr><td style="height:3px;line-height:3px;font-size:0;background:#e11d2b;">&nbsp;</td></tr>
+          <tr>
+            <td style="padding:34px 36px 4px;">
+              <div style="font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:${EMAIL_ORANGE};">${s.eyebrow}</div>
+              <div style="margin-top:10px;font-size:24px;line-height:1.25;font-weight:800;color:#17181a;">${s.title}</div>
+              <p style="margin:14px 0 0;font-size:15px;line-height:1.6;color:#54585e;">${s.intro}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:22px 36px 4px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f7f8;border-left:4px solid ${EMAIL_ORANGE};border-radius:8px;">
+                <tr>
+                  <td style="padding:18px 22px;">
+                    <div style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#8a8f96;">${s.codeLabel}</div>
+                    <div style="margin-top:8px;font-size:26px;line-height:1.2;font-weight:800;letter-spacing:1px;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;color:#17181a;">${code}</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 36px 28px;">
+              <p style="margin:0;font-size:13px;line-height:1.7;color:#71767d;">${s.notes}</p>
+            </td>
+          </tr>
+          <tr><td style="padding:0 36px;"><div style="border-top:1px solid #ececee;font-size:0;line-height:0;">&nbsp;</div></td></tr>
+          <tr>
+            <td align="center" style="padding:24px 36px 30px;">
+              <p style="margin:0;font-size:13px;color:#8a8f96;">${s.footerNote}</p>
+              <p style="margin:6px 0 0;font-size:13px;color:#a6abb2;">${s.footerNoReply}</p>
+              <p style="margin:16px 0 0;"><a href="https://iosoftware.ai" style="font-size:14px;font-weight:700;color:${EMAIL_ORANGE};text-decoration:none;">iosoftware.ai</a></p>
+              <p style="margin:8px 0 0;font-size:12px;color:#b9bdc3;">&copy; io Software &middot; All rights reserved.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
 
 /** 從 BMC payload 盡量判斷語言(zh/ja/en),判不出來 fallback 英文。 */
 function pickLang(data: Record<string, unknown>): Lang {
@@ -506,7 +774,7 @@ async function sendCodeEmail(
   lang: Lang = "en",
 ): Promise<{ sent: boolean; error?: string }> {
   if (!env.BREVO_API_KEY) return { sent: false, error: "BREVO_API_KEY 未設定(worker 上沒有這個 secret)" };
-  const tpl = EMAIL_I18N[lang] ?? EMAIL_I18N.en;
+  const s = EMAIL_I18N[lang] ?? EMAIL_I18N.en;
   try {
     // Brevo 交易信 API(https://developers.brevo.com/reference/sendtransacemail)。
     const res = await fetch("https://api.brevo.com/v3/smtp/email", {
@@ -522,8 +790,8 @@ async function sendCodeEmail(
           email: env.BREVO_FROM_EMAIL ?? "palserver-gui@iosoftware.ai",
         },
         to: [{ email: to }],
-        subject: tpl.subject,
-        htmlContent: tpl.html(code),
+        subject: s.subject,
+        htmlContent: renderCodeEmail(code, s),
       }),
     });
     if (!res.ok) {
@@ -613,4 +881,241 @@ async function handleBmcWebhook(req: Request, env: Env): Promise<Response> {
     }
   }
   return json({ error: "could not allocate code" }, 500);
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * 愛發電(Afdian / ifdian.net,同一套系統)訂單 webhook -> 自動發碼/續期。
+ *  - 愛發電沒有 subscription 狀態:每筆贊助(不論包月自動續或手動再贊助)都是獨立 order,
+ *    各自推一次 webhook。用買家 user_id 認人,依 order.month 把同一張碼的效期往後累加
+ *    (找不到就發新碼),做到「同一張碼、自動延長效期」。
+ *  - webhook 沒有簽章,必須用 out_trade_no 回打 query-order API 驗真才發碼(防偽造)。
+ *  - payload 沒有 email,無法寄碼:交付走自助查碼頁(afdian-redeem,用訂單號換碼)。
+ * ──────────────────────────────────────────────────────────────────────── */
+
+const AFDIAN_DAYS_PER_MONTH = 31; // 每月給 31 天(含小寬限),month 直接相乘
+
+/** Cloudflare Workers 的 crypto.subtle 以擴充形式支援 "MD5"。愛發電 sign 用 MD5。 */
+async function md5Hex(s: string): Promise<string> {
+  const buf = await crypto.subtle.digest("MD5", new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+interface AfdianOrder {
+  out_trade_no: string;
+  user_id?: string;
+  user_private_id?: string;
+  plan_id?: string;
+  month?: number;
+  status?: number;
+  product_type?: number;
+  remark?: string;
+}
+
+/** 用 out_trade_no 回打愛發電 query-order 驗真,回傳該訂單(驗不過/查無回 null)。
+ *  sign = md5(token + "params" + params + "ts" + ts + "user_id" + user_id)。 */
+async function afdianQueryOrder(env: Env, outTradeNo: string): Promise<AfdianOrder | null> {
+  if (!env.AFDIAN_USER_ID || !env.AFDIAN_TOKEN) return null;
+  const base = (env.AFDIAN_API_BASE ?? "https://afdian.com").replace(/\/+$/, "");
+  const params = JSON.stringify({ out_trade_no: outTradeNo });
+  const ts = Math.floor(Date.now() / 1000);
+  const sign = await md5Hex(
+    env.AFDIAN_TOKEN + "params" + params + "ts" + ts + "user_id" + env.AFDIAN_USER_ID,
+  );
+  try {
+    const res = await fetch(base + "/api/open/query-order", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ user_id: env.AFDIAN_USER_ID, params, ts, sign }),
+    });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { ec?: number; data?: { list?: AfdianOrder[] } };
+    if (j.ec !== 200) return null;
+    const list = j.data?.list ?? [];
+    return list.find((o) => o.out_trade_no === outTradeNo) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+type AfdianResult =
+  | { gated: true; reason: string }
+  | { gated?: false; code: string; expiresAt: string; action: "issued" | "renewed" | "already" };
+
+/** 核心:把一筆「已用 query-order 驗真」的愛發電訂單轉成發碼/續期。webhook 與 redeem 共用。
+ *  絕不可直接信任 webhook body,一律先過 afdianQueryOrder 再進來。 */
+async function processAfdianOrder(env: Env, order: AfdianOrder): Promise<AfdianResult> {
+  if (Number(order.status) !== 2) return { gated: true, reason: "order-not-paid" };
+  // 只認「常規/包月方案」訂單(product_type 0):排除售賣類一次性商品(product_type 1)。
+  if (Number(order.product_type) !== 0) return { gated: true, reason: "plan-not-eligible" };
+  const planId = String(order.plan_id ?? "");
+  if (env.AFDIAN_PLAN_IDS) {
+    // 有設白名單:只認名單內的 plan_id(通常就是你的包月方案)。
+    const allow = env.AFDIAN_PLAN_IDS.split(",").map((s) => s.trim()).filter(Boolean);
+    if (allow.length && !allow.includes(planId)) return { gated: true, reason: "plan-not-eligible" };
+  } else if (!planId) {
+    // 未設白名單:至少要求是「方案」訂單,擋掉自選金額打賞(plan_id 空)也被發碼。
+    return { gated: true, reason: "plan-not-eligible" };
+  }
+  const buyer = order.user_private_id || order.user_id;
+  if (!buyer || !order.out_trade_no) return { gated: true, reason: "invalid" };
+  const extId = "afdian:" + buyer;
+  const months = Math.min(Math.max(Math.floor(Number(order.month) || 1), 1), 120);
+  const addMs = months * AFDIAN_DAYS_PER_MONTH * 86400_000;
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+
+  // 冪等:先 claim 這個 out_trade_no。撞主鍵=這筆訂單已處理過 → 回既有結果,不重複續期。
+  let claimed = true;
+  try {
+    await env.DB.prepare(
+      "INSERT INTO afdian_orders (out_trade_no, ext_id, months, processed_at) VALUES (?1, ?2, ?3, ?4)",
+    )
+      .bind(order.out_trade_no, extId, months, nowIso)
+      .run();
+  } catch {
+    claimed = false;
+  }
+  if (!claimed) {
+    const done = await env.DB.prepare("SELECT code FROM afdian_orders WHERE out_trade_no = ?1")
+      .bind(order.out_trade_no)
+      .first<{ code: string | null }>();
+    if (done?.code) {
+      // 這筆訂單已完整處理過(afdian_orders 已回填 code)→ 冪等回既有碼,不重複續期。
+      const lic = await env.DB.prepare("SELECT expires_at FROM licenses WHERE code = ?1")
+        .bind(done.code)
+        .first<{ expires_at: string | null }>();
+      return { code: done.code, expiresAt: lic?.expires_at ?? nowIso, action: "already" };
+    }
+    // 有 claim row 但 code 仍為 null:前一次執行 claim 後、回填 code 前被中止(worker eviction 等)。
+    // 不能回 order-not-found 讓這筆永久卡死 —— 往下補跑發碼/續期,完成後回填 code 自救。
+    // (極少數情況下前次已延長效期才中止,補跑會多加一次月份 —— 偏向付費者且罕見,可接受。)
+  }
+
+  // 找同一買家既有的碼:有就從 max(now, 現有到期) 往後延長;沒有就發新碼。
+  const existing = await env.DB.prepare("SELECT code, expires_at FROM licenses WHERE ext_id = ?1")
+    .bind(extId)
+    .first<{ code: string; expires_at: string | null }>();
+
+  let code = "";
+  let expiresAt: string;
+  let action: "issued" | "renewed";
+  if (existing) {
+    const base = existing.expires_at && Date.parse(existing.expires_at) > now ? Date.parse(existing.expires_at) : now;
+    expiresAt = new Date(base + addMs).toISOString();
+    code = existing.code;
+    action = "renewed";
+    await env.DB.prepare("UPDATE licenses SET expires_at = ?1 WHERE code = ?2").bind(expiresAt, code).run();
+  } else {
+    expiresAt = new Date(now + addMs).toISOString();
+    action = "issued";
+    let ok = false;
+    for (let i = 0; i < 5 && !ok; i++) {
+      const candidate = generateCode();
+      try {
+        await env.DB.prepare(
+          `INSERT INTO licenses (code, tier, features, sponsor, created_at, expires_at, ext_id, source)
+           VALUES (?1, 'sponsor', ?2, ?3, ?4, ?5, ?6, 'afdian')`,
+        )
+          .bind(candidate, JSON.stringify(["custom-pal"]), extId, nowIso, expiresAt, extId)
+          .run();
+        code = candidate;
+        ok = true;
+      } catch {
+        // 撞 ext_id 唯一索引(同買家並發首發)→ 改走續期;純撞 code 主鍵 → 迴圈換碼重試。
+        const dup = await env.DB.prepare("SELECT code, expires_at FROM licenses WHERE ext_id = ?1")
+          .bind(extId)
+          .first<{ code: string; expires_at: string | null }>();
+        if (dup) {
+          const base = dup.expires_at && Date.parse(dup.expires_at) > now ? Date.parse(dup.expires_at) : now;
+          expiresAt = new Date(base + addMs).toISOString();
+          code = dup.code;
+          action = "renewed";
+          await env.DB.prepare("UPDATE licenses SET expires_at = ?1 WHERE code = ?2").bind(expiresAt, code).run();
+          ok = true;
+        }
+      }
+    }
+    if (!ok || !code) return { gated: true, reason: "invalid" };
+  }
+
+  await env.DB.prepare("UPDATE afdian_orders SET code = ?1 WHERE out_trade_no = ?2")
+    .bind(code, order.out_trade_no)
+    .run();
+  return { code, expiresAt, action };
+}
+
+const AFDIAN_RATE_LIMIT = 60; // 同一 IP 每小時最多幾次「會回打 query-order」的請求
+const AFDIAN_RATE_WINDOW_MS = 60 * 60 * 1000;
+const AFDIAN_RATE_RETENTION_MS = 2 * 60 * 60 * 1000;
+
+/** 對「會回打愛發電 query-order」的公開路徑(webhook 驗真、redeem 未命中)做 per-IP 節流,
+ *  擋惡意刷爆我們對愛發電的查單子請求(燒 API 配額 / 觸發 token 被限流)。回 true=已超額該擋。
+ *  per-IP:攻擊者只限到自己 IP,愛發電推送與真實用戶查碼各自獨立不受影響。記本次並順手清過期。 */
+async function afdianRateLimited(req: Request, env: Env): Promise<boolean> {
+  const ip = req.headers.get("CF-Connecting-IP") ?? "unknown";
+  const ipHash = await sha256Hex("afdian:" + ip);
+  const now = Date.now();
+  const c = await env.DB.prepare("SELECT COUNT(*) AS n FROM afdian_reg WHERE ip_hash = ?1 AND created_at >= ?2")
+    .bind(ipHash, now - AFDIAN_RATE_WINDOW_MS)
+    .first<{ n: number }>();
+  if ((c?.n ?? 0) >= AFDIAN_RATE_LIMIT) return true;
+  await env.DB.prepare("INSERT INTO afdian_reg (ip_hash, created_at) VALUES (?1, ?2)").bind(ipHash, now).run();
+  await env.DB.prepare("DELETE FROM afdian_reg WHERE created_at < ?1").bind(now - AFDIAN_RATE_RETENTION_MS).run();
+  return false;
+}
+
+async function handleAfdianWebhook(req: Request, env: Env): Promise<Response> {
+  const ack = () => json({ ec: 200, em: "" });
+  if (!env.AFDIAN_USER_ID || !env.AFDIAN_TOKEN) return json({ ec: 503, em: "webhook not configured" }, 503);
+  let evt: { data?: { type?: string; order?: { out_trade_no?: unknown } } };
+  try {
+    evt = (await req.json()) as typeof evt;
+  } catch {
+    return ack(); // 壞 body 也回 200,避免愛發電無限重推
+  }
+  if (evt.data?.type !== "order") return ack();
+  const outTradeNo = typeof evt.data.order?.out_trade_no === "string" ? evt.data.order.out_trade_no : "";
+  if (!outTradeNo) return ack();
+  // 節流:超額回 429 讓愛發電之後重推(per-IP,愛發電自己的 IP 幾乎不會觸及此上限)。
+  if (await afdianRateLimited(req, env)) return json({ ec: 429, em: "rate-limited" }, 429);
+
+  // 不信任 webhook body:一律用 out_trade_no 回打 query-order 驗真,驗過的真訂單才發碼。
+  // 一律回 200 ack:愛發電開發者頁「發送測試」送的是假訂單號,驗不過屬正常,不能因此回錯
+  // (否則測試顯示失敗)。驗不過(偽造/假測試/愛發電 API 暫時不通)就單純不發碼;真訂單若
+  // 因 API 暫時不通漏發,贊助者稍後用自助查碼頁(afdian-redeem)即可補發,不依賴 webhook 重試。
+  const order = await afdianQueryOrder(env, outTradeNo);
+  if (order) await processAfdianOrder(env, order);
+  return ack();
+}
+
+/** 自助查碼:贊助者付款後把愛發電訂單號貼進來換回自己的碼(愛發電無 email 可寄)。
+ *  已處理過的訂單直接回碼;沒處理過就當場驗真補發(webhook 漏收也能自救)。 */
+async function handleAfdianRedeem(req: Request, env: Env): Promise<Response> {
+  if (!env.AFDIAN_USER_ID || !env.AFDIAN_TOKEN) return json({ ok: false, reason: "not-configured" }, 503);
+  const outTradeNo = (new URL(req.url).searchParams.get("out_trade_no") ?? "").trim();
+  if (!outTradeNo || outTradeNo.length > 64 || !/^[0-9A-Za-z]+$/.test(outTradeNo)) {
+    return json({ ok: false, reason: "invalid" }, 400);
+  }
+  const done = await env.DB.prepare("SELECT code FROM afdian_orders WHERE out_trade_no = ?1")
+    .bind(outTradeNo)
+    .first<{ code: string | null }>();
+  if (done?.code) {
+    const lic = await env.DB.prepare("SELECT expires_at, tier FROM licenses WHERE code = ?1")
+      .bind(done.code)
+      .first<{ expires_at: string | null; tier: string }>();
+    return json({
+      ok: true,
+      code: done.code,
+      expiresAt: lic?.expires_at ?? null,
+      tier: lic?.tier ?? "sponsor",
+      action: "already",
+    });
+  }
+  // 未命中(要回打 query-order)才節流;已處理過的訂單走上面的純 DB 查詢,不擋真實用戶重複領。
+  if (await afdianRateLimited(req, env)) return json({ ok: false, reason: "rate-limited" }, 429);
+  const order = await afdianQueryOrder(env, outTradeNo);
+  if (!order) return json({ ok: false, reason: "order-not-found" }, 404);
+  const r = await processAfdianOrder(env, order);
+  if (r.gated) return json({ ok: false, reason: r.reason }, 400);
+  return json({ ok: true, code: r.code, expiresAt: r.expiresAt, tier: "sponsor", action: r.action });
 }

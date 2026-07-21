@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { FiAlertTriangle, FiCheck, FiClock, FiCpu, FiRefreshCw, FiX } from "react-icons/fi";
+import { FiAlertTriangle, FiCheck, FiClock, FiCpu, FiPlus, FiRefreshCw, FiStar, FiX } from "react-icons/fi";
+import { hasFeature } from "@palserver/shared";
 import type { RestartPolicy, RestartStatus } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { t, useI18n } from "./i18n";
@@ -56,6 +57,15 @@ export function RestartCard({ client, instanceId }: { client: AgentClient; insta
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [entitled, setEntitled] = useState<boolean | null>(null);
+  // 排程 UI 是三選項(每隔一段時間/每天固定時間/每天固定多個時間),但 policy
+  // schema 只有 interval/daily 兩種 mode —— 「單一 vs 多個」由 dailyTimes 長度
+  // 區分;kindOverride 記住使用者點了「多個」但還只填一格的狀態。
+  const [kindOverride, setKindOverride] = useState<"daily" | "daily-multi" | null>(null);
+
+  useEffect(() => {
+    client.license().then((l) => setEntitled(hasFeature("daily-restart", l))).catch(() => setEntitled(false));
+  }, [client]);
 
   const refresh = useCallback(async () => {
     try {
@@ -95,6 +105,8 @@ export function RestartCard({ client, instanceId }: { client: AgentClient; insta
       // 儲存時把「當下介面語言」的模板一併存進 policy,agent 只做佔位替換。
       await client.updateRestartPolicy(instanceId, {
         ...draft,
+        // 「新增時刻」的空白欄位不送出(zod 會擋空字串)
+        scheduled: { ...draft.scheduled, dailyTimes: draft.scheduled.dailyTimes.filter(Boolean) },
         announceTemplates: {
           restart: t("伺服器將在 {n} 秒後重新啟動({reason})"),
           reasonScheduled: t("排定重啟"),
@@ -137,54 +149,144 @@ export function RestartCard({ client, instanceId }: { client: AgentClient; insta
         enabled={draft.scheduled.enabled}
         onToggle={(enabled) => patch({ scheduled: { ...draft.scheduled, enabled } })}
       >
-        <div className="flex flex-wrap gap-2">
-          {(["interval", "daily"] as const).map((mode) => (
-            <button
-              key={mode}
-              className={
-                draft.scheduled.mode === mode
-                  ? "rounded-full bg-pal px-4 py-1.5 text-[13px] font-extrabold text-white"
-                  : "rounded-full border-2 border-line bg-card-soft px-4 py-1.5 text-[13px] font-extrabold text-ink-muted transition hover:border-pal"
-              }
-              onClick={() => patch({ scheduled: { ...draft.scheduled, mode } })}
-            >
-              {mode === "interval" ? t("每隔一段時間") : t("每天固定時間")}
-            </button>
-          ))}
-        </div>
-        {draft.scheduled.mode === "interval" ? (
-          <Field label={t("每隔幾分鐘重啟")}>
-            <input
-              className={inputCls}
-              type="number"
-              min={15}
-              max={10080}
-              value={draft.scheduled.intervalMinutes}
-              onChange={(e) =>
-                patch({ scheduled: { ...draft.scheduled, intervalMinutes: Number(e.target.value) } })
-              }
-            />
-          </Field>
-        ) : (
-          <Field label={t("每天的重啟時間(HH:MM,以逗號分隔)")}>
-            <input
-              className={inputCls}
-              value={draft.scheduled.dailyTimes.join(", ")}
-              placeholder="05:00, 17:00"
-              onChange={(e) =>
-                patch({
-                  scheduled: {
-                    ...draft.scheduled,
-                    dailyTimes: e.target.value
-                      .split(",")
-                      .map((s) => s.trim())
-                      .filter(Boolean),
-                  },
-                })
-              }
-            />
-          </Field>
-        )}
+        {(() => {
+          // 三選項:interval / daily(單一時刻) / daily-multi(多時刻,贊助者限定)。
+          const times = draft.scheduled.dailyTimes;
+          const kind: "interval" | "daily" | "daily-multi" =
+            draft.scheduled.mode === "interval"
+              ? "interval"
+              : times.length > 1
+                ? "daily-multi"
+                : (kindOverride ?? "daily");
+          // 閘門上線前就已儲存多時刻的舊設定不鎖(grandfather,與 agent 端一致)
+          const grandfathered =
+            status.policy.scheduled.enabled &&
+            status.policy.scheduled.mode === "daily" &&
+            status.policy.scheduled.dailyTimes.length > 1;
+          const multiLocked = entitled !== true && !grandfathered;
+          const setTimes = (next: string[]) => {
+            patch({ scheduled: { ...draft.scheduled, mode: "daily", dailyTimes: next } });
+          };
+          const OPTIONS = [
+            { k: "interval" as const, label: t("每隔一段時間"), star: false, locked: false },
+            { k: "daily" as const, label: t("每天固定時間"), star: false, locked: false },
+            { k: "daily-multi" as const, label: t("每天固定多個時間"), star: true, locked: multiLocked },
+          ];
+          return (
+            <>
+              <div className="flex flex-wrap gap-2">
+                {OPTIONS.map((o) => (
+                  <button
+                    key={o.k}
+                    className={
+                      (kind === o.k
+                        ? "rounded-full bg-pal px-4 py-1.5 text-[13px] font-extrabold text-white"
+                        : "rounded-full border-2 border-line bg-card-soft px-4 py-1.5 text-[13px] font-extrabold text-ink-muted transition hover:border-pal") +
+                      (o.locked ? " opacity-50" : "")
+                    }
+                    disabled={o.locked}
+                    title={o.locked ? t("此功能為贊助者專屬功能,可在設定頁輸入贊助者識別碼解鎖。") : undefined}
+                    onClick={() => {
+                      if (o.locked) return;
+                      if (o.k === "interval") {
+                        setKindOverride(null);
+                        patch({ scheduled: { ...draft.scheduled, mode: "interval" } });
+                      } else if (o.k === "daily") {
+                        setKindOverride("daily");
+                        setTimes(times.length ? [times[0]] : ["05:00"]);
+                      } else {
+                        setKindOverride("daily-multi");
+                        setTimes(times.length ? times : ["05:00"]);
+                      }
+                    }}
+                  >
+                    {o.star ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <FiStar className={kind === o.k ? "size-3.5" : "size-3.5 text-pal"} />
+                        {o.label}
+                      </span>
+                    ) : (
+                      o.label
+                    )}
+                  </button>
+                ))}
+              </div>
+              {multiLocked && (
+                <p className="inline-flex items-start gap-1.5 text-[12px] leading-relaxed text-ink-muted">
+                  <FiStar className="mt-0.5 size-3.5 shrink-0 text-pal" />
+                  {t("免費版可設定 1 個時刻;多個時刻(如 00:00, 06:00, 12:00, 18:00)為贊助者專屬功能,可在設定頁輸入贊助者識別碼解鎖。")}
+                </p>
+              )}
+              {kind === "interval" && (
+                <Field label={t("每隔幾分鐘重啟")}>
+                  <input
+                    className={inputCls}
+                    type="number"
+                    min={15}
+                    max={10080}
+                    value={draft.scheduled.intervalMinutes}
+                    onChange={(e) =>
+                      patch({ scheduled: { ...draft.scheduled, intervalMinutes: Number(e.target.value) } })
+                    }
+                  />
+                </Field>
+              )}
+              {kind === "daily" && (
+                <Field label={t("每天的重啟時間")}>
+                  <input
+                    className={inputCls}
+                    type="time"
+                    value={times[0] ?? ""}
+                    onChange={(e) => setTimes(e.target.value ? [e.target.value] : [])}
+                  />
+                </Field>
+              )}
+              {kind === "daily-multi" && (
+                <Field label={t("每天的重啟時間")}>
+                  <div className="flex flex-col gap-2">
+                    {times.map((tm, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <input
+                          className={inputCls}
+                          type="time"
+                          value={tm}
+                          onChange={(e) => {
+                            setKindOverride("daily-multi");
+                            setTimes(times.map((x, j) => (j === i ? e.target.value : x)));
+                          }}
+                        />
+                        {times.length > 1 && (
+                          <button
+                            className="rounded-lg p-1.5 text-ink-muted transition hover:bg-card-soft hover:text-ink"
+                            title={t("移除此時刻")}
+                            aria-label={t("移除此時刻")}
+                            onClick={() => {
+                              setKindOverride("daily-multi");
+                              setTimes(times.filter((_, j) => j !== i));
+                            }}
+                          >
+                            <FiX className="size-4" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    {times.length < 12 && (
+                      <button
+                        className={`${btnGhost} inline-flex w-fit items-center gap-1.5`}
+                        onClick={() => {
+                          setKindOverride("daily-multi");
+                          setTimes([...times, ""]);
+                        }}
+                      >
+                        <FiPlus className="size-4 shrink-0" /> {t("新增時刻")}
+                      </button>
+                    )}
+                  </div>
+                </Field>
+              )}
+            </>
+          );
+        })()}
       </Section>
 
       {/* 記憶體閥值 */}

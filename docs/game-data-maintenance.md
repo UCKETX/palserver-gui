@@ -12,12 +12,15 @@
 |---|---|
 | 新怕魯、新怕魯屬性變體 | `pals.json` + `pals/` 圖示 |
 | 新物品、新武器、新道具 | `items.json` + `items/` 圖示 |
+| 新科技或科技樹調整 | `technologies.json` + `technologies/` 圖示 |
 | 新詞條（被動技） | `passives.json` |
 | 新主動技 | `activeSkills.json` |
 | 公會 Lab Research 新增/改動研究項目 | `research.json`（見「更新公會研究目錄」一節） |
 | 新地區 / 地圖重繪 | 地圖底圖 + `landmarks.json` + `bosses.json` + `ores.json`（見最後一節） |
 | 新野外頭目（Alpha Pal） | `bosses.json`（見最後一節） |
 | 新礦物 / 礦點變動 | `ores.json`：跑 `node scripts/fetch-map-ores.mjs`；新礦種要先在腳本的 `TYPES` 補「map_data type → items.json id」對照 |
+| 世界樹圖層(Alpha/地標/樹晶礦)變動 | 跑 `node scripts/fetch-worldtree-mapdata.mjs` 重生 `worldtree-{bosses,landmarks,ores}.json` |
+| 世界樹底圖更新 | `packages/web/public/worldtree-map.webp`：跑 `node scripts/fetch-worldtree-map.mjs`(需 website/node_modules 的 sharp)。座標邊界若變(paldb treemap_data 的 landScapeRealPositionMin/Max),同步改 `packages/shared/src/index.ts` 的 `WORLD_TREE_BOUNDS` 並跑 `worldtree.test.ts` |
 
 ## 資料檔清單與 schema
 
@@ -28,6 +31,7 @@
 |---|---|---|---|
 | `pals.json` | `{id, name, icon?, zh?, "zh-CN"?, zhCN?, ja?}` | `pals/` | paldb.cc / paldeck.cc |
 | `items.json` | `{id, name, icon?, zh?, "zh-CN"?, zhCN?, ja?}` | `items/` | paldb.cc |
+| `technologies.json` | `{id, name, icon?, zh?, "zh-CN"?, zhCN?, ja?}` | `items/`（同名圖示）+ `technologies/` | paldb.cc `/Technologies` 四語頁 |
 | `passives.json` | `{id, name, zh?, "zh-CN"?, zhCN?, ja?, rank}` | 無（前端畫箭頭） | paldb.cc + paldeck.cc |
 | `activeSkills.json` | `{id, name, zh?, "zh-CN"?, zhCN?, ja?, element?}` | 無 | paldb.cc + paldeck.cc |
 | `humans.json` | `{id, name, icon?, zh?, ja?, zhCN?}` | `humans/` | paldb.cc `/Humans` 索引頁 |
@@ -44,6 +48,23 @@ compact 單行（`JSON.stringify(x) + "\n"`），欄位順序固定 `id, name, i
 
 抓取一律帶 User-Agent `palserver-gui-data-sync (maintainer-approved; github.com/io-software-ai/palserver-gui)`
 （維護者已獲 paldb.cc 同意，見 `packages/web/public/game-data/CREDITS.md`），並禮貌節流。
+
+---
+
+## 更新玩家科技目錄（technologies.json）
+
+科技目錄是從 PalDB 整份重建，直接執行：
+
+```
+node scripts/fetch-game-data-i18n.mjs technologies
+```
+
+腳本依序抓 `/en/Technologies`、`/tw/Technologies`、`/cn/Technologies`、
+`/ja/Technologies`，使用每張卡片的 `Technology/<id>` 對齊四語名稱，並以英文頁的
+`background-image` 取得圖示。與 `items/` 同 basename 的圖示直接復用，其餘下載到
+`technologies/`；PalDB 科技卡片暫時缺圖時，才按相同 ID 復用 `items.json` 的圖示。
+四語頁數量不一致時腳本會中止，不會寫出不完整目錄。既有人工校對的 `"zh-CN"`
+欄位會保留，PalDB `/cn/` 名稱寫入 `zhCN`。
 
 ---
 
@@ -160,6 +181,24 @@ node scripts/fetch-lab-research.mjs
 
 ---
 
+## 更新帕魯原版數值（pal-stats-defaults.json）
+
+帕魯數值編輯器的 placeholder / row 名大小寫校正 / 變體存在性判斷都吃這份。
+
+```bash
+node scripts/fetch-pal-stats-defaults.mjs
+```
+
+- 來源：paldb.cc（`/en/Pals` 索引枚舉一般種頁 → 每頁「Tribes」卡跟進變體頁）。
+  頁面的「Code」欄位是權威 RowName——**大小寫以它為準**（`BOSS_` 大寫為主流、
+  `Boss_Anubis` 是唯一混用例外），不要手改。
+- 欄位標籤對照（三個不同名）：Health→`Hp`、Attack→`ShotAttack`、Work Speed→`CraftSpeed`；
+  同名標籤取第一次出現（第二次是等級縮放後的範圍值）。
+- 驗證：腳本輸出的「row 數」應在 650 上下、「前綴分佈」的 normal 與 BOSS_ 應各約 300；
+  抽 `Anubis`（Hp 120）與 `Boss_Anubis`（Hp 144、CaptureRateCorrect 0.7）對照 paldb 頁面。
+
+---
+
 ## 更新地圖（底圖 + 地標）
 
 地圖在 `packages/web/src/MapTab.tsx`，用 Leaflet `CRS.Simple` 把一張大底圖鋪成座標系。
@@ -231,3 +270,9 @@ node scripts/fetch-lab-research.mjs
 - **research.json 的 ja 是「同名比對」不是「位置比對」**：paldb 的卡片頁面順序跟
   `oMaN-Rod` 的 id 順序不一致（同分類內排序依據不同），直接位置對齊會整批錯位；
   一律先用英文顯示名字串鎖定同一張卡再取 ja，對不上就留空。
+
+## breeding.json(配種配方表)
+
+- 位置:`packages/web/public/game-data/breeding.json`(來源:[tylercamp/palcalc](https://github.com/tylercamp/palcalc),MIT)
+- 遊戲改版新增帕魯後,等 PalCalc 上游更新,再跑 `node scripts/fetch-palcalc-breeding.mjs` 重新生成。
+- 注意:配種目標選單同時依賴 `pals.json` 的物種名稱/圖示——PalCalc 領先本地資料時,新物種會缺名稱且無法選為目標,兩者要一起更新。

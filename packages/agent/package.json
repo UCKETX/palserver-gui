@@ -1,6 +1,6 @@
 {
   "name": "@palserver/agent",
-  "version": "2.2.6",
+  "version": "2.6.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -9,6 +9,8 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "gen:boss-lua": "node scripts/gen-boss-lua.mjs",
+    "gen:boss-catalog": "node scripts/gen-boss-catalog.mjs",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/index.js"

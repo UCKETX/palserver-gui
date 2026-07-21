@@ -8,6 +8,12 @@ export * from "./launch-options.js";
 export * from "./paldefender-options.js";
 export * from "./pal-stats-options.js";
 export * from "./features.js";
+export * from "./world-presets.js";
+export * from "./boss-respawn.js";
+export * from "./map-helpers.js";
+export * from "./pal-avatars.generated.js";
+export * from "./log-events.js";
+export * from "./webhooks.js";
 
 /** Value type an option can hold at runtime. */
 export type WorldOptionValue = string | number | boolean;
@@ -78,8 +84,12 @@ export const CreateInstanceSchema = z.object({
   /** docker only: 自訂容器鏡像(如 ghcr.io/…/palworld:tag);省略則用內建的
    * vanilla/modded 映像。方便沿用已在 Docker 部署的其他帕魯鏡像。 */
   dockerImage: z.string().trim().max(200).optional(),
-  /** UDP port the server listens on (host port for docker). */
-  gamePort: z.number().int().min(1024).max(65535).default(8211),
+  /** docker/k8s: 執行環境。"wine" = 跑 Windows binary via Wine(支援 PalDefender)。
+   *  undefined 或 "native" = 原生 Linux binary。 */
+  runtime: z.enum(["native", "wine"]).optional(),
+  /** UDP port the server listens on (host port for docker)。
+   *  省略 = 由 agent 自動分配(從 8211 起找沒被登記且 OS 綁得起來的埠)。 */
+  gamePort: z.number().int().min(1024).max(65535).optional(),
   /** native only: custom server directory (absolute path). An existing
    * dedicated-server install (e.g. C:\steamcmd\steamapps\common\PalServer)
    * is adopted as-is; an empty or new directory becomes the install target.
@@ -155,6 +165,8 @@ export interface InstanceSummary {
   name: string;
   backend: Backend;
   flavor: "vanilla" | "modded";
+  /** docker/k8s: "wine" = Windows binary via Wine; undefined = native. */
+  runtime?: "native" | "wine";
   gamePort: number;
   status: InstanceStatus;
   createdAt: string;
@@ -171,6 +183,8 @@ export interface InstanceSummary {
 
 export interface InstanceDetail extends InstanceSummary {
   settings: WorldSettings;
+  /** agent 啟動時自動開服(每實例;在「設定」分頁切換)。 */
+  autoStart?: boolean;
   /** docker: container id · native: process id (null when not running). */
   runtimeId: string | null;
   /** user-configured server dir; null when the agent picks the folder. */
@@ -198,8 +212,12 @@ export interface ModsStatus {
   /** false when the backend/platform can't manage mods (docker, non-adopted…). */
   supported: boolean;
   reason?: string;
-  ue4ss: { installed: boolean; version: string | null };
-  paldefender: { installed: boolean; version: string | null };
+  /** 伺服器本體檔案是否已就位;false = 尚未安裝完成(前端據此隱藏 pak 卡等)。
+   *  舊版 agent 沒有此欄位 → 前端以 true 處理。 */
+  serverInstalled?: boolean;
+  /** enabled:false = 已「暫時停用」(主 DLL 改名保留,檔案都在);舊 agent 無此欄位。 */
+  ue4ss: { installed: boolean; version: string | null; enabled?: boolean };
+  paldefender: { installed: boolean; version: string | null; enabled?: boolean };
   /** UE4SS Lua mods found under the mods dir. */
   luaMods: { name: string; enabled: boolean }[];
   /** Server-dir-relative path of the Lua mods folder (layout varies by UE4SS
@@ -507,6 +525,30 @@ export function savToMap(savX: number, savY: number): { x: number; y: number } {
   };
 }
 
+/** 世界樹(1.0 終局區域)是獨立座標區,不在主世界底圖上。
+ *  邊界來源:paldb.cc treemap_data_en.js 的 landScapeRealPositionMin/Max
+ *  (研究依據 .claude/notes/worldtree-map-research.md);主世界 X 上限 349400,
+ *  兩區僅在 X∈[347351.5,349400] 極窄角落重疊(0.14%,實際是海/空白)。 */
+export const WORLD_TREE_BOUNDS = {
+  min: { x: 347351.5, y: -818197 },
+  max: { x: 689148.5, y: -476400 },
+} as const;
+
+/** 這個世界座標是否落在世界樹(用 X 軸判別,比 Y 乾淨)。 */
+export function isWorldTreeCoord(savX: number): boolean {
+  return savX > 350000;
+}
+
+/** 世界座標 → 世界樹地圖座標:±1000 正方形,底圖 worldtree-map.webp 的四角
+ *  即 WORLD_TREE_BOUNDS(與主世界同款線性縮放+XY 對調;X/Y span 相等,正方形)。 */
+export function savToWorldTreeMap(savX: number, savY: number): { x: number; y: number } {
+  const span = WORLD_TREE_BOUNDS.max.x - WORLD_TREE_BOUNDS.min.x;
+  return {
+    x: ((savY - WORLD_TREE_BOUNDS.min.y) / span) * 2000 - 1000,
+    y: ((savX - WORLD_TREE_BOUNDS.min.x) / span) * 2000 - 1000,
+  };
+}
+
 /** A player the agent has seen at least once on this instance — the roster
  * that survives logouts, so offline targets (e.g. /unban) stay selectable. */
 export interface KnownPlayer {
@@ -608,7 +650,8 @@ export interface BackupSchedule {
 }
 
 export const DEFAULT_BACKUP_SCHEDULE: BackupSchedule = {
-  enabled: false,
+  // 預設啟用:沒動過備份設定的實例自動每小時備份(明確關閉過的照舊)。
+  enabled: true,
   intervalMinutes: 60,
   keep: 10,
   skipWhenEmpty: true,
@@ -789,6 +832,18 @@ export interface SavePlayersSummary {
   players: Omit<SavePlayerProfile, "pals">[];
 }
 
+/** 配種計算器使用的輕量存檔快照。保留個體來源,方便玩家回到正確的帕魯箱找雙親。 */
+export interface SaveBreedingPal extends SavePalRow {
+  ownerUid: string;
+  ownerName: string;
+}
+
+export interface SaveBreedingSnapshot {
+  worldGuid: string;
+  generatedAt: string | null;
+  pals: SaveBreedingPal[];
+}
+
 /** 每次掃描落地的精簡統計(排行榜/週報用;存 save-stats-history.json,追加不覆蓋)。 */
 export interface SaveScanTopPal {
   characterId: string;
@@ -799,7 +854,26 @@ export interface SaveScanTopPal {
   /** 三項個體值加總(0-300) */
   ivTotal: number;
   passiveCount: number;
+  /** 詞條 id 清單(最多 8;舊統計沒有此欄位) */
+  passives?: string[];
 }
+
+/** 最強帕魯加權評分 — agent 選各玩家最強帕魯與前端榜單排序共用,改公式兩邊一起改。
+ *  等級 1:1、IV 總和 ×0.1(滿 300 折 30)、星級 ×10(滿 4 星折 40)、詞條數 ×5。 */
+export function topPalScore(tp: Pick<SaveScanTopPal, "level" | "rank" | "ivTotal" | "passiveCount">): number {
+  const stars = Math.max((tp.rank ?? 0) - 1, 0);
+  return (tp.level ?? 0) + tp.ivTotal * 0.1 + stars * 10 + tp.passiveCount * 5;
+}
+
+/** 每小時自動掃描存檔(排行榜/週報的資料來源;與備份排程同款的每實例設定檔)。 */
+export interface AutoScanSetting {
+  enabled: boolean;
+  intervalMinutes: number;
+  lastRunAt?: string | null;
+  lastResult?: string | null;
+}
+
+export const DEFAULT_AUTO_SCAN: AutoScanSetting = { enabled: false, intervalMinutes: 60 };
 
 export interface SaveScanPlayerStat {
   uid: string;
@@ -820,6 +894,35 @@ export interface SaveScanGuildStat {
   memberCount: number;
   baseCount: number;
   baseCampLevel: number | null;
+  /* 以下為深度比較欄位(2026-07 追加;舊統計沒有,消費端要容忍 undefined) */
+  /** 成員平均/最高等級(只算等級已知的成員;無資料為 null) */
+  avgLevel?: number | null;
+  maxLevel?: number | null;
+  /** 7 天內上線過的成員數 */
+  activeMembers?: number;
+  /** 各據點駐守工作帕魯總數 */
+  workerPals?: number;
+  /** 公會倉庫物品種類數(掃不到為 null) */
+  storageKinds?: number | null;
+  /** 公會研究已投入項目數(掃不到為 null) */
+  researchDone?: number | null;
+  /** 成員金錢合計(可解析者) */
+  totalMoney?: number;
+  /** 成員名下帕魯合計 */
+  totalPals?: number;
+}
+
+/** 公會綜合實力評分 — 排行榜排序用,公式顯示在榜單副標,改公式同步改文案。
+ *  平均等級 + 活躍成員×5 + 據點×8 + 據點等級×3 + 駐守帕魯×0.5 + 研究×2。 */
+export function guildScore(g: SaveScanGuildStat): number {
+  return (
+    (g.avgLevel ?? 0) +
+    (g.activeMembers ?? 0) * 5 +
+    g.baseCount * 8 +
+    (g.baseCampLevel ?? 0) * 3 +
+    (g.workerPals ?? 0) * 0.5 +
+    (g.researchDone ?? 0) * 2
+  );
 }
 
 export interface SaveScanStats {
@@ -1004,6 +1107,8 @@ export interface ConnectionInfo {
   publicIp: string | null;
   /** host is behind a router → direct connect needs port forwarding */
   behindNat: boolean;
+  /** 使用者設定的公開位址(playit.gg 隧道等;null = 未設定) */
+  externalAddress: string | null;
 }
 
 export interface AgentInfo {
@@ -1083,4 +1188,123 @@ export interface ImportSaveResult {
   backedUp: boolean;
   /** 匯入時發現共玩遺留的 WorldOptions.sav 並已自動停用(改名保留)。 */
   worldOptionsDisabled?: boolean;
+}
+
+/* ── 公開地圖(伺服器主一鍵把地圖公開到全網)──
+ * agent 定時把「已在 agent 端過濾好」的快照推到雲端 Worker,公開 viewer 只讀 Worker,
+ * 不會直接連到 agent。發布金鑰(secret)不放在這個型別裡 —— 它只存在 agent 端,詳見
+ * packages/agent/src/public-map.ts。 */
+
+/** 每實例的公開地圖發布設定(前端可見/可改的部分)。 */
+export interface PublicMapSettings {
+  enabled: boolean;
+  /** 公開分享 ID(進 viewer 網址的 ?s= 參數)。啟用時由 agent 產生;停用後保留,
+   *  重新啟用沿用同一個,除非呼叫 rotate。 */
+  shareId?: string;
+  showPlayers: boolean;
+  showPlayerNames: boolean;
+  showOfflinePlayers: boolean;
+  showBases: boolean;
+  showGuildNames: boolean;
+  /** 頭目重生:在公開地圖疊野外/封印頭目的死活與重生倒數,並顯示地下城頭目層。
+   *  需伺服器已安裝 PalserverBossReporter 模組(否則快照無資料,viewer 開關不出現)。 */
+  showBossRespawns: boolean;
+  /** 發布延遲(分鐘):0 = 即時;5 / 15 = 發布 N 分鐘前的緩衝快照,防止即時 PvP 用地圖抓位置。 */
+  delayMinutes: 0 | 5 | 15;
+}
+
+export const DEFAULT_PUBLIC_MAP_SETTINGS: PublicMapSettings = {
+  enabled: false,
+  showPlayers: true,
+  showPlayerNames: false,
+  showOfflinePlayers: false,
+  showBases: true,
+  showGuildNames: false,
+  showBossRespawns: false,
+  delayMinutes: 0,
+};
+
+/** 上次推送雲端 Worker 的結果,供管理頁顯示。 */
+export interface PublicMapPublishResult {
+  at: number;
+  ok: boolean;
+  error?: string;
+}
+
+/** GET / PUT /api/instances/:id/public-map 的回應形狀。 */
+export interface PublicMapStatus {
+  settings: PublicMapSettings;
+  shareUrl: string | null;
+  lastPublish: PublicMapPublishResult | null;
+}
+
+/** 快照裡的座標屬於主世界底圖還是世界樹(見 savToMap / savToWorldTreeMap)。 */
+export type PublicMapArea = "world" | "tree";
+
+/** 快照裡的一個玩家點(在線或離線,同一形狀)。 */
+export interface PublicMapPlayerPoint {
+  /** 名字,或關閉「顯示玩家名稱」時的匿名代號(Player 1..n)。 */
+  n: string;
+  lv: number;
+  x: number;
+  y: number;
+  m: PublicMapArea;
+  /** 頭像圖示檔名(game-data/pals/ 內的裸檔名,與 GUI PlayerAvatar 同一顆雜湊 +
+   *  同一份候選清單挑出來的 —— 見 pickPalAvatarIcon)。URL 前綴由消費端決定。 */
+  icon?: string;
+  /** 偷襲警告:這個(在線)玩家目前站在「非自己公會」的據點附近(RAID_RADIUS 內)。
+   *  只有 showPlayers 與 showBases 兩個圖層都開啟時才會算、才會出現這個欄位;
+   *  離線玩家一律不計算(對齊 GUI 只對在線玩家判定的行為)。 */
+  warn?: boolean;
+}
+
+/** 快照裡的一個公會據點。 */
+export interface PublicMapBasePoint {
+  x: number;
+  y: number;
+  m: PublicMapArea;
+  /** 公會名 — 只有「顯示公會名稱」開啟且贊助者授權(guild-map)才有,否則整欄省略。 */
+  g?: string;
+  /** 公會配色(HSL 字串,guildColorFromId(guildId) 算好的)。跟 g 是獨立開關 ——
+   *  顏色本身不洩漏公會名稱,showGuildNames 關閉時仍可能帶這個欄位。 */
+  c?: string;
+}
+
+/** 快照裡野外/封印頭目的重生狀態點。agent 端已用 assignReportedBosses 一對一配好,
+ *  以 bosses.json 的「地圖座標」為鍵發出(viewer 用 `${x},${y}` 疊到自帶靜態 marker 上,
+ *  故只需狀態、不需 name/icon)。只有 showBossRespawns 開啟且模組有回報時才出現。 */
+export interface PublicMapBossPoint {
+  x: number;
+  y: number;
+  m: PublicMapArea;
+  /** 'alive' | 'dead' | 'unknown'(對齊 shared BossLiveStatus;實際 unknown 不會發出)。 */
+  st: "alive" | "dead" | "unknown";
+  /** 預估重生 epoch 秒(st==='dead' 且觀測到擊殺時);否則省略。
+   *  ⚠ 單位是「秒」,與 generatedAt(毫秒)不同,消費端勿混用。 */
+  ra?: number;
+  /** 倒數採實測重生間隔(true)還是官方預設 3600s 估算(false/省略)。 */
+  ms?: boolean;
+}
+
+/** 公開地圖快照格式 v1 — 雲端 Worker 與公開 viewer 依此消費,欄位名不可改。
+ *  過濾在 agent 端完成:被設定關掉的圖層,對應欄位整個省略(不是空陣列)。 */
+export interface PublicMapSnapshot {
+  v: 1;
+  name: string;
+  generatedAt: number;
+  onlineCount: number;
+  maxPlayers?: number;
+  show: {
+    players: boolean;
+    names: boolean;
+    offline: boolean;
+    bases: boolean;
+    guildNames: boolean;
+    bossRespawns: boolean;
+  };
+  players?: PublicMapPlayerPoint[];
+  offline?: PublicMapPlayerPoint[];
+  bases?: PublicMapBasePoint[];
+  /** 野外/封印頭目重生狀態(以地圖座標為鍵疊到 viewer 自帶靜態頭目 marker;省略=無資料)。 */
+  bosses?: PublicMapBossPoint[];
 }

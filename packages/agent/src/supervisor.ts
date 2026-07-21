@@ -2,15 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   DEFAULT_RESTART_POLICY,
+  type InstanceStatus,
   type RestartEvent,
   type RestartPolicy,
   type RestartReason,
+  type WebhookEventType,
 } from "@palserver/shared";
 import type { DriverContext, ServerDriver } from "./driver.js";
 import type { InstanceStore, InstanceRecord } from "./store.js";
 import { rest } from "./restapi.js";
 import { getPalDefenderConfig } from "./paldefender-config.js";
 import { newestPalDefenderLogLines } from "./native.js";
+import { cachedVersionSummary } from "./version.js";
+import { emitAgentEvent } from "./events.js";
 
 /**
  * Automatic restarts, three triggers:
@@ -31,6 +35,24 @@ const MAX_ANNOUNCE_SECONDS = 300;
 /** A native server that exits within this window of starting never really came
  * up — a boot failure, not a mid-game crash. Palworld's own boot takes ~30-60s. */
 const BOOT_GRACE_MS = 120_000;
+/** After a graceful REST /shutdown (waittime 10s), how long we poll for the old
+ * process to actually exit before force-stopping. Big worlds flush saves on the
+ * way out, so this needs headroom beyond the announced waittime. */
+const SHUTDOWN_EXIT_TIMEOUT_MS = 60_000;
+
+/** daily 模式的觸發鍵:以「預計實際重啟的時刻」(now + 公告秒數)對表 ——
+ * 公告先行,重啟正落在使用者設定的 HH:MM,而不是晚 announceSeconds 才開始。
+ * 回傳 null = 現在(含前導)不落在任何排定時刻。exported for tests. */
+export function dailyFireKey(
+  policy: Pick<RestartPolicy, "announceSeconds"> & { scheduled: Pick<RestartPolicy["scheduled"], "dailyTimes"> },
+  now: Date,
+): string | null {
+  const lead = Math.min(Math.max(policy.announceSeconds, 0), MAX_ANNOUNCE_SECONDS);
+  const target = new Date(now.getTime() + lead * 1000);
+  const hhmm = `${String(target.getHours()).padStart(2, "0")}:${String(target.getMinutes()).padStart(2, "0")}`;
+  if (!policy.scheduled.dailyTimes.includes(hhmm)) return null;
+  return `${target.toDateString()} ${hhmm}`;
+}
 
 interface SupervisorState {
   /** we last observed it running, so an "exited" now means it crashed */
@@ -59,6 +81,11 @@ export class RestartSupervisor {
   private timer: NodeJS.Timeout | null = null;
   /** instances currently mid-restart — skip them until they settle */
   private busy = new Set<string>();
+  /** 上次觀測到的狀態 —— 用來偵測 running/exited/starting 轉移並 emit 給 webhook。
+   *  只在記憶體(agent 重啟後以當下狀態重建基準,不會補發啟動時就已存在的狀態)。 */
+  private lastStatus = new Map<string, InstanceStatus>();
+  /** 上次觀測到的「有無可用更新」—— 只在 false→true(新版釋出)時 emit 一次,避免每 tick 重發。 */
+  private lastUpdate = new Map<string, boolean>();
 
   constructor(
     private store: InstanceStore,
@@ -130,14 +157,47 @@ export class RestartSupervisor {
     state.events.push(event);
     if (state.events.length > MAX_EVENTS) state.events = state.events.slice(-MAX_EVENTS);
     this.writeState(id, state);
+    // native 的崩潰由 native driver 的 child exit 事件即時發 server.crash(更準),這裡不重複發;
+    // 其餘(scheduled/memory/manual=restart、startup-failure)仍由這裡發,docker/k8s 的 crash 也由這裡發。
+    if (event.reason === "crash" && this.store.get(id)?.backend === "native") return;
+    // 這裡是重啟/啟動失敗事件的唯一寫入點 —— 一處 emit 覆蓋 restart / startup-failure(+ 非 native crash)。
+    const type: WebhookEventType =
+      event.reason === "crash"
+        ? "server.crash"
+        : event.reason === "startup-failure"
+          ? "server.startup_failure"
+          : "server.restart";
+    emitAgentEvent(type, id, { reason: event.reason, ok: event.ok, detail: event.detail });
+  }
+
+  /** 狀態轉移 → 生命週期 webhook(running / starting / exited)。首次觀測只建基準不 emit,
+   *  避免 agent 一啟動就對「本來就在跑」的伺服器發假的「已上線」。crash/排程重啟另有專屬
+   *  事件(見 record),這裡是給一般手動開/關/重啟用的通用訊號,最多延遲一個 tick(~30s)。 */
+  private emitStatusTransition(id: string, status: InstanceStatus): void {
+    const prev = this.lastStatus.get(id);
+    this.lastStatus.set(id, status);
+    if (prev === undefined || prev === status) return;
+    if (status === "running") emitAgentEvent("server.running", id, {});
+    else if (status === "starting" || status === "restarting") emitAgentEvent("server.starting", id, {});
+    else if (status === "exited") emitAgentEvent("server.exited", id, {});
+  }
+
+  /** 遊戲伺服器有新版可更新 → emit 一次(只在 false→true;null/未知不動)。快取由 agent 週期
+   *  fetchLatest 刷新(見 index.ts),故新版釋出後最多一個 tick 內就會偵測到。 */
+  private emitUpdateTransition(rec: InstanceRecord, ctx: DriverContext): void {
+    const { updateAvailable, gameVersion } = cachedVersionSummary(rec, ctx);
+    if (typeof updateAvailable !== "boolean") return; // null=未知(非 native/無快取)→ 不動
+    const prev = this.lastUpdate.get(rec.id);
+    this.lastUpdate.set(rec.id, updateAvailable);
+    if (prev === false && updateAvailable === true) {
+      emitAgentEvent("server.update_available", rec.id, { current: gameVersion ?? "", latest: "" });
+    }
   }
 
   /** Fixed times of day: fire once when the clock reaches HH:MM. */
   private dailyDue(policy: RestartPolicy, state: SupervisorState, now: Date): boolean {
-    const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-    if (!policy.scheduled.dailyTimes.includes(hhmm)) return false;
-    const key = `${now.toDateString()} ${hhmm}`;
-    return state.lastDailyFire !== key;
+    const key = dailyFireKey(policy, now);
+    return key !== null && state.lastDailyFire !== key;
   }
 
   private scheduledDue(policy: RestartPolicy, state: SupervisorState, now: Date): boolean {
@@ -169,6 +229,10 @@ export class RestartSupervisor {
     const state = this.readState(rec.id);
     const now = new Date();
     const { status } = await driver.status(rec, ctx);
+    // native 由 native driver 直接發精準的生命週期事件(starting/running/exited/crash,見 native.ts);
+    // 這裡的輪詢轉移只給 docker/k8s 兜底(它們沒有 child handle / REST 探測那條路)。
+    if (rec.backend !== "native") this.emitStatusTransition(rec.id, status);
+    this.emitUpdateTransition(rec, ctx);
 
     if (status !== "running") {
       // Crashed if we saw it running before and nobody asked us to stop it.
@@ -180,7 +244,7 @@ export class RestartSupervisor {
         // PalDefender's `exitServerOnStartupFailure` makes the server exit on
         // boot when the plugin can't load. That reads as a crash, but restarting
         // just loops until the hourly cap — so detect it and stop with a reason.
-        if (this.isStartupFailure(rec, ctx, state, now)) {
+        if (await this.isStartupFailure(rec, ctx, state, now)) {
           this.handleStartupFailure(rec, ctx, state);
         } else {
           await this.handleCrash(rec, ctx, driver, policy, state);
@@ -202,8 +266,7 @@ export class RestartSupervisor {
 
     if (this.scheduledDue(policy, state, now)) {
       if (policy.scheduled.mode === "daily") {
-        const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-        state.lastDailyFire = `${now.toDateString()} ${hhmm}`;
+        state.lastDailyFire = dailyFireKey(policy, now) ?? state.lastDailyFire;
       }
       await this.restart(rec, ctx, driver, policy, state, "scheduled", "已達排定的重啟時間");
       return;
@@ -233,16 +296,17 @@ export class RestartSupervisor {
   /** A crash is really a PalDefender startup abort when: the server died during
    * boot (within the grace window of our last start) AND the user asked
    * PalDefender to exit the server on startup failure. Restarting can't help. */
-  private isStartupFailure(
+  private async isStartupFailure(
     rec: InstanceRecord,
     ctx: DriverContext,
     state: SupervisorState,
     now: Date,
-  ): boolean {
+  ): Promise<boolean> {
     if (!state.lastStartAt) return false;
     if (now.getTime() - Date.parse(state.lastStartAt) >= BOOT_GRACE_MS) return false;
     try {
-      return getPalDefenderConfig(rec, ctx).values.exitServerOnStartupFailure === true;
+      const cfg = await getPalDefenderConfig(rec, ctx);
+      return cfg.values.exitServerOnStartupFailure === true;
     } catch {
       return false;
     }
@@ -252,14 +316,18 @@ export class RestartSupervisor {
    * same failure. Sets wasRunning=false so later ticks don't re-flag it. */
   private handleStartupFailure(rec: InstanceRecord, ctx: DriverContext, state: SupervisorState): void {
     state.wasRunning = false;
-    const hint = newestPalDefenderLogLines(rec, ctx, 1)[0];
+    // Only quote PalDefender logs written since this boot — the newest file by
+    // mtime may be the *previous* process's shutdown tail, which reads like
+    // evidence but is just a normal goodbye message.
+    const bootMs = state.lastStartAt ? Date.parse(state.lastStartAt) : undefined;
+    const hint = newestPalDefenderLogLines(rec, ctx, 1, bootMs)[0];
     this.record(rec.id, state, {
       at: new Date().toISOString(),
       reason: "startup-failure",
       ok: false,
       detail:
         "伺服器在啟動階段即結束,且 PalDefender 已開啟「啟動失敗時關閉伺服器」— 研判為 PalDefender 啟動失敗自我關閉,已停止自動重啟以免無限重啟迴圈。請查看 PalDefender 日誌修正原因,或關閉該選項與崩潰自動重啟其一。"
-        + (hint ? ` 最後日誌:${hint}` : ""),
+        + (hint ? ` 最後日誌:${hint}` : "(本次啟動期間沒有 PalDefender 日誌 — 外掛可能未載入,或伺服器在載入外掛前就結束了。)"),
     });
   }
 
@@ -285,16 +353,18 @@ export class RestartSupervisor {
 
     this.busy.add(rec.id);
     try {
-      await driver.start(rec, ctx);
+      const started = await driver.start(rec, ctx);
       const at = new Date().toISOString();
-      state.recentRestarts = [...recent, at];
+      if (started) state.recentRestarts = [...recent, at];
       state.wasRunning = true;
       state.lastStartAt = at;
       this.record(rec.id, state, {
         at,
         reason: "crash",
         ok: true,
-        detail: `伺服器異常結束,已自動重啟(本小時第 ${recent.length + 1} 次)`,
+        detail: started
+          ? `伺服器異常結束,已自動重啟(本小時第 ${recent.length + 1} 次)`
+          : "伺服器異常結束,但偵測時已在執行(可能已被手動啟動),略過自動重啟",
       });
     } catch (err) {
       state.recentRestarts = [...recent, new Date().toISOString()];
@@ -320,6 +390,9 @@ export class RestartSupervisor {
     detail: string,
   ): Promise<void> {
     this.busy.add(rec.id);
+    // interval 模式的下一輪從「本輪觸發」起算,而不是完成時 —— 否則每輪都往後
+    // 漂移 announceSeconds + 關機等待(使用者回報 360 分鐘排程會越跑越晚)。
+    const firedAt = new Date().toISOString();
     try {
       // 遊戲內公告用 GUI 儲存設定時寫入的在地化模板;沒存過(舊設定)退回內建繁中。
       // detail 留給重啟紀錄/log(內含動態數字,不進遊戲聊天室)。
@@ -346,6 +419,12 @@ export class RestartSupervisor {
       await rest.save(rec).catch(() => {});
       await new Promise((r) => setTimeout(r, 5000));
 
+      // Remember the old process's identity (native: pid) before asking it to
+      // exit — during the wait below this is how we tell "old process still
+      // exiting" apart from "someone manually restarted and a NEW process is
+      // running", which we must never kill.
+      const oldRuntimeId = (await driver.status(rec, ctx)).runtimeId;
+
       // Try graceful shutdown first (server saves then exits cleanly).
       // Fall back to hard stop if REST is unavailable or shutdown fails.
       const shutdownOk = await rest
@@ -356,21 +435,80 @@ export class RestartSupervisor {
       if (!shutdownOk) {
         await driver.stop(rec, ctx);
       } else {
-        // Graceful shutdown succeeded — the server is (or soon will be) stopped.
-        // Wait a moment for the process to fully exit, then sync driver state.
-        await new Promise((r) => setTimeout(r, 5000));
+        // Graceful shutdown succeeded — but the server only *begins* exiting
+        // after the announced waittime (10s), and flushing a big world can take
+        // longer still. Poll until the old process is really gone: starting the
+        // new one too early makes driver.start() see a live process and silently
+        // no-op — the restart then never happens, and the old process's own
+        // exit a few seconds later gets misread as a PalDefender startup
+        // failure, which halts auto-restart entirely.
+        const deadline = Date.now() + SHUTDOWN_EXIT_TIMEOUT_MS;
+        for (;;) {
+          const cur = await driver.status(rec, ctx);
+          if (cur.status !== "running") break;
+          if (oldRuntimeId !== null && cur.runtimeId !== null && cur.runtimeId !== oldRuntimeId) {
+            // A different process took over mid-wait (manual restart from the
+            // UI). The goal — a fresh server — is already met; hand over.
+            // (Carry lastDailyFire so a daily schedule doesn't refire this
+            // same minute — check() set it in memory only.)
+            const cur2 = this.readState(rec.id);
+            cur2.lastDailyFire = state.lastDailyFire;
+            this.record(rec.id, cur2, {
+              at: new Date().toISOString(),
+              reason,
+              ok: false,
+              detail: "等待舊程序退出期間,伺服器已被手動重啟接手 — 本次排程重啟取消,不影響新程序。",
+            });
+            return;
+          }
+          if (Date.now() >= deadline) {
+            // Still alive past the deadline — escalate like the REST-less path
+            // (driver.stop verifies the PID and waits for it to die).
+            await driver.stop(rec, ctx);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 1000));
+        }
       }
 
-      await driver.start(rec, ctx);
+      // A manual stop during any of the waits above (announce / save /
+      // shutdown) writes wasRunning=false via noteManualState. Respect it —
+      // resurrecting a server the user just stopped is worse than skipping
+      // one scheduled restart.
+      const preStart = this.readState(rec.id);
+      if (!preStart.wasRunning) {
+        preStart.lastDailyFire = state.lastDailyFire;
+        this.record(rec.id, preStart, {
+          at: new Date().toISOString(),
+          reason,
+          ok: false,
+          detail: "重啟等待期間偵測到手動停止 — 尊重停止指令,本次排程重啟取消(伺服器維持停止)。",
+        });
+        return;
+      }
 
+      const started = await driver.start(rec, ctx);
+      if (!started) {
+        throw new Error("舊伺服器程序尚未退出,無法啟動新程序 — 本次重啟未執行(伺服器維持原狀)");
+      }
+
+      // Re-read state instead of writing back the copy we've held across a
+      // wait that can span minutes — a concurrent manual start/stop updates
+      // the state file, and clobbering it re-arms stale flags.
       const now = new Date().toISOString();
-      state.recentRestarts = [...this.recentWithinHour(state.recentRestarts), now];
-      state.lastScheduledAt = now;
-      state.wasRunning = true;
-      state.lastStartAt = now;
-      this.record(rec.id, state, { at: now, reason, ok: true, detail });
+      const fresh = this.readState(rec.id);
+      fresh.lastDailyFire = state.lastDailyFire; // set by check() at fire time
+      fresh.recentRestarts = [...this.recentWithinHour(fresh.recentRestarts), now];
+      fresh.lastScheduledAt = firedAt;
+      fresh.wasRunning = true;
+      fresh.lastStartAt = now;
+      this.record(rec.id, fresh, { at: now, reason, ok: true, detail });
     } catch (err) {
-      this.record(rec.id, state, {
+      // Fresh read for the same reason as the success path; keep lastDailyFire
+      // so a failed daily restart isn't re-attempted within the same minute.
+      const cur = this.readState(rec.id);
+      cur.lastDailyFire = state.lastDailyFire;
+      this.record(rec.id, cur, {
         at: new Date().toISOString(),
         reason,
         ok: false,

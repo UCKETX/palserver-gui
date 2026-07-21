@@ -73,6 +73,12 @@ export const IMAGES: Record<"vanilla" | "modded", string> = {
   modded: process.env.PALSERVER_IMAGE_MODDED ?? "palserver/modded:latest",
 };
 
+/** Wine variants — Windows binary under Wine (PalDefender compatible). */
+export const IMAGES_WINE: Record<"vanilla" | "modded", string> = {
+  vanilla: process.env.PALSERVER_IMAGE_WINE ?? "palserver/wine:latest",
+  modded: process.env.PALSERVER_IMAGE_WINE_MODDED ?? "palserver/wine-modded:latest",
+};
+
 /** GUI 自己的 GitHub repo — 自我更新從這裡的 Releases 取得新版。 */
 export const GITHUB_REPO = process.env.PALSERVER_GITHUB_REPO ?? "io-software-ai/palserver-gui";
 
@@ -93,6 +99,11 @@ export const TELEMETRY_DISABLED_BY_ENV = process.env.PALSERVER_TELEMETRY === "0"
 export const LICENSE_URLS = process.env.PALSERVER_LICENSE_URL
   ? [process.env.PALSERVER_LICENSE_URL]
   : STATS_URLS;
+
+/** 公開地圖 viewer 的網址(shareId 組出完整分享連結,見 public-map.ts)。
+ * 自架/測試時可用環境變數覆寫。 */
+export const PALSERVER_MAP_VIEWER =
+  process.env.PALSERVER_MAP_VIEWER ?? "https://palserver-gui.iosoftware.ai/map/";
 
 export const CONTAINER_PREFIX = "palserver-";
 export const INSTANCE_LABEL = "app.palserver.instance";

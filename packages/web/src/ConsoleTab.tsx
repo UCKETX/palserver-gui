@@ -19,8 +19,8 @@ import { CustomPalModal } from "./CustomPalModal";
 import { GiveItemsModal } from "./GiveItemsModal";
 import { TeleportModal } from "./TeleportModal";
 import { MapPickModal } from "./MapPickModal";
-import { SHOW_ADVANCED_FEATURES } from "./flags";
-import { useGameData, itemIconUrl, palIconUrl, type GameData } from "./gameData";
+import { SHOW_SPONSOR_FEATURES } from "./flags";
+import { useGameData, itemIconUrl, palIconUrl, technologyIconUrl, type GameData } from "./gameData";
 import { t, useI18n } from "./i18n";
 import { btn, btnGhost, card, errorCls, inputCls, labelCls } from "./ui";
 
@@ -98,37 +98,64 @@ function ArgField({
   // 座標參數:文字欄 + 「地圖描點」按鈕(自帶狀態,獨立成元件避免條件 hook)。
   if (arg.coord) return <CoordField arg={arg} value={value} onChange={onChange} />;
 
-  // Item/Egg/Pal id args get an icon search picker backed by the catalogs.
-  // eggid 只列帕魯蛋(不是全部道具),itemid 才是全物品目錄。
-  if ((arg.name === "itemid" || arg.name === "eggid") && gameData) {
+  // Item/Egg/Tech ids get an icon search picker backed by the catalogs.
+  // eggid 只列帕魯蛋;techid 使用玩家科技目錄;itemid 才是全物品目錄。
+  if ((arg.name === "itemid" || arg.name === "eggid" || arg.name === "techid") && gameData) {
     const isEgg = arg.name === "eggid";
+    const isTech = arg.name === "techid";
     return (
       <label className={`${labelCls} min-w-0`}>
         {t(arg.label)}
         {!arg.required && <span className="font-normal">{t("(選填)")}</span>}
         <EntityPicker
-          catalog={isEgg ? gameData.eggs : gameData.items}
-          iconUrl={itemIconUrl}
+          catalog={isEgg ? gameData.eggs : isTech ? gameData.technologies : gameData.items}
+          iconUrl={isTech ? technologyIconUrl : itemIconUrl}
           value={value}
           onChange={onChange}
-          placeholder={isEgg ? t("搜尋蛋名稱或輸入 ID…") : t("搜尋道具名稱或輸入 ID…")}
+          placeholder={
+            isEgg
+              ? t("搜尋蛋名稱或輸入 ID…")
+              : isTech
+                ? t("搜尋科技名稱或輸入 ID…")
+                : t("搜尋道具名稱或輸入 ID…")
+          }
         />
       </label>
     );
   }
   if (arg.name === "palid" && gameData) {
+    // BOSS(頭目)變體 = CharacterID 加 BOSS_ 前綴。勾選時只改「送出的值」,
+    // EntityPicker 仍以基礎 id 顯示/搜尋(值本身就是狀態,不需要另外的 state)。
+    const boss = value.startsWith("BOSS_");
+    const bare = boss ? value.slice("BOSS_".length) : value;
     return (
-      <label className={`${labelCls} min-w-0`}>
-        {t(arg.label)}
-        {!arg.required && <span className="font-normal">{t("(選填)")}</span>}
-        <EntityPicker
-          catalog={gameData.pals}
-          iconUrl={palIconUrl}
-          value={value}
-          onChange={onChange}
-          placeholder={t("搜尋帕魯名稱或輸入 ID…")}
-        />
-      </label>
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <label className={`${labelCls} min-w-0`}>
+          {t(arg.label)}
+          {!arg.required && <span className="font-normal">{t("(選填)")}</span>}
+          <EntityPicker
+            catalog={gameData.pals}
+            iconUrl={palIconUrl}
+            value={bare}
+            onChange={(v) => onChange(v && boss ? `BOSS_${v}` : v)}
+            placeholder={t("搜尋帕魯名稱或輸入 ID…")}
+          />
+        </label>
+        <label
+          className={`inline-flex w-fit items-center gap-1.5 text-xs font-bold text-ink-muted ${
+            bare ? "cursor-pointer" : "cursor-not-allowed opacity-50"
+          }`}
+        >
+          <input
+            type="checkbox"
+            className="size-4 accent-pal"
+            checked={boss}
+            disabled={!bare}
+            onChange={(e) => onChange(e.target.checked ? `BOSS_${bare}` : bare)}
+          />
+          {t("BOSS(頭目)版本")}
+        </label>
+      </div>
     );
   }
 
@@ -340,51 +367,35 @@ export function ConsoleTab({
               placeholder={t("搜尋指令…")}
             />
           </div>
-          {SHOW_ADVANCED_FEATURES && catalog.paldefender && (
-            <>
-              <button
-                type="button"
-                className="shrink-0 rounded-lg px-2 py-1.5 text-left text-[13px] transition hover:bg-card-soft"
-                onClick={() => setCustomPalMode("pal")}
-              >
-                <span className="inline-flex items-center gap-1 font-mono text-pal">
-                  givepal_j
-                </span>
-                <span className="block text-xs text-ink-muted">{t("自訂帕魯(詞條 / 體質 / 星星)")}</span>
-              </button>
-              <button
-                type="button"
-                className="shrink-0 rounded-lg px-2 py-1.5 text-left text-[13px] transition hover:bg-card-soft"
-                onClick={() => setCustomPalMode("egg")}
-              >
-                <span className="inline-flex items-center gap-1 font-mono text-pal">
-                  giveegg_j
-                </span>
-                <span className="block text-xs text-ink-muted">{t("自訂帕魯蛋(詞條 / 體質 / 星星)")}</span>
-              </button>
-              <button
-                type="button"
-                className="shrink-0 rounded-lg px-2 py-1.5 text-left text-[13px] transition hover:bg-card-soft"
-                onClick={() => setShowGiveItems(true)}
-              >
-                <span className="inline-flex items-center gap-1 font-mono text-pal">
-                  giveitems
-                </span>
-                <span className="block text-xs text-ink-muted">{t("批量給予道具(選單 + 數量)")}</span>
-              </button>
-              <button
-                type="button"
-                className="shrink-0 rounded-lg px-2 py-1.5 text-left text-[13px] transition hover:bg-card-soft"
-                onClick={() => setShowTeleport(true)}
-              >
-                <span className="inline-flex items-center gap-1 font-mono text-pal">
-                  tp
-                </span>
-                <span className="block text-xs text-ink-muted">{t("傳送玩家(玩家 / 地圖座標)")}</span>
-              </button>
-            </>
-          )}
           <div className="min-h-0 flex-1 overflow-y-auto">
+            {/* 贊助者專屬指令:混在清單裡跟其他分類一樣捲動,星星+title 標示。
+                未公布前用 SHOW_SPONSOR_FEATURES 整組隱藏;點了跳彈窗,未解鎖時表單不可用。 */}
+            {SHOW_SPONSOR_FEATURES && catalog.paldefender && (
+              <div>
+                <p className="mt-2 mb-1 px-1 text-xs font-extrabold text-ink-muted">{t("贊助者專屬")}</p>
+                <div className="flex flex-col">
+                  {([
+                    { cmd: "givepal_j", desc: "自訂帕魯(詞條 / 體質 / 星星)", onClick: () => setCustomPalMode("pal" as const) },
+                    { cmd: "giveegg_j", desc: "自訂帕魯蛋(詞條 / 體質 / 星星)", onClick: () => setCustomPalMode("egg" as const) },
+                    { cmd: "giveitems", desc: "批量給予道具(選單 + 數量)", onClick: () => setShowGiveItems(true) },
+                    { cmd: "tp", desc: "傳送玩家(玩家 / 地圖座標)", onClick: () => setShowTeleport(true) },
+                  ] as const).map((x) => (
+                    <button
+                      key={x.cmd}
+                      type="button"
+                      className="rounded-lg px-2 py-1.5 text-left text-[13px] transition hover:bg-card-soft"
+                      onClick={x.onClick}
+                      title={t("贊助者專屬")}
+                    >
+                      <span className="inline-flex items-center gap-1 font-mono text-pal">
+                        {x.cmd} <FiStar className="size-3" />
+                      </span>
+                      <span className="block text-xs text-ink-muted">{t(x.desc)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {[...grouped.entries()].map(([category, cmds]) => (
               <div key={category}>
                 <p className="mt-2 mb-1 px-1 text-xs font-extrabold text-ink-muted">{category}</p>

@@ -43,11 +43,37 @@ alongside English names when the source provides them.
   `oMaN-Rod` id order — verified by inspection); one entry (`EmitFlame1_6`,
   "Kindling Lv6") has no `ja` because paldb's own list doesn't include that
   tier, and is left blank rather than guessed.
+- **Player technology catalog** (`technologies.json`): technology ids,
+  English, Traditional-Chinese, Simplified-Chinese, and Japanese names, and
+  icon URLs are read directly from paldb.cc's four `/Technologies` pages. Icons
+  already present in this project's `items/` catalog are reused; the remaining
+  PalDB icons are stored in `technologies/`.
 
 `passives.json` / `activeSkills.json` are regenerated with
 `node scripts/fetch-skills-passives.mjs`. `humans.json` is regenerated with
 `node scripts/fetch-human-npcs.mjs`. `research.json` is regenerated with
-`node scripts/fetch-lab-research.mjs`.
+`node scripts/fetch-lab-research.mjs`. The player technology catalog and icons
+are refreshed with `node scripts/fetch-game-data-i18n.mjs technologies`.
 
 All Palworld artwork is © Pocketpair, Inc. These icons are bundled only to
 label in-game entities within this management tool.
+
+## Breeding data
+
+`breeding.json` is a compact transform of the breeding database from
+[`tylercamp/palcalc`](https://github.com/tylercamp/palcalc), Copyright 2024
+Tyler Camp, used under the MIT License. It is regenerated with
+`node scripts/fetch-palcalc-breeding.mjs`; the original copyright notice and
+license are preserved in this repository's `THIRD_PARTY_LICENSES.md`.
+
+## World Tree base map
+
+`packages/web/public/worldtree-map.webp` is stitched from paldb.cc's World
+Tree map tiles (`node scripts/fetch-worldtree-map.mjs`, maintainer-approved
+scraping, same arrangement as the game-data name sync).
+`worldtree-bosses.json` / `worldtree-landmarks.json` / `worldtree-ores.json`
+come from paldb.cc's `treemap_data_{en,tw,cn,ja}.js` fixedDungeon array
+(`node scripts/fetch-worldtree-mapdata.mjs`). Calibration bounds
+come from paldb.cc's `treemap_data_en.js` (`landScapeRealPositionMin/Max`);
+the coordinate transform lives in `packages/shared/src/index.ts`
+(`savToWorldTreeMap`). Map artwork is © Pocketpair, Inc.

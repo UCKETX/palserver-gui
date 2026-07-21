@@ -12,6 +12,10 @@ routes = [
 # GUI 下載數的來源 repo(GitHub Releases 公開統計)。
 [vars]
 GITHUB_REPO = "io-software-ai/palserver-gui"
+# 愛發電只認這個包月方案的訂單才發碼(¥60/月方案;plan_id 是公開資料)。
+AFDIAN_PLAN_IDS = "bd3bee5c838611f1bbe052540025c377"
+# 愛發電開放 API 網域:舊域 afdian.net 已停用(DNS 解不到),用 ifdian.net(與 afdian.com 同系統)。
+AFDIAN_API_BASE = "https://ifdian.net"
 
 # 先 `wrangler d1 create palserver-stats`,把回傳的 database_id 填進來,
 # 再 `pnpm db:schema` 建表。

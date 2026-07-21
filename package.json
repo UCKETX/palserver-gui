@@ -1,6 +1,6 @@
 {
   "name": "palserver-gui",
-  "version": "2.2.6",
+  "version": "2.6.0",
   "private": true,
   "description": "Docker-based Palworld dedicated server management. Agent daemon + remote Web UI.",
   "author": "Dalufishe",
@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.28.1",
-    "postject": "1.0.0-alpha.6"
+    "postject": "1.0.0-alpha.6",
+    "resedit": "^2.0.3"
   }
 }

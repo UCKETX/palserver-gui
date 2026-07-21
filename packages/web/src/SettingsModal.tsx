@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
-import { FiX, FiCopy, FiCheck, FiRefreshCw, FiSmartphone, FiKey, FiWifi, FiTrash2, FiEye, FiEyeOff, FiSun, FiShield } from "react-icons/fi";
+import { FiX, FiCopy, FiCheck, FiRefreshCw, FiSmartphone, FiKey, FiWifi, FiTrash2, FiStar, FiEye, FiEyeOff, FiSun, FiShield, FiHeart } from "react-icons/fi";
+import type { LicenseStatus } from "@palserver/shared";
 import type { AgentClient, Connection, TelemetryStatus, AgentSettingsStatus, AgentSettingsPatch } from "./api";
 import { copyText } from "./clipboard";
 import { PrivacyModal } from "./PrivacyModal";
 import { UpdateCard } from "./UpdateCard";
 import { useI18n } from "./i18n";
 import { ThemePicker } from "./ThemePicker";
+import { useHiddenCards } from "./tabPrefs";
+import { STATS_URL } from "./stats";
 import { Overlay, card, btn, btnGhost, inputCls } from "./ui";
 
 /**
@@ -22,20 +25,65 @@ export function SettingsModal({
   conn: Connection;
   onClose: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [code, setCode] = useState<string | null>(null);
+  const [hiddenCards, setHiddenCards] = useHiddenCards();
   const [addrs, setAddrs] = useState<{ ip: string; vpn: string | null }[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [telemetry, setTelemetry] = useState<TelemetryStatus | null>(null);
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showThemes, setShowThemes] = useState(false);
+  const [afdianNo, setAfdianNo] = useState("");
+  const [afdianBusy, setAfdianBusy] = useState(false);
+  const [afdianMsg, setAfdianMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     client.pairingCode().then((r) => setCode(r.pairingCode)).catch(() => setCode(null));
     client.agentAddresses().then((r) => setAddrs(r.addresses)).catch(() => setAddrs([]));
     client.telemetry().then(setTelemetry).catch(() => setTelemetry(null));
   }, [client]);
+
+  const saveLicense = async () => {
+    if (!licInput.trim()) return;
+    setLicBusy(true);
+    try {
+      setLic(await client.setLicense(licInput.trim()));
+      setLicInput("");
+    } finally {
+      setLicBusy(false);
+    }
+  };
+  const clearLicense = async () => {
+    setLicBusy(true);
+    try {
+      setLic(await client.clearLicense());
+    } finally {
+      setLicBusy(false);
+    }
+  };
+
+  /** 愛發電不給 email,贊助者自助貼訂單號換碼:成功就把碼帶進 licInput,接著按「啟用」即可。 */
+  const redeemAfdian = async () => {
+    const no = afdianNo.trim();
+    if (!no) return;
+    setAfdianBusy(true);
+    setAfdianMsg(null);
+    try {
+      const res = await fetch(`${STATS_URL}/api/license/afdian-redeem?out_trade_no=${encodeURIComponent(no)}`);
+      const data = await res.json();
+      if (data?.ok) {
+        setLicInput(data.code ?? "");
+        setAfdianMsg({ ok: true, text: t("領取成功!識別碼已自動帶入下方欄位,請按「啟用」完成設定。") });
+      } else {
+        setAfdianMsg({ ok: false, text: afdianReason(t, data?.reason) });
+      }
+    } catch {
+      setAfdianMsg({ ok: false, text: t("查詢失敗,請確認網路連線後再試一次。") });
+    } finally {
+      setAfdianBusy(false);
+    }
+  };
 
   // 用自己連進來的網址推得 scheme 與 port,組給其他裝置的登入連結。
   let scheme = "http:";
@@ -138,6 +186,89 @@ export function SettingsModal({
           </div>
         </div>
 
+        {/* 贊助者識別碼(先行版)—— 未公布前用 SHOW_SPONSOR_FEATURES 隱藏 */}
+        {SHOW_SPONSOR_FEATURES && lic && (
+          <div className="border-t border-line pt-3">
+            <h3 className="inline-flex items-center gap-1.5 text-sm font-extrabold">
+              <FiStar className="size-4 text-pal" /> {t("贊助者識別碼")}
+            </h3>
+            <p className="mt-1 text-xs text-ink-muted">
+              {t("輸入贊助者識別碼即可搶先體驗先行版功能。一組識別碼只能綁定一台伺服器,這台的機器碼為")}{" "}
+              <span className="font-mono">{lic.machineId}</span>。
+            </p>
+            {lic.hasKey ? (
+              <div className="mt-2 flex flex-col gap-2">
+                <div
+                  className={`inline-flex w-fit items-center gap-1.5 rounded-full border-[1.5px] px-2.5 py-1 text-xs font-bold ${
+                    lic.valid
+                      ? "border-grass/40 bg-grass/10 text-grass"
+                      : "border-sun/50 bg-sun/10 text-sun"
+                  }`}
+                >
+                  {lic.valid ? (
+                    <>
+                      <FiCheck className="size-3.5" />
+                      {t("已啟用")}
+                      {lic.tier ? ` · ${lic.tier}` : ""}
+                      {lic.expiresAt ? ` · ${t("有效至")} ${lic.expiresAt.slice(0, 10)}` : ""}
+                    </>
+                  ) : (
+                    <>{t("無法啟用")}:{licReason(t, lic.reason)}</>
+                  )}
+                </div>
+                <button className={`${btnGhost} inline-flex w-fit items-center gap-1.5`} onClick={clearLicense} disabled={licBusy}>
+                  <FiTrash2 className="size-4" /> {t("移除識別碼")}
+                </button>
+              </div>
+            ) : (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <input
+                  className="min-w-0 flex-1 rounded-lg border-2 border-line bg-card px-3 py-1.5 font-mono text-sm outline-none focus:border-pal"
+                  placeholder="PAL-XXXX-XXXX-XXXX"
+                  value={licInput}
+                  onChange={(e) => setLicInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && void saveLicense()}
+                />
+                <button className={`${btn} inline-flex items-center gap-1.5`} onClick={saveLicense} disabled={licBusy || !licInput.trim()}>
+                  {licBusy ? t("驗證中…") : t("啟用")}
+                </button>
+              </div>
+            )}
+            {/* 愛發電只服務中國用戶(微信/支付寶),只在 UI 切到簡體中文時顯示領碼入口 */}
+            {!lic.hasKey && lang === "zh-CN" && (
+              <div className="mt-3 border-t border-line/60 pt-3">
+                <p className="inline-flex items-center gap-1.5 text-xs font-bold text-ink-muted">
+                  <FiHeart className="size-3.5 text-pal" /> {t("從愛發電領取識別碼")}
+                </p>
+                <p className="mt-1 text-xs text-ink-muted">
+                  {t("在愛發電完成贊助後,把訂單號貼在這裡即可自動換取識別碼。")}
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <input
+                    className={`${inputCls} min-w-0 flex-1 font-mono text-sm`}
+                    placeholder={t("愛發電訂單號")}
+                    value={afdianNo}
+                    onChange={(e) => setAfdianNo(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && void redeemAfdian()}
+                  />
+                  <button
+                    className={`${btnGhost} inline-flex items-center gap-1.5`}
+                    onClick={redeemAfdian}
+                    disabled={afdianBusy || !afdianNo.trim()}
+                  >
+                    {afdianBusy ? t("查詢中…") : t("領取")}
+                  </button>
+                </div>
+                {afdianMsg && (
+                  <p className={`mt-1.5 text-xs font-bold ${afdianMsg.ok ? "text-grass" : "text-berry"}`}>
+                    {afdianMsg.text}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* 外觀主題 */}
         <div className="border-t border-line pt-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -154,6 +285,29 @@ export function SettingsModal({
               <FiSun className="size-4" /> {t("選擇主題")}
             </button>
           </div>
+        </div>
+
+        {/* 右下角貓貓:可整隻關掉(hiddenCards 全域偏好,Mascot 讀同一份) */}
+        <div className="border-t border-line pt-3">
+          <h3 className="text-sm font-extrabold">{t("右下角貓貓")}</h3>
+          <p className="mt-1 text-xs text-ink-muted">
+            {t("首頁右下角打呼的貓貓(作者家的貓),點牠會打開贊助小視窗。")}
+          </p>
+          <label className="mt-2 flex items-center gap-2 text-[13px] font-bold text-ink-muted">
+            <input
+              type="checkbox"
+              className="accent-pal"
+              checked={!hiddenCards.includes("mascot")}
+              onChange={(e) =>
+                setHiddenCards(
+                  e.target.checked
+                    ? hiddenCards.filter((id) => id !== "mascot")
+                    : [...hiddenCards, "mascot"],
+                )
+              }
+            />
+            {t("顯示貓貓")}
+          </label>
         </div>
 
         {/* GUI 自我更新(對接 GitHub Releases) */}
@@ -269,6 +423,7 @@ function SecuritySettings({ client }: { client: AgentClient }) {
           agentHost: s.agentHost.value,
           webOrigins: s.webOrigins.value,
           autoOpenBrowser: s.autoOpenBrowser.value,
+          bootStart: s.bootStart ?? undefined,
         });
       })
       .catch(() => {});
@@ -290,6 +445,7 @@ function SecuritySettings({ client }: { client: AgentClient }) {
       if (!st.agentHost.envLocked) p.agentHost = (form.agentHost ?? "").trim() || "0.0.0.0";
       if (!st.webOrigins.envLocked) p.webOrigins = (form.webOrigins ?? "").trim();
       if (!st.autoOpenBrowser.envLocked) p.autoOpenBrowser = !!form.autoOpenBrowser;
+      if (st.bootStart !== null) p.bootStart = !!form.bootStart;
       await client.saveAgentSettings(p);
       setSaved(true);
     } finally {
@@ -323,6 +479,23 @@ function SecuritySettings({ client }: { client: AgentClient }) {
           <p className="rounded-xl bg-card-soft px-3 py-2 text-xs text-ink-muted">
             {t("改動需重啟 agent 才生效。由環境變數設定的項目以環境變數為準,無法在此修改。")}
           </p>
+
+          {st.bootStart !== null && (
+            <label className="flex cursor-pointer items-start gap-2.5">
+              <input
+                type="checkbox"
+                className="mt-0.5 size-4 accent-pal"
+                checked={!!form.bootStart}
+                onChange={(e) => set({ bootStart: e.target.checked })}
+              />
+              <span className="text-[13px]">
+                <b className="font-bold">{t("開機自動啟動 agent")}</b>
+                <span className="block text-xs text-ink-muted">
+                  {t("登入 Windows 時自動在背景啟動 agent。搭配伺服器「設定」分頁的「自動啟動」,主機開機即自動開服。儲存後立即生效。")}
+                </span>
+              </span>
+            </label>
+          )}
 
           <label className={`flex items-start gap-2.5 ${st.autoOpenBrowser.envLocked ? "opacity-50" : "cursor-pointer"}`}>
             <input
@@ -444,6 +617,43 @@ function SecuritySettings({ client }: { client: AgentClient }) {
       )}
     </div>
   );
+}
+
+function licReason(t: (s: string) => string, reason: string | null): string {
+  switch (reason) {
+    case "invalid":
+      return t("識別碼不存在");
+    case "bound-to-another":
+      return t("此識別碼已綁定另一台伺服器");
+    case "expired":
+      return t("識別碼已到期");
+    case "unreachable":
+      return t("連不上驗證伺服器,請確認這台伺服器主機能連上網際網路");
+    case "offline":
+      return t("暫時連不上驗證伺服器(離線寬限期已過)");
+    default:
+      return t("驗證失敗");
+  }
+}
+
+/** 把愛發電查碼 API 回的失敗原因碼轉成友善說明。 */
+function afdianReason(t: (s: string) => string, reason: string | null | undefined): string {
+  switch (reason) {
+    case "not-configured":
+      return t("愛發電領碼功能尚未開放,請改用其他方式取得識別碼。");
+    case "order-not-found":
+      return t("查無此訂單,請確認訂單號是否輸入正確。");
+    case "order-not-paid":
+      return t("這筆訂單尚未完成付款。");
+    case "invalid":
+      return t("訂單號格式不正確。");
+    case "plan-not-eligible":
+      return t("這筆訂單不是可解鎖的贊助方案。");
+    case "rate-limited":
+      return t("查詢過於頻繁,請稍後再試。");
+    default:
+      return t("查詢失敗,請稍後再試。");
+  }
 }
 
 function Copyable({

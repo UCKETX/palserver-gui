@@ -23,11 +23,17 @@ import { InstanceStore } from "./store.js";
 import { PresenceTracker } from "./presence.js";
 import { BackupScheduler } from "./backup-scheduler.js";
 import { RestartSupervisor } from "./supervisor.js";
+import { PublicMapPublisher } from "./public-map.js";
+import { WebhooksService } from "./webhooks.js";
+import { LogEventTracker } from "./log-event-tracker.js";
+import { BossEventTracker } from "./boss-event-tracker.js";
 import { fetchLatest } from "./version.js";
 import { isInstalling, nativeDriver } from "./native.js";
 import { dockerDriver } from "./docker.js";
 import { k8sDriver } from "./k8s.js";
 import { registerRoutes } from "./routes.js";
+import { startAutoScanLoop } from "./save-tools.js";
+import { activeWorldGuidAsync } from "./saves.js";
 import { announceBoot, trackPlayers } from "./telemetry.js";
 import { cleanupOldBinaries, startUpdateChecker, type UpdateOps } from "./self-update.js";
 import { startTray } from "./tray.js";
@@ -147,6 +153,9 @@ app.addHook("onRequest", async (req, reply) => {
 // Warm the Steam version cache so the first instance listing already knows
 // whether an update is available (it only ever reads the cache).
 void fetchLatest().catch(() => {});
+// 之後每 6 小時重新抓一次最新版本 —— 讓 supervisor 能在新版釋出時偵測到 false→true
+// 並發 server.update_available webhook(否則快取只停在啟動當下的狀態)。
+setInterval(() => void fetchLatest(true).catch(() => {}), 6 * 60 * 60_000).unref();
 
 const presence = new PresenceTracker(store);
 presence.start();
@@ -166,6 +175,45 @@ const supervisor = new RestartSupervisor(store, (rec) =>
 );
 supervisor.start();
 
+// 公開地圖:服主開啟後,定期把過濾好的快照推到雲端 Worker(見 public-map.ts)。
+const publicMap = new PublicMapPublisher(
+  store,
+  (rec) => (rec.backend === "native" ? nativeDriver : rec.backend === "k8s" ? k8sDriver : dockerDriver),
+  presence,
+);
+publicMap.start();
+
+// Webhook / Discord 機器人整合(贊助限定):dispatcher 訂閱事件匯流排,對已啟用的
+// webhook 簽章推送 + 重試。log-event-tracker 只在「已授權且有訂閱 player.* log 事件」
+// 的執行中實例才起 follower(wantsLogEvents),避免無訂閱時空轉。
+const webhooks = new WebhooksService(store, AGENT_VERSION);
+webhooks.start();
+
+const logEventTracker = new LogEventTracker(
+  store,
+  (rec) => (rec.backend === "native" ? nativeDriver : rec.backend === "k8s" ? k8sDriver : dockerDriver),
+  (id) => webhooks.wantsLogEvents(id),
+);
+logEventTracker.start();
+
+const bossEventTracker = new BossEventTracker(
+  store,
+  (rec) => (rec.backend === "native" ? nativeDriver : rec.backend === "k8s" ? k8sDriver : dockerDriver),
+  (id) => webhooks.wantsBossEvents(id),
+);
+bossEventTracker.start();
+
+// 每小時自動掃描存檔(排行榜/週報資料;每實例可在排行榜分頁開關)
+startAutoScanLoop({
+  list: () => store.list(),
+  ctxOf: (rec) => ({ instanceDir: store.instanceDir(rec.id) }),
+  statusOf: async (rec) => {
+    const driver = rec.backend === "native" ? nativeDriver : rec.backend === "k8s" ? k8sDriver : dockerDriver;
+    return (await driver.status(rec, { instanceDir: store.instanceDir(rec.id) })).status;
+  },
+  activeWorldGuid: (rec, ctx) => activeWorldGuidAsync(rec, ctx),
+});
+
 // 自我更新會整個換掉執行檔並重啟行程。遊戲伺服器是 detached 生成的、不受影響,
 // 但 DepotDownloader 是 agent 的子行程 —— 安裝到一半重啟會把它砍掉。
 const updateOps: UpdateOps = {
@@ -177,11 +225,32 @@ const updateOps: UpdateOps = {
   log: (msg) => app.log.info(`[update] ${msg}`),
 };
 
-registerRoutes(app, store, presence, scheduler, supervisor, auth, updateOps);
+registerRoutes(app, store, presence, scheduler, supervisor, publicMap, webhooks, auth, updateOps);
 
 await app.listen({ host: HOST, port: PORT });
 
 startUpdateChecker(updateOps);
+
+// 標記了「自動啟動」的伺服器:agent 一起來就開服(搭配登入自啟 = 主機開機即開服)。
+// 逐台嘗試,單台失敗(埠占用/檔案問題)寫日誌但不影響其他台。
+void (async () => {
+  for (const rec of store.list()) {
+    if (!rec.autoStart) continue;
+    const driver = rec.backend === "native" ? nativeDriver : rec.backend === "k8s" ? k8sDriver : dockerDriver;
+    try {
+      const { status } = await driver.status(rec, { instanceDir: store.instanceDir(rec.id) });
+      if (status === "running" || status === "restarting" || status === "installing") continue;
+      app.log.info(`自動啟動伺服器:${rec.name}`);
+      await driver.start(rec, { instanceDir: store.instanceDir(rec.id) });
+    } catch (err) {
+      app.log.warn(`自動啟動 ${rec.name} 失敗:${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+})();
+
+// 贊助者識別碼:啟動時驗證一次,之後定期重驗(內部有 12h 節流;訂閱到期/取消會在此收斂)。
+void refreshLicense(true).catch(() => {});
+setInterval(() => void refreshLicense().catch(() => {}), 6 * 60 * 60 * 1000).unref();
 
 app.log.info(`palserver-agent v${AGENT_VERSION} · data dir: ${DATA_DIR}`);
 
@@ -192,7 +261,12 @@ if (willOpen) openBrowser(`${scheme}://localhost:${PORT}`);
 
 // 背景那份(主控台已隱藏)顯示系統匣圖示,作為「引擎運作中」的提示與控制入口。
 if (process.env.PALSERVER_TRAY_CHILD) {
-  const tray = startTray({ url: `${scheme}://localhost:${PORT}`, code: pairingCode });
+  const tray = startTray({
+    url: `${scheme}://localhost:${PORT}`,
+    code: pairingCode,
+    // 與網頁 favicon 同款(web 靜態檔的 logo.png);純 API 模式(無前端)就用預設圖示。
+    iconPng: webDist ? path.join(webDist, "logo.png") : null,
+  });
   if (tray) {
     const stopTray = () => {
       try {
@@ -250,6 +324,7 @@ function openBrowser(url: string): void {
 function resolveWebDist(): string | null {
   const candidates: string[] = [];
   if (process.env.PALSERVER_WEB_DIR) candidates.push(process.env.PALSERVER_WEB_DIR);
+  recoverStrandedWeb(path.dirname(process.execPath));
   candidates.push(path.join(path.dirname(process.execPath), "web"));
   try {
     candidates.push(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist"));
@@ -260,6 +335,26 @@ function resolveWebDist(): string | null {
     if (c && fs.existsSync(path.join(c, "index.html"))) return c;
   }
   return null;
+}
+
+/** 自我更新換檔失敗的自癒:web/ 缺失但旁邊留著 web.old-<ts>(換檔中途失敗的
+ *  殘留)時,把最新的一份改名回 web/,避免重啟後前端永遠 404。 */
+function recoverStrandedWeb(dir: string): void {
+  try {
+    const web = path.join(dir, "web");
+    if (fs.existsSync(path.join(web, "index.html"))) return;
+    const stranded = fs
+      .readdirSync(dir)
+      .filter((n) => /^web\.old-\d+$/.test(n))
+      .sort()
+      .at(-1);
+    if (stranded && fs.existsSync(path.join(dir, stranded, "index.html"))) {
+      fs.rmSync(web, { recursive: true, force: true });
+      fs.renameSync(path.join(dir, stranded), web);
+    }
+  } catch {
+    /* 自癒失敗就維持原狀(API-only) */
+  }
 }
 
 /** 收集本機各網卡的 IPv4,標出可能是 VPN(Tailscale / Radmin / Hamachi)的位址。 */

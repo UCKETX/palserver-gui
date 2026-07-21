@@ -10,6 +10,7 @@ import type { InstanceRecord } from "./store.js";
 import { renderPalWorldSettingsIni, diffIniAgainstSnapshot } from "./settings-ini.js";
 import { mergeEnginePatch } from "./engine-ini-merge.js";
 import { rest } from "./restapi.js";
+import { emitAgentEvent } from "./events.js";
 import { DATA_DIR } from "./env.js";
 
 const execFileP = promisify(execFile);
@@ -707,6 +708,61 @@ async function getNativeStatus(
   return { status: "created", runtimeId: null };
 }
 
+// ── 精準的伺服器生命週期 webhook 事件(取代 supervisor 30s 輪詢的粗略判斷)──
+// starting:spawn 當下發。running:啟動後探測遊戲 REST /info,第一次通=真的可連才發。
+// exited/crash:child exit 事件即時發,靠 expectedStops 分辨「我們要求的停止」vs 崩潰。
+// agent 重啟後 detached 存活的行程沒有 child handle → 由 supervisor 輪詢兜底(見 supervisor.ts)。
+type ServerChild = ReturnType<typeof spawn>;
+const serverChildren = new Map<string, ServerChild>();
+const expectedStops = new Set<string>();
+const readyProbes = new Map<string, NodeJS.Timeout>();
+const READY_PROBE_MS = 3_000;
+const READY_PROBE_MAX = 40; // 逾此(~2 分鐘)即使 REST 未通也兜底發一次 running
+
+/** child 結束時判定「正常停止」vs「崩潰」:被我們要求停 或 exit code 0 = 正常;被 signal 砍
+ *  或 exit code 非 0 = 崩潰。純函式,方便測試。 */
+export function classifyServerExit(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  expected: boolean,
+): "exited" | "crash" {
+  if (expected) return "exited";
+  if (signal) return "crash";
+  return code === 0 ? "exited" : "crash";
+}
+
+/** 啟動後每 3s 探測遊戲 REST /info;第一次成功 = 遊戲真的可連 → 發 server.running。
+ *  逾時(REST/RCON 未開)兜底發一次。行程中途結束由 exit handler 取消本探測。 */
+function startReadyProbe(rec: InstanceRecord): void {
+  const existing = readyProbes.get(rec.id);
+  if (existing) clearInterval(existing);
+  let attempts = 0;
+  const timer = setInterval(() => {
+    void (async () => {
+      attempts += 1;
+      let version: string | undefined;
+      let reachable = false;
+      try {
+        const info = await rest.info(rec);
+        reachable = !!info;
+        version = info?.version;
+      } catch {
+        reachable = false;
+      }
+      if (!readyProbes.has(rec.id)) return; // 已被 exit handler 取消
+      if (reachable || attempts >= READY_PROBE_MAX) {
+        clearInterval(timer);
+        readyProbes.delete(rec.id);
+        if (serverChildren.has(rec.id)) {
+          emitAgentEvent("server.running", rec.id, version ? { version } : {});
+        }
+      }
+    })();
+  }, READY_PROBE_MS);
+  timer.unref();
+  readyProbes.set(rec.id, timer);
+}
+
 async function spawnServer(rec: InstanceRecord, ctx: DriverContext): Promise<void> {
   writeIni(rec, ctx);
   const root = serverRoot(rec, ctx);
@@ -751,6 +807,125 @@ async function spawnServer(rec: InstanceRecord, ctx: DriverContext): Promise<voi
   // 記下 PID + 建立時間當身分指紋,之後 isAlive/停止前都靠它辨認,避免 PID 重用誤殺。
   const id = await processIdentity(child.pid).catch(() => null);
   writePidRecord(ctx, { pid: child.pid, startedAt: id?.startedAt ?? null });
+
+  // 精準生命週期:spawn = starting;掛 exit 事件;啟動 REST readiness 探測。
+  emitAgentEvent("server.starting", rec.id, {});
+  serverChildren.set(rec.id, child);
+  child.on("exit", (code, signal) => {
+    if (serverChildren.get(rec.id) === child) serverChildren.delete(rec.id);
+    const probe = readyProbes.get(rec.id);
+    if (probe) {
+      clearInterval(probe);
+      readyProbes.delete(rec.id);
+    }
+    if (expectedStops.delete(rec.id)) {
+      // 我們主動要求的停止(且已 sweep 殘留行程)→ 直接發 exited。
+      emitAgentEvent("server.exited", rec.id, { code: code ?? undefined });
+    } else {
+      // 非預期退出:child exit 未必代表伺服器真的掛了(Windows 上 shipping 可能 spawn 真正的
+      // 伺服器子行程後自己退出、或啟動途中 re-exec 換 PID)。先確認再發,避免誤報「已停止」。
+      void verifyThenEmitExit(rec, ctx, code, signal);
+    }
+  });
+  startReadyProbe(rec);
+}
+
+/** child exit 後,以 getNativeStatus(GUI 也用它,是可靠來源)確認伺服器是否真的掛了才發 exited/crash;
+ *  仍在跑(re-exec/子行程接手)就當誤報、不發。等幾秒讓過渡狀態落定。 */
+async function verifyThenEmitExit(
+  rec: InstanceRecord,
+  ctx: DriverContext,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    let status: InstanceStatus;
+    try {
+      status = (await getNativeStatus(rec, ctx)).status;
+    } catch {
+      continue;
+    }
+    if (status === "running") return; // 其實還活著 → 誤報,不發
+    // 非 running 且非過渡態(starting/restarting/installing)→ 確定掛了,跳出去發。
+    if (status !== "starting" && status !== "restarting" && status !== "installing") break;
+  }
+  const kind = classifyServerExit(code, signal, false);
+  emitAgentEvent(kind === "crash" ? "server.crash" : "server.exited", rec.id, {
+    code: code ?? undefined,
+    ...(kind === "crash" && signal ? { detail: `signal ${signal}` } : {}),
+  });
+}
+
+/** 每實例的 CPU 取樣歷史(instanceDir → 上一筆);行程結束就清掉。 */
+interface CpuSample {
+  /** 全行程樹的累計 CPU 時間(毫秒;pidusage 的 ctime 加總) */
+  ctimeMs: number;
+  /** 取樣時刻(Date.now() 毫秒) */
+  at: number;
+  stats: InstanceStats;
+}
+const cpuSamples = new Map<string, CpuSample>();
+
+/** CPU%(單核基準,行程樹加總可破百;export 供單元測試):
+ *  有上一筆且 ctime 沒回退(行程沒換)→ Δctime/Δt 毫秒精度差分;
+ *  首次取樣或行程重啟(ctime 回退)/歷史過舊 → 退回「自開機以來平均」。 */
+export function computeCpuPercent(
+  prev: { ctimeMs: number; at: number } | null,
+  ctimeMs: number,
+  at: number,
+  mainElapsedMs: number | null,
+): number {
+  const usable =
+    prev !== null && ctimeMs >= prev.ctimeMs && at > prev.at && at - prev.at < 10 * 60_000;
+  const ratio = usable
+    ? (ctimeMs - prev.ctimeMs) / (at - prev.at)
+    : mainElapsedMs && mainElapsedMs > 0
+      ? ctimeMs / mainElapsedMs
+      : 0;
+  return Math.round(ratio * 1000) / 10; // 百分比,一位小數
+}
+
+/** 建立時選了「強化」(flavor=modded)的實例:伺服器檔案就緒後、啟動前,
+ *  自動安裝 UE4SS + PalDefender(等同模組分頁的一鍵安裝)。已裝過就跳過;
+ *  失敗不擋啟動(伺服器照樣以原生開起來),原因寫進日誌讓使用者到模組分頁重試。
+ *  動態 import 避免 native ↔ mods 循環相依。 */
+async function autoEnhance(
+  rec: InstanceRecord,
+  ctx: DriverContext,
+  log: (line: string) => void,
+): Promise<void> {
+  if (rec.flavor !== "modded" || !IS_WIN) return;
+  const mods = await import("./mods.js");
+  for (const component of ["ue4ss", "paldefender"] as const) {
+    try {
+      const status = await mods.getModsStatus(rec, ctx);
+      if (!status.supported) {
+        log(`[palserver] 強化模組跳過:${status.reason}`);
+        return;
+      }
+      if (status[component].installed) continue;
+      log(`[palserver] 強化模式:安裝 ${component}…`);
+      const { version } = await mods.installComponent(rec, ctx, component);
+      log(`[palserver] ${component} ${version} 安裝完成`);
+      if (component === "paldefender") {
+        // 強化版預設開啟 PalDefender REST API 並先鋪好 GUI 權杖,首次開機即生效
+        try {
+          const pdRest = await import("./paldefender-rest.js");
+          pdRest.preprovisionPdRest(rec, ctx);
+          log("[palserver] PalDefender REST API 已預設啟用(埠 17993),GUI 權杖已就緒");
+        } catch (err) {
+          log(`[palserver] PalDefender REST 預設定失敗(可到 PalDefender 分頁手動開啟):${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    } catch (err) {
+      log(
+        `[palserver] ${component} 自動安裝失敗(伺服器仍以原生模式啟動,可到「模組」分頁重試):${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
 }
 
 export const nativeDriver: ServerDriver = {
@@ -758,7 +933,9 @@ export const nativeDriver: ServerDriver = {
 
   async start(rec, ctx) {
     const current = await getNativeStatus(rec, ctx);
-    if (current.status === "running" || current.status === "installing") return;
+    // No-op guard: the caller may believe the old process is gone while it is
+    // still exiting. Return false so restarts don't get reported as done.
+    if (current.status === "running" || current.status === "installing") return false;
 
     fs.mkdirSync(ctx.instanceDir, { recursive: true });
     const appendLog = (line: string) => fs.appendFileSync(logFile(ctx), line + "\n");
@@ -767,9 +944,10 @@ export const nativeDriver: ServerDriver = {
     if (alreadyInstalled) {
       // Fast path: spawn synchronously so errors surface in the response.
       await ensureInstalled(rec, ctx, appendLog); // validates adopted dirs
+      await autoEnhance(rec, ctx, appendLog);
       await spawnServer(rec, ctx);
       installErrors.delete(rec.id); // 成功啟動,清掉上次的安裝失敗
-      return;
+      return true;
     }
 
     // Slow path: multi-GB download. Run in the background — the instance
@@ -789,6 +967,7 @@ export const nativeDriver: ServerDriver = {
     void (async () => {
       try {
         await ensureInstalled(rec, ctx, installLog, (pct) => installProgress.set(rec.id, pct));
+        await autoEnhance(rec, ctx, installLog);
         await spawnServer(rec, ctx);
       } catch (err) {
         const info = classifyInstallError(err);
@@ -809,6 +988,7 @@ export const nativeDriver: ServerDriver = {
         installProgress.delete(rec.id);
       }
     })();
+    return true;
   },
 
   async stop(rec, ctx) {
@@ -829,6 +1009,9 @@ export const nativeDriver: ServerDriver = {
       return;
     }
 
+    // 這是我們主動要求的停止:標記一下,讓 child exit handler 把退出判為正常(exited)而非崩潰。
+    expectedStops.add(rec.id);
+
     if (await requestGracefulShutdown(rec)) {
       // 等它自己收 —— 這期間用便宜的 isAlive 即可:行程還活著就不可能被重用。
       for (let i = 0; i < 20 && isAlive(pid); i++) {
@@ -841,10 +1024,37 @@ export const nativeDriver: ServerDriver = {
       const record = readPidRecord(ctx);
       const stillOurs = !!id && (record?.startedAt == null || id.startedAt === record.startedAt);
       const isPalServer = !IS_WIN || /palserver/i.test(id?.image ?? "");
-      if (stillOurs && isPalServer) await killTree(pid);
+      if (stillOurs && isPalServer) {
+        await killTree(pid);
+        // killTree 在 POSIX 只送 SIGTERM、不等退出 —— 必須等程序死透才能清
+        // pid 檔,否則下一個 start() 的「還在跑就 no-op」防護會被繞過,
+        // 疊出搶同一組埠的雙程序。逾時就升級 SIGKILL 再等一輪。
+        for (let i = 0; i < 20 && isAlive(pid); i++) {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        if (!IS_WIN && isAlive(pid)) {
+          try {
+            process.kill(-pid, "SIGKILL");
+          } catch {
+            try {
+              process.kill(pid, "SIGKILL");
+            } catch {
+              /* already gone */
+            }
+          }
+          for (let i = 0; i < 10 && isAlive(pid); i++) {
+            await new Promise((r) => setTimeout(r, 500));
+          }
+        }
+      }
     }
     fs.rmSync(pidFile(ctx), { force: true });
     await sweepLeftovers();
+    // agent 重啟後 detached 存活的行程沒有 child handle → exit event 不會發,這裡兜底補一次
+    // server.exited;有 handle 的正常情況由 exit handler 發(此條件為 false,不會重複)。
+    if (!serverChildren.has(rec.id) && expectedStops.delete(rec.id)) {
+      emitAgentEvent("server.exited", rec.id, {});
+    }
   },
 
   async remove(rec, ctx) {
@@ -861,7 +1071,15 @@ export const nativeDriver: ServerDriver = {
   async stats(_rec, ctx) {
     // 用 checkAlive 而非裸 pid:PID 被別台重用時別回報鄰居的 CPU/記憶體。
     const live = await checkAlive(ctx);
-    if (!live.alive || live.pid === null) return null;
+    if (!live.alive || live.pid === null) {
+      cpuSamples.delete(ctx.instanceDir);
+      return null;
+    }
+    // 多個消費者(首頁進階顯示/效能分析頁/supervisor 記憶體檢查)各自輪詢:
+    // 1.5 秒內重複查詢直接回上一筆,取樣間隔不會被並行輪詢切碎。
+    const prev = cpuSamples.get(ctx.instanceDir);
+    if (prev && Date.now() - prev.at < 1500) return prev.stats;
+
     const pid = live.pid;
     // PalServer.exe is a thin launcher; the actual server is a child process
     // (PalServer-Win64-Shipping-Cmd.exe), so aggregate the whole tree.
@@ -871,17 +1089,28 @@ export const nativeDriver: ServerDriver = {
       pids.map((p) => pidusage(p).catch(() => null)),
     );
     const alive = usages.filter((u) => u !== null);
-    if (alive.length === 0) return null;
+    if (alive.length === 0) {
+      cpuSamples.delete(ctx.instanceDir);
+      return null;
+    }
     // 主行程(pids[0])的 elapsed 就是伺服器運行時間;pidusage 以毫秒回報。
     const mainElapsed = usages[0]?.elapsed;
-    return {
-      cpuPercent: alive.reduce((sum, u) => sum + u.cpu, 0),
+    // CPU% 不用 pidusage 的 cpu 欄位:它在 Windows 以 os.uptime()(整秒)算間隔,
+    // 短輪詢誤差極大(實測 3 秒內 78%→36%→0%),且其 per-pid 歷史會被多個輪詢互踩。
+    // 改用 ctime(累計 CPU 毫秒,與取樣間隔無關)配 Date.now() 毫秒精度自算差分。
+    const ctimeMs = alive.reduce((sum, u) => sum + u.ctime, 0);
+    const at = Date.now();
+    const cpuPercent = computeCpuPercent(prev ?? null, ctimeMs, at, mainElapsed ?? null);
+    const stats = {
+      cpuPercent,
       cpuCores: os.cpus().length,
       memoryBytes: alive.reduce((sum, u) => sum + u.memory, 0),
       memoryLimitBytes: os.totalmem(),
       processCount: alive.length,
       uptimeSeconds: mainElapsed ? Math.round(mainElapsed / 1000) : undefined,
     } satisfies InstanceStats;
+    cpuSamples.set(ctx.instanceDir, { ctimeMs, at, stats });
+    return stats;
   },
 
   logSources(rec, ctx) {
@@ -893,10 +1122,10 @@ export const nativeDriver: ServerDriver = {
     return [{ id: "game" as const, label: "遊戲(原生)", available: fs.existsSync(gameLogFile(ctx)) }];
   },
 
-  async streamLogs(rec, ctx, onLine, _onEnd, source = "agent") {
+  async streamLogs(rec, ctx, onLine, _onEnd, source = "agent", replay = 200) {
     // Files may not exist yet (first boot) — the followers attach when they
     // appear, so the socket stays open instead of closing early.
-    if (source === "game") return followFile(gameLogFile(ctx), onLine, 200);
+    if (source === "game") return followFile(gameLogFile(ctx), onLine, replay);
     if (source === "paldefender") {
       const dir = palDefenderLogDir(rec, ctx);
       if (!dir) {
@@ -905,10 +1134,10 @@ export const nativeDriver: ServerDriver = {
       }
       // PalDefender writes a new, timestamped file per run; follow the newest
       // and switch over when it rotates.
-      return followNewestInDir(dir, onLine);
+      return followNewestInDir(dir, onLine, replay);
     }
     // "agent": our own capture — install progress and server stdout.
-    return followFile(logFile(ctx), onLine);
+    return followFile(logFile(ctx), onLine, replay);
   },
 };
 
@@ -939,11 +1168,18 @@ function palDefenderLogDir(rec: InstanceRecord, ctx: DriverContext): string | nu
 
 /** Last few non-empty lines of PalDefender's newest log — a hint for why it
  * aborted startup, surfaced in the "startup failure" restart event. Empty when
- * there's no log dir/file. */
-export function newestPalDefenderLogLines(rec: InstanceRecord, ctx: DriverContext, n = 3): string[] {
+ * there's no log dir/file. Pass `sinceMs` to only consider files written after
+ * that time — PalDefender writes one file per run, so without the filter the
+ * newest file may be the *previous* process's log and mislead diagnosis. */
+export function newestPalDefenderLogLines(
+  rec: InstanceRecord,
+  ctx: DriverContext,
+  n = 3,
+  sinceMs?: number,
+): string[] {
   const dir = palDefenderLogDir(rec, ctx);
   if (!dir) return [];
-  const file = newestFile(dir);
+  const file = newestFile(dir, sinceMs);
   if (!file) return [];
   try {
     return fs.readFileSync(file, "utf8").split(/\r?\n/).filter((l) => l.trim()).slice(-n);
@@ -952,7 +1188,7 @@ export function newestPalDefenderLogLines(rec: InstanceRecord, ctx: DriverContex
   }
 }
 
-function newestFile(dir: string): string | null {
+function newestFile(dir: string, sinceMs?: number): string | null {
   try {
     const entries = fs
       .readdirSync(dir, { withFileTypes: true })
@@ -961,6 +1197,7 @@ function newestFile(dir: string): string | null {
         const full = path.join(dir, e.name);
         return { full, mtime: fs.statSync(full).mtimeMs };
       })
+      .filter((e) => sinceMs === undefined || e.mtime >= sinceMs)
       .sort((a, b) => b.mtime - a.mtime);
     return entries[0]?.full ?? null;
   } catch {
@@ -969,7 +1206,7 @@ function newestFile(dir: string): string | null {
 }
 
 /** Follow whichever file in `dir` is newest, re-attaching when it rotates. */
-function followNewestInDir(dir: string, onLine: (line: string) => void): () => void {
+function followNewestInDir(dir: string, onLine: (line: string) => void, replay = 200): () => void {
   let current: string | null = null;
   let stopCurrent: (() => void) | null = null;
   const timer = setInterval(() => {
@@ -977,14 +1214,17 @@ function followNewestInDir(dir: string, onLine: (line: string) => void): () => v
     if (newest && newest !== current) {
       stopCurrent?.();
       current = newest;
+      // A rotation mid-run means a new server process — replay a little so the
+      // consumer doesn't miss lines written between polls (UI wants context;
+      // replay=0 consumers still get only genuinely new lines going forward).
       onLine(`— 跟隨日誌檔:${path.basename(newest)} —`);
-      stopCurrent = followFile(newest, onLine, 200);
+      stopCurrent = followFile(newest, onLine, replay);
     }
   }, 1000);
   const initial = newestFile(dir);
   if (initial) {
     current = initial;
-    stopCurrent = followFile(initial, onLine, 200);
+    stopCurrent = followFile(initial, onLine, replay);
   }
   return () => {
     clearInterval(timer);
@@ -995,6 +1235,14 @@ function followNewestInDir(dir: string, onLine: (line: string) => void): () => v
 /** Tail -f a file: replay the last `replay` lines once it exists, then
  * follow appended bytes. Handles truncation/rotation (position reset) and
  * files that appear later. Returns a cleanup fn. */
+/** attach 時要補送哪些既有行:replay>0 給最後 replay 行(UI 補脈絡用),replay=0 完全不補。
+ *  ⚠️ 陷阱:`arr.slice(-0)` === `arr.slice(0)` === 整個陣列(因 `-0 === 0`);replay=0 必須明確回 []。
+ *  之前這裡直接 `slice(-replay)`,replay=0 的 log-event-tracker 一 attach 就把整個當下 log 全部
+ *  當新事件重發(重啟時舊捕捉/死亡誤報的根因)。純函式,方便回歸測試。 */
+export function linesToReplay(existing: string[], replay: number): string[] {
+  return replay > 0 ? existing.slice(-replay) : [];
+}
+
 function followFile(file: string, onLine: (line: string) => void, replay = 200): () => void {
   let attached = false;
   let position = 0;
@@ -1008,8 +1256,10 @@ function followFile(file: string, onLine: (line: string) => void, replay = 200):
       return;
     }
     if (!attached) {
-      const existing = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
-      for (const line of existing.slice(-replay)) onLine(line);
+      // replay=0(如 log-event-tracker)只跟新行,連讀檔都跳過、直接位移到檔尾;
+      // replay>0(如 UI log 視窗)才讀出既有行、補送最後 replay 行。
+      const existing = replay > 0 ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
+      for (const line of linesToReplay(existing, replay)) onLine(line);
       position = size;
       buffer = "";
       attached = true;

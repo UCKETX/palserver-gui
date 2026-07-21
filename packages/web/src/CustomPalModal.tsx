@@ -75,6 +75,8 @@ export function CustomPalModal({
   const [userId, setUserId] = useState(initialUserId ?? "");
   const [eggId, setEggId] = useState("");
   const [palId, setPalId] = useState("");
+  // BOSS(頭目)變體:送出時給 palId 加 BOSS_ 前綴(僅 pal 模式;蛋孵 BOSS 行為未驗證,不開放)
+  const [boss, setBoss] = useState(false);
   const [nickname, setNickname] = useState("");
   const [gender, setGender] = useState<"" | "None" | "Male" | "Female">("");
   const [level, setLevel] = useState("");
@@ -123,7 +125,10 @@ export function CustomPalModal({
     setResult(null);
     const input: CustomPalInput = {
       mode,
-      palId: palId.trim(),
+      palId:
+        boss && mode === "pal" && !palId.trim().startsWith("BOSS_")
+          ? `BOSS_${palId.trim()}`
+          : palId.trim(),
       userId: userId.trim(),
       ...(mode === "egg" ? { eggId: eggId.trim() } : {}),
       ...(nickname.trim() ? { nickname: nickname.trim() } : {}),
@@ -237,6 +242,17 @@ export function CustomPalModal({
                 <input className={inputCls} value={palId} placeholder="Anubis" onChange={(e) => setPalId(e.target.value)} />
               )}
             </label>
+            {mode === "pal" && (
+              <label className="flex w-fit cursor-pointer items-center gap-1.5 text-xs font-bold text-ink-muted">
+                <input
+                  type="checkbox"
+                  className="size-4 accent-pal"
+                  checked={boss}
+                  onChange={(e) => setBoss(e.target.checked)}
+                />
+                {t("BOSS(頭目)版本")}
+              </label>
+            )}
           </div>
 
           <div className="grid gap-2 sm:grid-cols-4">

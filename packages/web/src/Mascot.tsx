@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { FiX, FiExternalLink, FiHeart, FiInstagram, FiMessageCircle } from "react-icons/fi";
 import { usePromoConfig } from "./promoConfig";
+import { useHiddenCards } from "./tabPrefs";
 import { t, useI18n } from "./i18n";
 import { card, btnSponsor, btnGhost } from "./ui";
 
@@ -18,6 +19,9 @@ export function Mascot() {
   useI18n();
   const [seen, setSeen] = useState(() => localStorage.getItem(SEEN_KEY) === "1");
   const [open, setOpen] = useState(false);
+  // 設定 → 「右下角貓貓」可整隻關掉(全域偏好,與卡片隱藏共用同一份清單)。
+  const [hiddenCards] = useHiddenCards();
+  if (hiddenCards.includes("mascot")) return null;
 
   const onClick = () => {
     if (!seen) {
@@ -54,7 +58,7 @@ export function Mascot() {
 }
 
 function SponsorModal({ onClose }: { onClose: () => void }) {
-  useI18n();
+  const { lang } = useI18n();
   const { company } = usePromoConfig();
   return (
     <div
@@ -77,7 +81,7 @@ function SponsorModal({ onClose }: { onClose: () => void }) {
           {t("嗨嗨~ 我是")} <b>Dalufish</b>{t(", palserver GUI 就是我做的!這隻工具是免費的, 如果它幫上你的忙, 睡搞搞的貓貓想討一點罐罐 —— 追蹤我們、或小額贊助都是超大的鼓勵, 讓我們能繼續把它做得更好。")}
         </p>
         <div className="mt-4 grid grid-cols-2 gap-2">
-          <a className={`${btnSponsor} inline-flex items-center justify-center gap-1.5`} href={company.sponsor} target="_blank" rel="noreferrer">
+          <a className={`${btnSponsor} inline-flex items-center justify-center gap-1.5`} href={lang === "zh-CN" && company.afdian ? company.afdian : company.sponsor} target="_blank" rel="noreferrer">
             <FiHeart className="size-4" /> {t("贊助我們")}
           </a>
           <a className={`${btnGhost} inline-flex items-center justify-center gap-1.5`} href={company.instagram} target="_blank" rel="noreferrer">

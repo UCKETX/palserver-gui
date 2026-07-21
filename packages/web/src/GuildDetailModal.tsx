@@ -4,8 +4,8 @@ import { GiBookshelf } from "react-icons/gi";
 import { savToMap, type SaveGuild } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { useGameData, displayName, findCharacter, itemIconUrl, type GameData } from "./gameData";
-import { t, useI18n } from "./i18n";
-import { DetailsToggle, Overlay, btnGhost, card, errorCls, useDetailsPref } from "./ui";
+import { localizeBaseName, t, useI18n } from "./i18n";
+import { DetailsToggle, Overlay, SponsorHint, btnGhost, card, errorCls, useDetailsPref } from "./ui";
 
 /**
  * 公會詳情彈窗(存檔快照驅動)— 與 PlayerDetailModal 同款 UX,含「從存檔刷新」。
@@ -182,7 +182,7 @@ export function GuildDetailModal({
                 return (
                   <div key={b.id} className="rounded-cute border-2 border-line p-2.5">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[13px] font-bold">{b.name || t("據點 {n}", { n: i + 1 })}</span>
+                      <span className="text-[13px] font-bold">{localizeBaseName(b.name, i)}</span>
                       <span className="font-mono text-xs text-ink-muted">
                         ({Math.round(m.x)}, {Math.round(m.y)})
                       </span>

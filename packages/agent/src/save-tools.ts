@@ -1,14 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { promisify } from "node:util";
 import type {
+  AutoScanSetting,
   SaveGuild,
   SaveHealthReport,
   SaveHealthStatus,
   SaveHealthPhase,
+  SaveBreedingSnapshot,
   SavePlayerProfile,
   SavePlayersSnapshot,
   SavePlayersSummary,
@@ -16,11 +19,16 @@ import type {
   SaveScanPlayerStat,
   SaveScanTopPal,
 } from "@palserver/shared";
+import { DEFAULT_AUTO_SCAN, topPalScore } from "@palserver/shared";
 import { AGENT_VERSION, DATA_DIR, GITHUB_REPO } from "./env.js";
 import type { InstanceRecord } from "./store.js";
 import type { DriverContext } from "./driver.js";
 import { dirSize, flushWorld, worldDirOf } from "./saves.js";
 import { analyzeLevelJsonFile, collectContainerContents, normGuid, type InventoryKind } from "./save-health.js";
+import { tarDirInPod } from "./k8s-files.js";
+import { ContainerHealthRunner } from "./runtime-health.js";
+
+const execFileP = promisify(execFile);
 
 /**
  * 存檔健檢(save-slim Stage 1,唯讀)— 外部工具管理 + 任務編排。
@@ -44,11 +52,14 @@ const CONVERT_TIMEOUT_MS = 30 * 60_000;
 const REPORTS_FILE = "save-health.json";
 const SNAPSHOTS_FILE = "save-players.json";
 const STATS_HISTORY_FILE = "save-stats-history.json";
-/** 每個世界保留的掃描統計筆數(排行榜週報用;超過丟最舊)。 */
-const STATS_HISTORY_MAX = 60;
+/** 每個世界保留的掃描統計筆數(排行榜週報用;超過丟最舊)。每小時自動掃描約可放 20 天。 */
+const STATS_HISTORY_MAX = 500;
 const TMP_DIR = "health-tmp";
 
-function palsavAssetName(): string | null {
+export function palsavAssetName(rec: InstanceRecord): string | null {
+  // 容器後端:轉換器在容器內執行(amd64 映像),與 agent 主機的架構無關。
+  if (rec.backend !== "native") return rec.runtime === "wine" ? "palsav-win-x64.exe" : "palsav-linux-x64";
+  // native:二進位直接跑在主機上,才需要看主機架構/平台。
   if (process.arch !== "x64") return null;
   if (process.platform === "win32") return "palsav-win-x64.exe";
   if (process.platform === "linux") return "palsav-linux-x64";
@@ -57,16 +68,12 @@ function palsavAssetName(): string | null {
 
 /** 平台/後端是否支援健檢(不支援時給使用者看得懂的原因)。 */
 export function saveHealthSupport(rec: InstanceRecord): { supported: boolean; reason?: string } {
-  if (rec.backend === "k8s") {
+  if (!palsavAssetName(rec)) {
     return {
       supported: false,
-      reason: "k8s 後端暫不支援存檔健檢(需要先把大型存檔拉出 Pod),後續版本評估",
-    };
-  }
-  if (!palsavAssetName()) {
-    return {
-      supported: false,
-      reason: `存檔健檢需要 Windows 或 Linux x64 主機(目前:${process.platform}/${process.arch})`,
+      reason: rec.backend === "native"
+        ? `存檔健檢需要 Windows 或 Linux x64 主機(目前:${process.platform}/${process.arch})`
+        : `容器健檢需要 x64 容器工具(目前:${process.arch},runtime:${rec.runtime ?? "native"})`,
     };
   }
   return { supported: true };
@@ -111,8 +118,8 @@ function expectedHash(sums: string, assetName: string): string | null {
 }
 
 /** 確保凍結的 palsav 執行檔就位(下載一次即快取;每次呼叫都重驗雜湊)。 */
-async function ensurePalsav(onProgress?: (pct: number) => void): Promise<string> {
-  const asset = palsavAssetName();
+export async function ensurePalsav(rec: InstanceRecord, onProgress?: (pct: number) => void): Promise<string> {
+  const asset = palsavAssetName(rec);
   if (!asset) throw new Error("此平台不支援存檔健檢");
   const dir = path.join(DATA_DIR, "tools", `palsav-${PALSAV_TAG}`);
   const bin = path.join(dir, asset);
@@ -201,6 +208,18 @@ function readSnapshots(ctx: DriverContext): Record<string, SavePlayersSnapshot> 
   }
 }
 
+/** 配種工具只需要個體與主人,不回傳背包/公會等大型玩家檔案。 */
+export function getBreedingSnapshot(ctx: DriverContext, worldGuid: string): SaveBreedingSnapshot {
+  const snapshot = readSnapshots(ctx)[worldGuid];
+  return {
+    worldGuid,
+    generatedAt: snapshot?.generatedAt ?? null,
+    pals: (snapshot?.players ?? []).flatMap((player) =>
+      player.pals.map((pal) => ({ ...pal, ownerUid: player.uid, ownerName: player.name })),
+    ),
+  };
+}
+
 function writeSnapshot(ctx: DriverContext, snapshot: SavePlayersSnapshot): void {
   const all = readSnapshots(ctx);
   all[snapshot.worldGuid] = snapshot;
@@ -239,25 +258,87 @@ export function getStatsHistory(ctx: DriverContext, worldGuid: string): { worldG
   return { worldGuid, history: readStatsHistory(ctx)[worldGuid] ?? [] };
 }
 
-/** 從完整快照算出精簡統計(每玩家:等級/金錢/圖鑑數/最強帕魯;每公會:成員/據點)。 */
-function computeScanStats(snap: SavePlayersSnapshot): SaveScanStats {
+/* ── 每小時自動掃描(排行榜/週報資料來源;設定檔比照 backup-schedule) ── */
+
+const AUTO_SCAN_FILE = "auto-scan.json";
+
+export function readAutoScan(ctx: DriverContext): AutoScanSetting {
+  try {
+    return { ...DEFAULT_AUTO_SCAN, ...JSON.parse(fs.readFileSync(path.join(ctx.instanceDir, AUTO_SCAN_FILE), "utf8")) };
+  } catch {
+    return { ...DEFAULT_AUTO_SCAN };
+  }
+}
+
+export function writeAutoScan(ctx: DriverContext, patch: Partial<AutoScanSetting>): AutoScanSetting {
+  const next = { ...readAutoScan(ctx), ...patch };
+  fs.mkdirSync(ctx.instanceDir, { recursive: true });
+  fs.writeFileSync(path.join(ctx.instanceDir, AUTO_SCAN_FILE), JSON.stringify(next, null, 2));
+  return next;
+}
+
+/**
+ * 每分鐘 tick:啟用自動掃描、伺服器運作中、間隔已到、且該實例沒有掃描在跑,
+ * 就對啟用中的世界起一次健檢(產出健檢報告+快照+統計歷史,與手動同一條管線)。
+ * 停機時不掃(存檔沒在變);不支援的 runtime 由 saveHealthSupport 擋掉。
+ */
+export function startAutoScanLoop(deps: {
+  list: () => InstanceRecord[];
+  ctxOf: (rec: InstanceRecord) => DriverContext;
+  statusOf: (rec: InstanceRecord) => Promise<string>;
+  activeWorldGuid: (rec: InstanceRecord, ctx: DriverContext) => Promise<string | null>;
+}): NodeJS.Timeout {
+  const timer = setInterval(() => {
+    void (async () => {
+      for (const rec of deps.list()) {
+        const ctx = deps.ctxOf(rec);
+        const setting = readAutoScan(ctx);
+        if (!setting.enabled) continue;
+        const elapsedMin = setting.lastRunAt ? (Date.now() - Date.parse(setting.lastRunAt)) / 60_000 : Infinity;
+        if (elapsedMin < Math.max(setting.intervalMinutes, 10)) continue;
+        if (jobs.has(rec.id)) continue;
+        if (!saveHealthSupport(rec).supported) continue;
+        try {
+          if ((await deps.statusOf(rec)) !== "running") continue;
+          const worldGuid = await deps.activeWorldGuid(rec, ctx);
+          if (!worldGuid) continue;
+          startHealthCheck(rec, ctx, worldGuid);
+          writeAutoScan(ctx, { lastRunAt: new Date().toISOString(), lastResult: "已啟動掃描" });
+        } catch (err) {
+          writeAutoScan(ctx, {
+            lastRunAt: new Date().toISOString(),
+            lastResult: `失敗:${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }
+    })();
+  }, 60_000);
+  timer.unref();
+  return timer;
+}
+
+/** 從完整快照算出精簡統計(每玩家:等級/金錢/圖鑑數/最強帕魯;每公會:成員/據點/實力欄位)。
+ *  export 供單元測試(純函式)。 */
+export function computeScanStats(snap: SavePlayersSnapshot): SaveScanStats {
   const players: SaveScanPlayerStat[] = snap.players.map((p) => {
     let top: SaveScanTopPal | null = null;
     let topKey = -1;
     for (const pal of p.pals) {
       const iv = (pal.talentHp ?? 0) + (pal.talentShot ?? 0) + (pal.talentDefense ?? 0);
-      // 排序鍵:等級 → IV 總和 → 星級(單一數字比較,等級權重最大)
-      const key = (pal.level ?? 0) * 1_000_000 + iv * 100 + (pal.rank ?? 0);
+      const candidate: SaveScanTopPal = {
+        characterId: pal.characterId,
+        ...(pal.nickname ? { nickname: pal.nickname } : {}),
+        level: pal.level,
+        rank: pal.rank,
+        ivTotal: iv,
+        passiveCount: pal.passives.length,
+        passives: pal.passives.slice(0, 8),
+      };
+      // 加權評分(shared topPalScore):等級 + IV×0.1 + 星級×10 + 詞條數×5
+      const key = topPalScore(candidate);
       if (key > topKey) {
         topKey = key;
-        top = {
-          characterId: pal.characterId,
-          ...(pal.nickname ? { nickname: pal.nickname } : {}),
-          level: pal.level,
-          rank: pal.rank,
-          ivTotal: iv,
-          passiveCount: pal.passives.length,
-        };
+        top = candidate;
       }
     }
     return {
@@ -270,13 +351,30 @@ function computeScanStats(snap: SavePlayersSnapshot): SaveScanStats {
       topPal: top,
     };
   });
-  const guilds = (snap.guilds ?? []).map((g) => ({
-    id: g.id,
-    name: g.name,
-    memberCount: g.members.length,
-    baseCount: g.bases.length,
-    baseCampLevel: g.baseCampLevel,
-  }));
+  // 公會深度欄位:成員以 uid(去連字號、不分大小寫)對回玩家統計
+  const norm = (s: string) => s.replace(/-/g, "").toLowerCase();
+  const playerByUid = new Map(players.map((p) => [norm(p.uid), p]));
+  const guilds = (snap.guilds ?? []).map((g) => {
+    const members = g.members.map((m) => ({ ...m, stat: playerByUid.get(norm(m.uid)) }));
+    const levels = members
+      .map((m) => m.stat?.level)
+      .filter((lv): lv is number => typeof lv === "number");
+    return {
+      id: g.id,
+      name: g.name,
+      memberCount: g.members.length,
+      baseCount: g.bases.length,
+      baseCampLevel: g.baseCampLevel,
+      avgLevel: levels.length > 0 ? Math.round((levels.reduce((a, b) => a + b, 0) / levels.length) * 10) / 10 : null,
+      maxLevel: levels.length > 0 ? Math.max(...levels) : null,
+      activeMembers: members.filter((m) => m.lastOnlineDaysAgo !== null && m.lastOnlineDaysAgo <= 7).length,
+      workerPals: g.bases.reduce((sum, b) => sum + b.workers.length, 0),
+      storageKinds: g.storage ? g.storage.length : null,
+      researchDone: g.research ? g.research.entries.length : null,
+      totalMoney: members.reduce((sum, m) => sum + (m.stat?.money ?? 0), 0),
+      totalPals: members.reduce((sum, m) => sum + (m.stat?.palCount ?? 0), 0),
+    };
+  });
   return { scannedAt: snap.generatedAt, levelSavMtime: snap.levelSavMtime, players, guilds };
 }
 
@@ -312,7 +410,7 @@ export function getPlayerProfile(ctx: DriverContext, worldGuid: string, uid: str
 /** 子行程跑 palsav convert;回傳 stderr 尾段供錯誤訊息。 */
 function runConvert(bin: string, savPath: string, jsonPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, ["convert", savPath, "--to-json", "-o", jsonPath, "--minify-json", "-f"], {
+    const child = spawn(bin, ["--to-json", "-o", jsonPath, "--minify-json", "-f", savPath], {
       // PYTHONHASHSEED=0:palsav cli 啟動時要求固定 hash seed,先給就不會重新 exec 自己一次
       env: { ...process.env, PYTHONHASHSEED: "0" },
       windowsHide: true,
@@ -346,7 +444,7 @@ function runConvert(bin: string, savPath: string, jsonPath: string): Promise<voi
 /** 解析 Players/*.sav,建兩份容器對照:
  *  - kinds:角色容器 → party(身上)/palbox(帕魯箱),帕魯位置分類用
  *  - itemOwners:物品容器 → 誰的哪一格(背包/武器/防具/重要/食物),離線物品用
- *  單檔失敗不擋整體;檔數設上限防極端伺服器。 */
+ *  任一必要玩家檔轉換失敗即停止本次健檢並回報;檔數設上限防極端伺服器。 */
 const MAX_PLAYER_SAVS = 50;
 /** 玩家 .sav 的 InventoryInfo 欄位 → 快照 inventory 分類。 */
 const INVENTORY_FIELDS: Record<string, InventoryKind> = {
@@ -362,6 +460,8 @@ interface ContainerIndex {
   itemOwners: Map<string, { uid: string; kind: InventoryKind }>;
   /** uid(無連字號小寫)→ 曾捕捉過的物種 characterId 清單(RecordData.PalCaptureCount) */
   paldeck: Map<string, string[]>;
+  /** 轉換失敗必須回報，不能以空索引假裝健檢完整。 */
+  conversionFailures: string[];
 }
 
 const savNameToUuid = (name: string): string => {
@@ -415,11 +515,14 @@ export function extractPaldeck(sd: Record<string, unknown> | undefined): string[
   return [...species];
 }
 
-async function buildContainerIndex(bin: string, playersDir: string, tmpDir: string): Promise<ContainerIndex> {
+type ConvertFn = (inputPath: string, outputPath: string) => Promise<void>;
+
+async function buildContainerIndex(convert: ConvertFn, playersDir: string, tmpDir: string): Promise<ContainerIndex> {
   const kinds = new Map<string, "party" | "palbox">();
   const itemOwners = new Map<string, { uid: string; kind: InventoryKind }>();
   const paldeck = new Map<string, string[]>();
-  if (!fs.existsSync(playersDir)) return { kinds, itemOwners, paldeck };
+  if (!fs.existsSync(playersDir)) return { kinds, itemOwners, paldeck, conversionFailures: [] };
+  const conversionFailures: string[] = [];
   const files = fs
     .readdirSync(playersDir)
     .filter((f) => /^[0-9A-Fa-f]{32}\.sav$/.test(f))
@@ -429,7 +532,7 @@ async function buildContainerIndex(bin: string, playersDir: string, tmpDir: stri
     const out = `${copy}.json`;
     try {
       await fs.promises.copyFile(path.join(playersDir, f), copy);
-      await runConvert(bin, copy, out);
+      await convert(copy, out);
       const sd = (JSON.parse(fs.readFileSync(out, "utf8")) as {
         properties?: { SaveData?: { value?: Record<string, IdProp> } };
       }).properties?.SaveData?.value;
@@ -451,48 +554,76 @@ async function buildContainerIndex(bin: string, playersDir: string, tmpDir: stri
       }
       const deck = extractPaldeck(sd as Record<string, unknown> | undefined);
       if (deck) paldeck.set(uid.replace(/-/g, "").toLowerCase(), deck);
-    } catch {
-      // 個別玩家檔壞掉/格式不符:該玩家的帕魯位置標 unknown、物品缺席,不擋掃描
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      conversionFailures.push(`${f}:${reason}`);
+      break;
     } finally {
       fs.rmSync(copy, { force: true });
       fs.rmSync(out, { force: true });
     }
   }
-  return { kinds, itemOwners, paldeck };
+  return { kinds, itemOwners, paldeck, conversionFailures };
 }
 
 async function runJob(rec: InstanceRecord, ctx: DriverContext, worldGuid: string): Promise<SaveHealthReport> {
   const job = jobs.get(rec.id)!;
-  const worldDir = worldDirOf(rec, ctx, worldGuid);
-  const levelSav = path.join(worldDir, "Level.sav");
-  if (!fs.existsSync(levelSav)) throw fail(`找不到世界存檔 ${worldGuid} 的 Level.sav`, 404);
-
-  // 運行中也可以做(唯讀):先 best-effort 請伺服器落盤,分析的是最近一次存檔狀態
-  await flushWorld(rec);
-
-  const levelStat = fs.statSync(levelSav);
-  const playersDir = path.join(worldDir, "Players");
-  let playerSavCount = 0;
-  let playersDirBytes = 0;
-  if (fs.existsSync(playersDir)) {
-    for (const f of fs.readdirSync(playersDir)) {
-      if (!f.endsWith(".sav")) continue;
-      playerSavCount += 1;
-      playersDirBytes += fs.statSync(path.join(playersDir, f), { throwIfNoEntry: false })?.size ?? 0;
-    }
-  }
-  const worldDirBytes = dirSize(worldDir);
-
-  job.phase = "download";
-  job.pct = 0;
-  const bin = await ensurePalsav((pct) => {
-    job.pct = pct;
-  });
-
   const tmpDir = path.join(ctx.instanceDir, TMP_DIR);
+  let containerRunner: ContainerHealthRunner | null = null;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   fs.mkdirSync(tmpDir, { recursive: true });
   try {
+    // 運行中也可以做(唯讀):先 best-effort 請伺服器落盤,分析的是最近一次存檔狀態
+    await flushWorld(rec);
+
+    let worldDir: string;
+    if (rec.backend === "k8s") {
+      // k8s PVC is not visible to the agent process: take a read-only tar
+      // snapshot after flush; conversion itself is dispatched into the Pod.
+      worldDir = path.join(tmpDir, "world");
+      fs.mkdirSync(worldDir, { recursive: true });
+      const archive = path.join(tmpDir, "world.tar.gz");
+      job.phase = "download";
+      job.pct = 0;
+      // backup/world is maintained independently by the backup scheduler and
+      // is not part of the world-health input; excluding it also prevents a
+      // concurrent backup write from invalidating the read-only snapshot.
+      fs.writeFileSync(archive, await tarDirInPod(rec, `Pal/Saved/SaveGames/0/${worldGuid}`, ["./backup"]));
+      await execFileP("tar", ["-xzf", archive, "-C", worldDir], { windowsHide: true });
+    } else {
+      worldDir = worldDirOf(rec, ctx, worldGuid);
+    }
+    const levelSav = path.join(worldDir, "Level.sav");
+    if (!fs.existsSync(levelSav)) throw fail(`找不到世界存檔 ${worldGuid} 的 Level.sav`, 404);
+
+    const levelStat = fs.statSync(levelSav);
+    const playersDir = path.join(worldDir, "Players");
+    let playerSavCount = 0;
+    let playersDirBytes = 0;
+    if (fs.existsSync(playersDir)) {
+      for (const f of fs.readdirSync(playersDir)) {
+        if (!f.endsWith(".sav")) continue;
+        playerSavCount += 1;
+        playersDirBytes += fs.statSync(path.join(playersDir, f), { throwIfNoEntry: false })?.size ?? 0;
+      }
+    }
+    const worldDirBytes = dirSize(worldDir);
+
+    if (rec.backend !== "k8s") {
+      job.phase = "download";
+      job.pct = 0;
+    }
+    const bin = await ensurePalsav(rec, (pct) => {
+      job.pct = pct;
+    });
+    const runner = rec.backend === "docker" || rec.backend === "k8s"
+      ? new ContainerHealthRunner(rec, bin, `job-${rec.id}-${Date.now().toString(36)}`)
+      : null;
+    containerRunner = runner;
+    const convert: ConvertFn = runner
+      ? (inputPath, outputPath) => runner.convert(inputPath, outputPath)
+      : (inputPath, outputPath) => runConvert(bin, inputPath, outputPath);
+
     // 複製一份再轉:避免 palsav 讀到伺服器寫入半途的原檔
     const savCopy = path.join(tmpDir, "Level.sav");
     await fs.promises.copyFile(levelSav, savCopy);
@@ -500,9 +631,19 @@ async function runJob(rec: InstanceRecord, ctx: DriverContext, worldGuid: string
     job.phase = "convert";
     job.pct = null; // 子行程無進度回報
     // 先解析玩家檔(小,秒級)建容器對照 → 帕魯位置分類 + 離線物品歸屬 + 圖鑑紀錄
-    const { kinds, itemOwners, paldeck } = await buildContainerIndex(bin, path.join(worldDir, "Players"), tmpDir);
+    const { kinds, itemOwners, paldeck, conversionFailures } = await buildContainerIndex(
+      convert,
+      path.join(worldDir, "Players"),
+      tmpDir,
+    );
+    if (conversionFailures.length > 0) {
+      throw fail(
+        `玩家存檔轉換失敗(${conversionFailures.length}):${conversionFailures.slice(0, 3).join("; ")}`,
+        422,
+      );
+    }
     const jsonPath = path.join(tmpDir, "Level.sav.json");
-    await runConvert(bin, savCopy, jsonPath);
+    await convert(savCopy, jsonPath);
 
     job.phase = "analyze";
     job.pct = 0;
@@ -566,6 +707,9 @@ async function runJob(rec: InstanceRecord, ctx: DriverContext, worldGuid: string
     appendScanStats(ctx, worldGuid, computeScanStats(snapshot));
     return report;
   } finally {
+    // Container tools and inputs must not remain in the game runtime after a
+    // scan, even when conversion/analyse fails midway.
+    await containerRunner?.cleanup();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 }

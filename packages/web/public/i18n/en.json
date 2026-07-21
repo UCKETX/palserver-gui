@@ -1671,7 +1671,7 @@
   "重生倒數 {c}": "Respawn in {c}",
   "應已重生": "Should have respawned",
   "約下個遊戲日重生": "Respawns next in-game day",
-  "頭目狀態需玩家經過附近才會更新,但看過之後會記住(玩家離開不會變回未知)。野外頭目綁「遊戲內時間」重生(約下個遊戲日),沒有固定秒數——實測到一輪完整重生後才顯示精準倒數;地下城頭目重生時間由遊戲內建、精準。": "Boss status only updates when a player passes nearby, but it's remembered afterward (it won't revert to unknown when the player leaves). Overworld bosses respawn on in-game time (around the next in-game day) with no fixed timer — a precise countdown appears only after one full respawn has been measured; dungeon boss respawn times are game-native and precise.",
+  "頭目狀態需玩家經過附近才會更新,但看過之後會記住(玩家離開不會變回未知)。野外頭目綁「遊戲內時間」重生,沒有固定秒數,一律標示「約下個遊戲日重生」不做倒數;地下城頭目重生時間由遊戲內建、精準顯示。": "Boss status only updates when a player passes nearby, but it's remembered afterward (it won't revert to unknown when the player leaves). Overworld bosses respawn on in-game time with no fixed timer, so they always show \"respawns around the next in-game day\" without a countdown; dungeon boss respawn times are game-native and precise.",
   "實測": "Measured",
   "未知(附近無玩家)": "Unknown (no player nearby)",
   "未知(區域未載入)": "Unknown (region not loaded)",

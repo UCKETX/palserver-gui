@@ -156,7 +156,7 @@ export function assignReportedBosses<T extends { x: number; y: number }>(
 export type BossLiveStatus = "alive" | "dead" | "unknown";
 
 /**
- * 未實測到重生間隔時,「已擊殺(約下個遊戲日重生)」最多顯示這麼久;超過就當作應已重生、退回未知。
+ * 野外頭目「已擊殺(約下個遊戲日重生)」最多顯示這麼久;超過就當作應已重生、退回未知。
  * 野外頭目綁「下個遊戲黎明」重生,沒有可靠固定秒數(見 .claude/notes/wild-boss-respawn-research.md);
  * 預設日夜流速下一個遊戲日 ≈ 32 分現實時間,取 45 分留裕度。沒有玩家在場確認重生時,靠這個窗口
  * 讓狀態自動退場,避免永遠卡在「已擊殺」。(流速調很慢的伺服器可能偏早退場;總比永遠不刷新好。)
@@ -170,18 +170,19 @@ export interface BossRespawnInfo {
   diedAt: number | null;
   /** 預估重生時間 epoch 秒(dead 且有 diedAt 時);否則 null。 */
   respawnAt: number | null;
-  /** 距離重生的秒數(可為負 = 早該重生了);null = 已擊殺但重生時間不定(無實測、非固定秒數)。 */
+  /** 距離重生的秒數;野外頭目一律 null(重生綁遊戲內時間、不做倒數,見下方說明)。地城頭目才有精準秒數。 */
   secondsLeft: number | null;
-  /** 這筆倒數是否採用實測重生間隔(true 才有精準 respawnAt/secondsLeft)。 */
+  /** 這筆倒數是否採用實測重生間隔。野外頭目已改為不算倒數,故本函式一律回 false;保留欄位相容既有呼叫端。 */
   measured: boolean;
 }
 
 /**
- * 由一筆 spawner 狀態(null = 未配對到)算出顯示用的死活與重生倒數。
+ * 由一筆 spawner 狀態(null = 未配對到)算出顯示用的死活與重生狀態。
  * 野外頭目重生綁「遊戲內時間」(下個遊戲日/黎明,隨伺服器日夜流速變),沒有固定實際秒數
- * (研究見 .claude/notes/wild-boss-respawn-research.md)。所以只有本模組實測到完整一輪
- * (respawnInterval>0)才給精準倒數;否則只回「已擊殺 + 擊殺時間」,respawnAt/secondsLeft 留 null,
- * 由顯示端定性呈現(「約下個遊戲日重生」),不硬湊一個假倒數。地城頭目走 dungeonBossInfo,時間精準。
+ * (研究見 .claude/notes/wild-boss-respawn-research.md)。故一律只回「已擊殺 + 擊殺時間」、
+ * respawnAt/secondsLeft/measured 皆留空,由顯示端定性呈現「約下個遊戲日重生」,不算倒數
+ * (曾用實測 respawnInterval 算倒數,但易挾陳舊值算出離譜倒數,已移除)。地城頭目走
+ * dungeonBossInfo,重生時間由遊戲內建、精準。
  */
 export function bossRespawnInfo(entry: BossStateEntry | null, nowSec: number): BossRespawnInfo {
   const none: BossRespawnInfo = {
@@ -200,15 +201,11 @@ export function bossRespawnInfo(entry: BossStateEntry | null, nowSec: number): B
   const diedAt = entry.diedAt > 0 ? entry.diedAt : null;
   const lastRespawn = entry.respawnedAt > 0 ? entry.respawnedAt : -1;
   if (diedAt !== null && diedAt > lastRespawn) {
-    if (entry.respawnInterval > 0) {
-      const respawnAt = diedAt + entry.respawnInterval;
-      // 早該重生卻遲遲沒被模組觀測到「活」(附近沒玩家、或這隻其實已被捕捉/沒重新生成)——
-      // 倒數不能永遠往負的跑下去。超過寬容期就退回「未知」,而不是無止盡的負數倒數(使用者回報的 bug)。
-      if (nowSec - respawnAt > WILD_BOSS_RESPAWN_GRACE_SEC) return none;
-      return { status: "dead", diedAt, respawnAt, secondsLeft: respawnAt - nowSec, measured: true };
-    }
-    // 已擊殺,但沒實測到重生間隔 → 重生時間不定(下個遊戲日)。同樣的道理:擊殺過了寬容期
-    // 還沒被觀測到復活,就不要一直卡在「已擊殺」不動(使用者回報的另一個 bug)——退回未知。
+    // 野外頭目重生綁「遊戲內時間」(下個遊戲日),沒有可靠的固定秒數。曾經用模組實測到的
+    // respawnInterval 算精準倒數,但實測值常挾帶陳舊/跨場觀測而算出離譜倒數(例如卡在
+    // 22:00:00,見 .claude/notes/wild-boss-respawn-research.md),弊大於利。現在一律以
+    // 「下個遊戲日」定性呈現、不再算倒數(respawnInterval 仍保留在型別中,但顯示時忽略)。
+    // 擊殺過了寬容期仍未被觀測到復活 → 退回「未知」,避免永遠卡在「已擊殺」不刷新。
     if (nowSec - diedAt > WILD_BOSS_RESPAWN_GRACE_SEC) return none;
     return { status: "dead", diedAt, respawnAt: null, secondsLeft: null, measured: false };
   }

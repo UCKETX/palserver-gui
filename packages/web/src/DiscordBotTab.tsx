@@ -268,6 +268,15 @@ export function DiscordBotTab({ client, instanceId }: { client: AgentClient; ins
         <p className="mt-2 text-xs text-ink-muted">
           {t("事件通知(玩家上線、死亡等)請到「Webhook」分頁設定;這頁只負責「從 Discord 下指令」。")}
         </p>
+        <a
+          href="https://github.com/io-software-ai/palserver-gui/blob/main/docs/discord-bot.md"
+          target="_blank"
+          rel="noreferrer"
+          className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-pal hover:underline"
+        >
+          {t("自製機器人 / 第三方串接指南")}
+          <FiExternalLink className="size-3" />
+        </a>
       </section>
 
       <section className={card}>

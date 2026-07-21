@@ -50,12 +50,12 @@ function palEntry(
   owner: string,
   characterId: string,
   level: number,
-  opts: { lucky?: boolean; passives?: string[]; talents?: [number, number, number]; containerId?: string } = {},
+  opts: { lucky?: boolean; passives?: string[]; talents?: [number, number, number]; containerId?: string; slotIndex?: number } = {},
 ) {
   const [hp, shot, def] = opts.talents ?? [50, 50, 50];
   return charEntry(ZERO, {
     CharacterID: { value: characterId },
-    SlotId: { value: { ContainerId: { value: { ID: { value: opts.containerId ?? "cont-default" } } }, SlotIndex: { value: `__RAW_0__` } } },
+    SlotId: { value: { ContainerId: { value: { ID: { value: opts.containerId ?? "cont-default" } } }, SlotIndex: { value: `__RAW_${opts.slotIndex ?? 0}__` } } },
     // ByteProperty 殼(同 playerEntry 註解)
     Level: { value: { type: "None", value: `__RAW_${level}__` } },
     Gender: { value: { type: "EPalGenderType", value: "EPalGenderType::Female" } },
@@ -315,7 +315,7 @@ test("analyzeLevelJsonStream:帕魯位置依容器對照分類(party/palbox/base
             value: [
               playerEntry("p1", "X", 1),
               palEntry("p1", "A", 1, { containerId: "AABB-01" }), // party
-              palEntry("p1", "B", 2, { containerId: "aabb02" }), // palbox(正規化後相同)
+              palEntry("p1", "B", 2, { containerId: "aabb02", slotIndex: 61 }), // palbox(正規化後相同)
               palEntry("p1", "C", 3, { containerId: "cccc-03" }), // 不在對照 → base
             ],
           },
@@ -333,6 +333,7 @@ test("analyzeLevelJsonStream:帕魯位置依容器對照分類(party/palbox/base
   const locOf = (id: string) => pals.find((p) => p.characterId === id)!.location;
   assert.equal(locOf("A"), "party");
   assert.equal(locOf("B"), "palbox");
+  assert.equal(pals.find((p) => p.characterId === "B")!.slotIndex, 61);
   assert.equal(locOf("C"), "base");
 
   // 沒給對照表 → 全部 unknown
@@ -400,7 +401,6 @@ test("analyzeLevelJsonStream:公會職位/據點座標/加點分配", async () =
     alice.guild!.bases.map((b) => [b.x, b.y]),
     [[123456, -654321], [111, 222]], // fast_travel 的 (9,9) 不能混進來
   );
-
   const bob = r.players.find((p) => p.uid === "p2")!;
   assert.equal(bob.guild!.role, "member");
 
@@ -492,6 +492,14 @@ test("公會快照:成員/據點駐守帕魯/研究/倉庫二趟收集", async (
     g.bases[0].workers.map((w) => w.characterId).sort(),
     ["Kitsunebi", "SheepBall"],
   );
+  assert.deepEqual(
+    r.basePals.map((p) => [p.characterId, p.base?.guildName, p.base?.id, p.base?.x, p.base?.y]).sort(),
+    [
+      ["Kitsunebi", "G", "bb01", 100, 200],
+      ["SheepBall", "G", "bb01", 100, 200],
+    ],
+  );
+  assert.equal(r.basePals.find((p) => p.characterId === "SheepBall")?.gender, "female");
   assert.equal(g.research!.currentId, "Handcraft1");
   assert.deepEqual(g.research!.entries, [{ id: "EmitFlame1", workAmount: 120.5 }]);
 

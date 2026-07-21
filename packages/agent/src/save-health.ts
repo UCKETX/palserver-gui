@@ -4,7 +4,6 @@ import { parserStream } from "stream-json";
 import type { Token } from "stream-json/parser.js";
 import type {
   SaveGuild,
-  SaveGuildWorkerPal,
   SaveHealthCounts,
   SaveHealthPlayerRow,
   SaveItemStack,
@@ -32,6 +31,8 @@ export interface LevelJsonAnalysis {
   players: SavePlayerProfile[];
   /** 公會完整檔案(公會頁用);storage 為 null,由二趟掃描補。 */
   guilds: SaveGuild[];
+  /** 據點工作容器中的完整帕魯個體。 */
+  basePals: SavePalRow[];
   /** 公會 id(hex)→ 倉庫容器 id(二趟掃描的目標清單)。 */
   guildStorageContainers: Map<string, string>;
   /** worldSaveData 頂層 section 清單(診斷:判斷某類資料是否存在於存檔)。 */
@@ -56,6 +57,8 @@ export const normGuid = (s: string): string => s.replace(/[^0-9a-f]/gi, "").toLo
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 /** 單一玩家保留的帕魯明細上限(palCount 仍是真實總數)。 */
 const MAX_PALS_PER_PLAYER = 1000;
+/** 單一角色容器保留上限;據點工作數可由伺服器設定提高,需高於遊戲預設值。 */
+const MAX_PALS_PER_CONTAINER = 100;
 
 /** FDateTime ticks(100ns,自 0001-01-01)→ Unix epoch 的偏移。 */
 const EPOCH_TICKS = 621_355_968_000_000_000;
@@ -140,6 +143,7 @@ interface ElementCtx {
   keyPlayerUid?: string;
   keyInstanceId?: string;
   containerId?: string;
+  slotIndex?: number;
   nickName?: string;
   levelNum?: number;
   expNum?: number;
@@ -209,8 +213,8 @@ class Analyzer {
     y: number;
     workerContainerId: string;
   }[] = [];
-  /** 容器 → 帕魯輕量索引(據點駐守帕魯反查用;每容器上限防爆)。 */
-  private readonly palsByContainer = new Map<string, SaveGuildWorkerPal[]>();
+  /** 容器 → 完整帕魯索引(據點駐守與配種反查用;每容器上限防爆)。 */
+  private readonly palsByContainer = new Map<string, SavePalRow[]>();
   /** 公會 id → 倉庫容器/研究(GuildExtraSaveDataMap)。 */
   private readonly guildExtras = new Map<
     string,
@@ -342,12 +346,12 @@ class Analyzer {
             });
           }
         }
-        // 容器→帕魯輕量索引:玩家以外全收(含無主的據點工作帕魯),駐守反查用
+        // 容器→完整帕魯索引:玩家以外全收(含無主的據點工作帕魯),駐守與配種反查用
         if (!e.isPlayer && e.characterId && e.containerId) {
           const key = normGuid(e.containerId);
           const list = this.palsByContainer.get(key) ?? [];
-          if (list.length < 30) {
-            list.push({ characterId: e.characterId, level: e.levelNum ?? 1 });
+          if (list.length < MAX_PALS_PER_CONTAINER) {
+            list.push(this.palRow(e, "base"));
             this.palsByContainer.set(key, list);
           }
         }
@@ -361,22 +365,7 @@ class Analyzer {
           if (bucket.rows.length < MAX_PALS_PER_PLAYER) {
             const kinds = this.opts.containerKinds;
             const kind = e.containerId ? kinds?.get(normGuid(e.containerId)) : undefined;
-            bucket.rows.push({
-              instanceId: e.keyInstanceId ?? "",
-              location: kind ?? (kinds && kinds.size > 0 && e.containerId ? "base" : "unknown"),
-              characterId: e.characterId,
-              nickname: e.nickName || undefined,
-              // 預設值省略(同上):沒欄位 = 等級 1、IV 0
-              level: e.levelNum ?? 1,
-              gender: e.gender === "EPalGenderType::Female" ? "female" : e.gender === "EPalGenderType::Male" ? "male" : null,
-              rank: e.rank ?? 0,
-              isLucky: e.isLucky ?? false,
-              isBoss: e.characterId.toUpperCase().startsWith("BOSS_"),
-              talentHp: e.talentHp ?? 0,
-              talentShot: e.talentShot ?? 0,
-              talentDefense: e.talentDefense ?? 0,
-              passives: e.passives ?? [],
-            });
+            bucket.rows.push(this.palRow(e, kind ?? (kinds && kinds.size > 0 && e.containerId ? "base" : "unknown")));
           }
         }
         c.pals = this.charEntries - c.players;
@@ -465,6 +454,27 @@ class Analyzer {
     }
   }
 
+  private palRow(e: ElementCtx, location: SavePalRow["location"]): SavePalRow {
+    const characterId = e.characterId ?? "";
+    return {
+      instanceId: e.keyInstanceId ?? "",
+      location,
+      slotIndex: e.slotIndex,
+      characterId,
+      nickname: e.nickName || undefined,
+      // UE 會省略預設值:沒欄位 = 等級 1、IV 0。
+      level: e.levelNum ?? 1,
+      gender: e.gender === "EPalGenderType::Female" ? "female" : e.gender === "EPalGenderType::Male" ? "male" : null,
+      rank: e.rank ?? 0,
+      isLucky: e.isLucky ?? false,
+      isBoss: characterId.toUpperCase().startsWith("BOSS_"),
+      talentHp: e.talentHp ?? 0,
+      talentShot: e.talentShot ?? 0,
+      talentDefense: e.talentDefense ?? 0,
+      passives: e.passives ?? [],
+    };
+  }
+
   private scalar(t: Token & { value?: unknown }): void {
     if (t.name === "numberValue" && this.realDateTimeTicks === null) {
       const p = this.path;
@@ -505,6 +515,10 @@ class Analyzer {
         // 所在容器:SaveParameter.value.SlotId.value.ContainerId.value.ID.value
         if (prev === "ID" && last === "value" && t.name === "stringValue" && rel.includes("SlotId")) {
           e.containerId ??= t.value as string;
+          break;
+        }
+        if (prev === "SlotIndex" && last === "value" && t.name === "numberValue" && rel.includes("SlotId")) {
+          e.slotIndex = Number(t.value);
           break;
         }
         // 加點:GotStatusPointList / GotExStatusPointList 的 {StatusName, StatusPoint} 序列
@@ -737,6 +751,23 @@ class Analyzer {
     }
     players.sort((a, b) => (b.level ?? 0) - (a.level ?? 0));
 
+    const guildNameById = new Map(this.guilds.map((g) => [normGuid(g.groupId), g.name]));
+    const basePals = this.baseCamps.flatMap((base) => {
+      const baseInfo = {
+        id: base.id,
+        name: base.name,
+        guildId: base.groupId,
+        guildName: guildNameById.get(normGuid(base.groupId)) ?? "?",
+        x: base.x,
+        y: base.y,
+      };
+      return (this.palsByContainer.get(normGuid(base.workerContainerId)) ?? []).map((pal) => ({
+        ...pal,
+        location: "base" as const,
+        base: baseInfo,
+      }));
+    });
+
     // 公會完整檔案(公會頁用):成員/據點+駐守帕魯/研究;倉庫內容由呼叫端二趟掃描補
     const rosterByUid = this.playersSeen;
     const guilds: SaveGuild[] = this.guilds.map((g) => {
@@ -765,7 +796,10 @@ class Analyzer {
           name: b.name,
           x: b.x,
           y: b.y,
-          workers: this.palsByContainer.get(normGuid(b.workerContainerId)) ?? [],
+          workers: (this.palsByContainer.get(normGuid(b.workerContainerId)) ?? []).map((pal) => ({
+            characterId: pal.characterId,
+            level: pal.level,
+          })),
         })),
         storage: null, // 二趟掃描補(見 collectContainerContents)
         research: extra?.research ?? null,
@@ -784,6 +818,7 @@ class Analyzer {
       emptyGuildNames: this.emptyGuildNames,
       players,
       guilds,
+      basePals,
       guildStorageContainers,
       worldSections: [...this.worldSections].sort(),
     };

@@ -100,6 +100,8 @@ export function MapTab({
   instanceId,
   fullscreen = false,
   externalFocus = null,
+  overlayOnly = false,
+  onOverlayClose,
 }: {
   client: AgentClient;
   instanceId: string;
@@ -107,6 +109,9 @@ export function MapTab({
   fullscreen?: boolean;
   /** 外部指定的聚焦點(地圖座標;n 遞增觸發)— 玩家詳情「據點跳地圖」用。 */
   externalFocus?: { x: number; y: number; n: number } | null;
+  /** 只渲染地圖覆蓋層,不顯示地圖分頁入口卡。 */
+  overlayOnly?: boolean;
+  onOverlayClose?: () => void;
 }) {
   const { lang } = useI18n();
   const gameData = useGameData();
@@ -255,8 +260,13 @@ export function MapTab({
     ? t("在線玩家 {n} 人", { n: live.players.length }) + (baseCount > 0 ? ` · ${t("{n} 個公會據點", { n: baseCount })}` : "")
     : (live?.reason ?? t("伺服器未在運作,地圖無法顯示玩家。"));
 
+  const closeOverlay = () => {
+    setOpen(false);
+    onOverlayClose?.();
+  };
+
   // 地圖面板本體:彈窗與全螢幕頁共用。全螢幕時鋪滿容器、去掉卡片外框與關閉鈕。
-  const mapPanel = live?.available ? (
+  const mapPanel = (
     <div
       className={
         fullscreen
@@ -358,7 +368,7 @@ export function MapTab({
             <FiRefreshCw className="size-4" />
           </button>
           {!fullscreen && (
-            <button className={`${btnGhost} inline-flex items-center gap-1.5`} onClick={() => setOpen(false)}>
+            <button className={`${btnGhost} inline-flex items-center gap-1.5`} onClick={closeOverlay}>
               <FiX className="size-4" /> {t("關閉")}
             </button>
           )}
@@ -372,7 +382,7 @@ export function MapTab({
       <div className="min-h-0 flex-1 overflow-hidden rounded-xl">
         <PlayerMap
           world={world}
-          players={live.players}
+          players={live?.available ? live.players : []}
           guilds={guilds}
           pdPlayers={pdPlayers}
           landmarks={curLandmarks}
@@ -396,7 +406,7 @@ export function MapTab({
         />
       </div>
     </div>
-  ) : null;
+  );
 
   const modals = (
     <>
@@ -474,6 +484,15 @@ export function MapTab({
     );
   }
 
+  if (overlayOnly) {
+    return (
+      <>
+        {open && mapPanel && <Overlay onClose={closeOverlay}>{mapPanel}</Overlay>}
+        {modals}
+      </>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-3">
       {error && <p className={errorCls}>{error}</p>}
@@ -528,7 +547,7 @@ export function MapTab({
         <p className="rounded-xl bg-card-soft px-3 py-2 text-[13px] font-bold">{unlockMsg}</p>
       )}
 
-      {open && mapPanel && <Overlay onClose={() => setOpen(false)}>{mapPanel}</Overlay>}
+      {open && mapPanel && <Overlay onClose={closeOverlay}>{mapPanel}</Overlay>}
 
       {modals}
     </div>

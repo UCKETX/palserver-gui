@@ -58,6 +58,8 @@ export function InstanceDetailPage({
   const [tab, setTab] = useState<Tab>("overview");
   // 玩家詳情「據點跳地圖」:切到地圖分頁並聚焦座標(n 為 nonce,連點同一點也重觸發)
   const [mapFocus, setMapFocus] = useState<{ x: number; y: number; n: number } | null>(null);
+  // 配種圖的據點定位留在目前分頁,以地圖小窗顯示。
+  const [breedingMapFocus, setBreedingMapFocus] = useState<{ x: number; y: number; n: number } | null>(null);
   // 分頁偏好每實例獨立;預設集合只看「建立時選的口味」——事後手動安裝模組
   // 不改變預設可見分頁(避免裝完 PalDefender 分頁自己跳出來),要開去「＋」面板。
   // PalDefender 分頁的 gating(裝了才有/預設顯示);checkPalDefender 重查後更新。
@@ -634,7 +636,24 @@ export function InstanceDetailPage({
       )}
       {tab === "palstats" && <PalStatsTab client={client} instanceId={detail.id} running={detail.status === "running"} />}
       {SHOW_BOSS_RESPAWN && tab === "bossrespawn" && <BossRespawnTab client={client} instanceId={detail.id} running={detail.status === "running"} />}
-      {tab === "breeding" && <BreedingTab client={client} instanceId={detail.id} />}
+      {tab === "breeding" && (
+        <>
+          <BreedingTab
+            client={client}
+            instanceId={detail.id}
+            onShowOnMap={(x, y) => setBreedingMapFocus({ x, y, n: Date.now() })}
+          />
+          {breedingMapFocus && (
+            <MapTab
+              client={client}
+              instanceId={detail.id}
+              externalFocus={breedingMapFocus}
+              overlayOnly
+              onOverlayClose={() => setBreedingMapFocus(null)}
+            />
+          )}
+        </>
+      )}
       {tab === "saves" && (
         <SavesTab client={client} instanceId={detail.id} running={detail.status === "running"} />
       )}

@@ -68,7 +68,7 @@ test("extractPaldeck:只有 unlock flag 也能運作,且去重", () => {
   assert.deepEqual(extractPaldeck(sd), ["Kitsunebi"]);
 });
 
-test("getBreedingSnapshot:只攤平帕魯並保留主人來源", () => {
+test("getBreedingSnapshot:攤平玩家與據點帕魯並保留來源", () => {
   const instanceDir = fs.mkdtempSync(path.join(os.tmpdir(), "palserver-breeding-test-"));
   try {
     fs.writeFileSync(
@@ -79,16 +79,33 @@ test("getBreedingSnapshot:只攤平帕魯並保留主人來源", () => {
           generatedAt: "2026-07-18T00:00:00Z",
           levelSavMtime: "2026-07-18T00:00:00Z",
           players: [{
-            uid: "owner-1", name: "Alice", pals: [{ instanceId: "pal-1", characterId: "SheepBall" }],
+            uid: "owner-1", name: "Alice", pals: [
+              { instanceId: "pal-1", characterId: "SheepBall", slotIndex: 35 },
+              { instanceId: "base-pal-1", characterId: "Kitsunebi" },
+            ],
+          }],
+          basePals: [{
+            instanceId: "base-pal-1",
+            characterId: "Kitsunebi",
+            base: { id: "base-1", name: "Farm", guildId: "guild-1", guildName: "Builders", x: 100, y: 200 },
           }],
         },
       }),
     );
     const result = getBreedingSnapshot({ instanceDir } as DriverContext, "world");
     assert.equal(result.generatedAt, "2026-07-18T00:00:00Z");
-    assert.deepEqual(result.pals, [{
-      instanceId: "pal-1", characterId: "SheepBall", ownerUid: "owner-1", ownerName: "Alice",
-    }]);
+    assert.deepEqual(result.pals, [
+      {
+        instanceId: "base-pal-1",
+        characterId: "Kitsunebi",
+        base: { id: "base-1", name: "Farm", guildId: "guild-1", guildName: "Builders", x: 100, y: 200 },
+        ownerUid: "guild:guild-1",
+        ownerName: "Builders",
+      },
+      {
+        instanceId: "pal-1", characterId: "SheepBall", slotIndex: 35, ownerUid: "owner-1", ownerName: "Alice",
+      },
+    ]);
   } finally {
     fs.rmSync(instanceDir, { recursive: true, force: true });
   }

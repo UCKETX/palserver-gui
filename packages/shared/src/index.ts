@@ -736,6 +736,18 @@ export interface SavePalRow {
   /** 依所在容器分類:party = 玩家身上(隊伍)、palbox = 帕魯箱、base = 據點/其他容器;
    *  unknown = 玩家 .sav 解析不到容器對照(舊快照或解析失敗)。 */
   location: "party" | "palbox" | "base" | "unknown";
+  /** 所在容器的零基槽位;舊快照可能沒有此欄位。 */
+  slotIndex?: number | null;
+  /** 據點工作帕魯的位置;舊快照或非據點帕魯沒有此欄位。 */
+  base?: {
+    id: string;
+    name: string;
+    guildId: string;
+    guildName: string;
+    /** 世界座標(sav 座標系;web 端用 savToMap 轉地圖座標) */
+    x: number;
+    y: number;
+  };
 }
 
 export interface SaveItemStack {
@@ -825,6 +837,8 @@ export interface SavePlayersSnapshot {
   players: SavePlayerProfile[];
   /** 公會清單(較晚加入的欄位;舊快照沒有) */
   guilds?: SaveGuild[];
+  /** 據點工作容器中的完整帕魯個體;較晚加入,舊快照沒有。 */
+  basePals?: SavePalRow[];
 }
 
 /** 快照清單回應:玩家欄位齊全但不含 pals 明細(單一玩家詳情另查)。 */

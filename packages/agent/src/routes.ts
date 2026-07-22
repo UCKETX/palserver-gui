@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   COMMANDS,
   COOP_HOST_UID,
@@ -26,6 +26,7 @@ import {
   type InstanceDetail,
   type InstanceSummary,
   type KnownPlayer,
+  type MessageBridgePatch,
   type RconCommandsResponse,
   type DirEntry,
 } from "@palserver/shared";
@@ -36,6 +37,7 @@ import type { RestartSupervisor } from "./supervisor.js";
 import type { PublicMapPublisher } from "./public-map.js";
 import type { WebhooksService } from "./webhooks.js";
 import type { DiscordBotManager } from "./discord-bot-manager.js";
+import type { MessageBridgeService } from "./message-bridge.js";
 import { AGENT_VERSION, PORT, HOST, REQUIRE_TOKEN, WEB_ORIGINS, TLS_ENABLED, OPEN_BROWSER, ENV_LOCKED, IS_PORTABLE_EXE } from "./env.js";
 import { saveSettings } from "./settings.js";
 import { collectSpecs, reviewSpecs } from "./system-review.js";
@@ -259,6 +261,7 @@ export function registerRoutes(
   publicMap: PublicMapPublisher,
   webhooks: WebhooksService,
   discordBot: DiscordBotManager,
+  messageBridge: MessageBridgeService,
   auth: AuthContext,
   updateOps: UpdateOps,
 ): void {
@@ -2731,6 +2734,63 @@ export function registerRoutes(
     const rec = getOr404((req.params as { id: string }).id);
     return driverOf(rec).logSources(rec, ctxOf(rec));
   });
+
+  // Group chat <-> game message bridge. Secrets are write-only; webhook calls
+  // authenticate with the independently configured shared secret.
+  app.get("/api/instances/:id/message-bridge", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    return { config: messageBridge.getConfig(rec.id), status: messageBridge.getStatus(rec.id) };
+  });
+
+  const MessageBridgeLanguageSchema = z.enum(["zh-TW", "zh-CN", "en", "ja"]);
+  const MessageBridgeChannelBaseShape = {
+    id: z.string().trim().regex(/^[A-Za-z0-9_-]{1,64}$/),
+    enabled: z.boolean(),
+    adminIds: z.array(z.string().trim().min(1).max(128)).max(50),
+    language: MessageBridgeLanguageSchema,
+    relayGroupToGame: z.boolean(),
+    relayGameToGroup: z.boolean(),
+    notifyJoinLeave: z.boolean(),
+    notifyCapture: z.boolean(),
+    notifyDeath: z.boolean(),
+    relayPrefix: z.string().trim().max(20),
+    commandPrefix: z.string().trim().min(1).max(3),
+  };
+  const MessageBridgePatchSchema = z.object({
+    channels: z.array(z.discriminatedUnion("platform", [
+      z.object({ ...MessageBridgeChannelBaseShape, platform: z.literal("onebot"), wsUrl: z.string().trim().max(500), groupId: z.string().trim().max(100), accessToken: z.string().max(2000).optional() }),
+      z.object({ ...MessageBridgeChannelBaseShape, platform: z.literal("discord"), channelId: z.string().trim().max(100), proxyEnabled: z.boolean(), proxyUrl: z.string().trim().max(1000).optional(), token: z.string().max(2000).optional() }),
+      z.object({ ...MessageBridgeChannelBaseShape, platform: z.literal("telegram"), chatId: z.string().trim().max(100), token: z.string().max(2000).optional() }),
+      z.object({ ...MessageBridgeChannelBaseShape, platform: z.literal("webhook"), url: z.string().trim().max(1000), secret: z.string().max(2000).optional() }),
+    ])).max(32),
+  }).strict();
+
+  app.put("/api/instances/:id/message-bridge", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const patch = MessageBridgePatchSchema.parse(req.body) as MessageBridgePatch;
+    const config = await messageBridge.updateConfig(rec.id, patch);
+    return { config, status: messageBridge.getStatus(rec.id) };
+  });
+
+  const receiveBridgeWebhook = async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id, channelId } = req.params as { id: string; channelId?: string };
+    const rec = store.get(id);
+    if (!rec) return reply.code(404).send({ error: "instance not found" });
+    const body = z.object({
+      userId: z.string().max(128).optional(),
+      author: z.string().max(80).optional(),
+      text: z.string().trim().min(1).max(500),
+    }).parse(req.body);
+    const supplied = String(req.headers["x-palserver-secret"] ?? "");
+    try {
+      await messageBridge.receiveWebhook(rec.id, channelId, supplied, body.userId ?? "", body.author ?? "Webhook", body.text);
+      return { ok: true };
+    } catch (err) {
+      return reply.code(401).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+  app.post("/api/instances/:id/message-bridge/webhook", receiveBridgeWebhook);
+  app.post("/api/instances/:id/message-bridge/webhook/:channelId", receiveBridgeWebhook);
 
   app.get("/api/instances/:id/logs", { websocket: true }, (socket, req) => {
     const rec = store.get((req.params as { id: string }).id);

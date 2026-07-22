@@ -11,7 +11,8 @@
   },
   "scripts": {
     "build:shared": "pnpm --filter @palserver/shared build",
-    "build:deps": "pnpm build:shared && pnpm --filter @palserver/discord-bot build",
+    "build:message-cards": "node scripts/build-message-card-assets.mjs",
+    "build:deps": "pnpm build:shared && pnpm build:message-cards && pnpm --filter @palserver/discord-bot build",
     "dev:agent": "pnpm build:deps && pnpm --filter @palserver/agent dev",
     "dev:web": "pnpm build:shared && pnpm --filter @palserver/web dev",
     "build": "pnpm -r build",
@@ -22,6 +23,7 @@
   "devDependencies": {
     "esbuild": "^0.28.1",
     "postject": "1.0.0-alpha.6",
-    "resedit": "^2.0.3"
+    "resedit": "^2.0.3",
+    "sharp": "0.34.5"
   }
 }

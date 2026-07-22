@@ -83,13 +83,14 @@ export const ADMIN_HTML = `<!doctype html>
   .src.campaign{ background:rgba(148,99,0,.1); color:var(--warn); }
   .src.manual{ background:var(--soft); color:var(--muted); }
   td .mail{ font-size:12px; color:var(--muted); }
-  table{ width:100%; border-collapse:collapse; font-size:12.5px; }
+  table{ width:100%; min-width:820px; border-collapse:collapse; font-size:12.5px; }
   th{ text-align:left; color:var(--muted); font-weight:600; font-size:11px;
     letter-spacing:.03em; padding:6px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
   td{ padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:middle; }
   tbody tr:hover{ background:var(--soft); }
   tbody tr:last-child td{ border-bottom:0; }
   td.code{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-weight:600; white-space:nowrap; }
+  td.nowrap{ white-space:nowrap; }
   .tag{ display:inline-block; padding:1px 7px; border-radius:4px; font-size:11px; font-weight:600; white-space:nowrap; }
   .tag.on{ background:rgba(14,138,99,.1); color:var(--accent); }
   .tag.off{ background:var(--soft); color:var(--muted); }
@@ -415,12 +416,13 @@ export const ADMIN_HTML = `<!doctype html>
       tr.innerHTML =
         '<td class="code">'+esc(l.code)+'</td>' +
         '<td>'+targetCell(l)+'</td>' +
-        '<td class="muted">'+esc((l.createdAt||"").slice(0,10))+'</td>' +
-        '<td>'+esc(expiryText(l))+'</td>' +
+        '<td class="muted nowrap">'+esc((l.createdAt||"").slice(0,10))+'</td>' +
+        '<td class="nowrap">'+esc(expiryText(l))+'</td>' +
         '<td>'+statusTag(l)+'</td>' +
         '<td><span class="src '+esc(src)+'">'+esc(src)+'</span></td>' +
         '<td><div class="acts">' +
           '<button class="btn ghost sm" onclick="copy(\\''+l.code+'\\')">複製</button>' +
+          (l.expiresAt?'<button class="btn ghost sm" onclick="doExtend(\\''+l.code+'\\')">延長</button>':'') +
           (l.bound?'<button class="btn ghost sm" onclick="doReset(\\''+l.code+'\\')">解綁</button>':'') +
           '<button class="btn danger sm" onclick="doRevoke(\\''+l.code+'\\')">撤銷</button>' +
         '</div></td>';
@@ -457,6 +459,18 @@ export const ADMIN_HTML = `<!doctype html>
     if(!confirm("解除 " + code + " 的機器綁定?贊助者可換到別台啟用。")) return;
     try{ await api("/api/license/reset", {code:code}); toast("已解綁"); refresh(); }
     catch(e){ toast("失敗:"+e.message, true); }
+  }
+  async function doExtend(code){
+    var d = prompt("延長「" + code + "」效期幾天?(輸入負數可縮短)", "30");
+    if(d===null) return;
+    var days = parseInt(d, 10);
+    if(!days){ toast("請輸入有效天數", true); return; }
+    try{
+      var r = await api("/api/license/extend", {code:code, days:days});
+      if(r.note){ toast(r.note); }
+      else { toast("已" + (days>0?"延長":"縮短") + " " + Math.abs(days) + " 天 → " + String(r.expiresAt||"").slice(0,10)); }
+      refresh();
+    }catch(e){ toast("失敗:"+e.message, true); }
   }
   async function doRevoke(code){
     if(!confirm("撤銷(刪除)" + code + "?啟用中的機器下次重驗會失效,無法復原。")) return;

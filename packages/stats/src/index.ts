@@ -81,6 +81,7 @@ export default {
     if (req.method === "POST" && url.pathname === "/api/license/issue") return handleLicenseIssue(req, env);
     if (req.method === "POST" && url.pathname === "/api/license/list") return handleLicenseList(req, env);
     if (req.method === "POST" && url.pathname === "/api/license/reset") return handleLicenseReset(req, env);
+    if (req.method === "POST" && url.pathname === "/api/license/extend") return handleLicenseExtend(req, env);
     if (req.method === "POST" && url.pathname === "/api/license/delete") return handleLicenseDelete(req, env);
     if (req.method === "POST" && url.pathname === "/api/license/bmc-webhook") return handleBmcWebhook(req, env);
     // 愛發電(Afdian/ifdian.net):webhook 自動發碼/續期 + 自助查碼(無 email,靠訂單號換碼)
@@ -367,6 +368,7 @@ async function handleMapUnpublish(req: Request, env: Env): Promise<Response> {
  *  - /api/license/deactivate {code, machineId} — 自助解綁:只有目前綁定的那台能解(公開)
  *  - /api/license/issue      {tier?, features?, sponsor?, expiresAt?} — 發碼(管理)
  *  - /api/license/reset      {code} — 解除綁定,讓贊助者換機(管理,救援用)
+ *  - /api/license/extend     {code, days} — 手動延長/縮短效期(管理,客服補償;永久碼不動)
  * 管理端點需 header `X-Admin-Token: <ADMIN_TOKEN>`。
  * ──────────────────────────────────────────────────────────────────────── */
 
@@ -582,6 +584,37 @@ async function handleLicenseReset(req: Request, env: Env): Promise<Response> {
     .bind(code)
     .run();
   return json({ ok: true, reset: res.meta.changes ?? 0 });
+}
+
+/** 手動延長一張識別碼的效期(客服補償/救援);對 bmc / afdian / manual 皆通用(按 code,不看來源)。
+ *  days 加在 max(現在, 現有到期日) 之後 —— 已過期或當下才起算,續期不會被「過去的到期日」吃掉;
+ *  可傳負值縮短。永久碼(expires_at = null)不動,回 note 避免把「永久」誤改成有到期日。 */
+async function handleLicenseExtend(req: Request, env: Env): Promise<Response> {
+  if (!isAdmin(req, env)) return json({ error: "unauthorized" }, 401);
+  let body: { code?: unknown; days?: unknown };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    body = {};
+  }
+  const code = typeof body.code === "string" ? body.code.trim().toUpperCase() : "";
+  const days = Math.trunc(Number(body.days));
+  if (!code) return json({ error: "missing code" }, 400);
+  if (!Number.isFinite(days) || days === 0 || Math.abs(days) > 3650) {
+    return json({ error: "days 需為 ±1..3650 的整數" }, 400);
+  }
+  const row = await env.DB.prepare("SELECT expires_at FROM licenses WHERE code = ?1")
+    .bind(code)
+    .first<{ expires_at: string | null }>();
+  if (!row) return json({ error: "not found" }, 404);
+  if (row.expires_at === null) {
+    return json({ ok: true, code, expiresAt: null, note: "此碼為永久(無到期日),未變更" });
+  }
+  const now = Date.now();
+  const base = Date.parse(row.expires_at) > now ? Date.parse(row.expires_at) : now;
+  const expiresAt = new Date(base + days * 86400_000).toISOString();
+  await env.DB.prepare("UPDATE licenses SET expires_at = ?1 WHERE code = ?2").bind(expiresAt, code).run();
+  return json({ ok: true, code, expiresAt });
 }
 
 /* ────────────────────────────────────────────────────────────────────────

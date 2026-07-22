@@ -19,7 +19,14 @@ export function isBotLang(v: unknown): v is BotLang {
 
 /** 把遊戲 log 給的怕魯顯示名 / id 在地化成指定語言;查不到就原樣回傳(不同伺服器語言的 log 仍能顯示)。 */
 export function localizePalName(raw: string, lang: BotLang): string {
-  return PAL_NAMES[raw.trim().toLowerCase()]?.[lang] ?? raw;
+  const clean = raw.trim();
+  const withoutBoss = clean.replace(/^BOSS_/i, "");
+  const baseId = withoutBoss.replace(/_otomo$/i, "");
+  for (const candidate of [clean, withoutBoss, baseId]) {
+    const localized = PAL_NAMES[candidate.toLowerCase()]?.[lang];
+    if (localized) return localized;
+  }
+  return raw;
 }
 
 /**

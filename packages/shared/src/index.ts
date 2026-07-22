@@ -200,6 +200,54 @@ export interface InstanceDetail extends InstanceSummary {
   effectiveServerDir: string | null;
 }
 
+/* Group chat <-> game message bridge. */
+export type MessageBridgePlatform = "onebot" | "discord" | "telegram" | "webhook";
+export type MessageBridgeLanguage = BotLang;
+
+export interface MessageBridgeRules {
+  relayGroupToGame: boolean;
+  relayGameToGroup: boolean;
+  notifyJoinLeave: boolean;
+  notifyCapture: boolean;
+  notifyDeath: boolean;
+  relayPrefix: string;
+  commandPrefix: string;
+}
+
+interface MessageBridgeChannelBase extends MessageBridgeRules {
+  id: string;
+  platform: MessageBridgePlatform;
+  enabled: boolean;
+  adminIds: string[];
+  language: MessageBridgeLanguage;
+}
+
+export type MessageBridgeChannelConfig =
+  | (MessageBridgeChannelBase & { platform: "onebot"; wsUrl: string; groupId: string; accessTokenSet: boolean })
+  | (MessageBridgeChannelBase & { platform: "discord"; channelId: string; proxyEnabled: boolean; proxyUrlSet: boolean; tokenSet: boolean })
+  | (MessageBridgeChannelBase & { platform: "telegram"; chatId: string; tokenSet: boolean })
+  | (MessageBridgeChannelBase & { platform: "webhook"; url: string; secretSet: boolean });
+
+export interface MessageBridgeConfig {
+  channels: MessageBridgeChannelConfig[];
+}
+
+/** Secrets are write-only. Omit or send an empty string to preserve the saved value. */
+export type MessageBridgeChannelPatch =
+  | (MessageBridgeChannelBase & { platform: "onebot"; wsUrl: string; groupId: string; accessToken?: string })
+  | (MessageBridgeChannelBase & { platform: "discord"; channelId: string; proxyEnabled: boolean; proxyUrl?: string; token?: string })
+  | (MessageBridgeChannelBase & { platform: "telegram"; chatId: string; token?: string })
+  | (MessageBridgeChannelBase & { platform: "webhook"; url: string; secret?: string });
+
+export interface MessageBridgePatch {
+  channels: MessageBridgeChannelPatch[];
+}
+
+export interface MessageBridgeStatus {
+  running: boolean;
+  channels: Record<string, { connected: boolean; error: string | null }>;
+}
+
 export interface InstanceStats {
   /** 佔總算力 0–100%(正規化後,不再可破百)。null = 尚未累積兩筆有效取樣。 */
   cpuPercent: number | null;
@@ -241,6 +289,20 @@ export type ModComponent = "ue4ss" | "paldefender";
 
 /* ── PalDefender REST API: player detail (pals & inventory) ── */
 
+export interface PdPalIvs {
+  hp?: number;
+  attack?: number;
+  defense?: number;
+  workSpeed?: number;
+}
+
+export interface PdPalSouls {
+  hp?: number;
+  attack?: number;
+  defense?: number;
+  workSpeed?: number;
+}
+
 export interface PdPal {
   instanceId: string;
   palId: string;
@@ -250,6 +312,15 @@ export interface PdPal {
   shiny: boolean;
   /** which group it's in */
   location: "team" | "palbox" | "basecamp";
+  /** Fields below are available in newer PalDefender versions. */
+  ivs?: PdPalIvs;
+  passives?: string[];
+  activeSkills?: string[];
+  rank?: number;
+  condensedPals?: number;
+  souls?: PdPalSouls;
+  isBoss?: boolean;
+  isTower?: boolean;
 }
 
 export interface PdItemSlot {

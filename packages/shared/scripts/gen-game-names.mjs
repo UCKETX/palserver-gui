@@ -1,4 +1,4 @@
-// 由 packages/web/public/game-data/{pals,bosses,worldtree-bosses}.json 生成
+// 由 packages/web/public/game-data/{pals,humans,bosses,worldtree-bosses}.json 生成
 // packages/shared/src/game-names.generated.ts —— 讓 agent / bot(在 SEA 或 standalone,
 // 拿不到 web 的 game-data)也能把怕魯名、頭目名在地化成四語。
 // 單一真實來源是 web 的 game-data JSON;改名字改那邊、重跑 `pnpm --filter @palserver/shared gen:game-names`。
@@ -15,7 +15,21 @@ const pals = read("pals.json");
 const palMap = {};
 for (const p of pals) {
   const names = { en: p.name, ja: p.ja || p.name, "zh-TW": p.zh || p.name, "zh-CN": p["zh-CN"] || p.zh || p.name };
-  for (const key of [p.name, p.id]) {
+  for (const key of [p.name, p.id, p.ja, p.zh, p["zh-CN"], p.zhCN]) {
+    if (typeof key === "string" && key) palMap[key.toLowerCase()] = names;
+  }
+}
+
+// 群服互通的捕捉事件也会带可捕捉人类的内部 ID。
+const humans = read("humans.json");
+for (const human of humans) {
+  const names = {
+    en: human.name,
+    ja: human.ja || human.name,
+    "zh-TW": human.zh || human.name,
+    "zh-CN": human["zh-CN"] || human.zhCN || human.zh || human.name,
+  };
+  for (const key of [human.name, human.id, human.ja, human.zh, human["zh-CN"], human.zhCN]) {
     if (typeof key === "string" && key) palMap[key.toLowerCase()] = names;
   }
 }
@@ -45,7 +59,7 @@ for (const f of bossFiles) {
 }
 
 const body =
-  "// 自動生成,請勿手動編輯。改內容請改 packages/web/public/game-data/{pals,bosses,worldtree-bosses}.json,\n" +
+  "// 自動生成,請勿手動編輯。改內容請改 packages/web/public/game-data/{pals,humans,bosses,worldtree-bosses}.json,\n" +
   "// 再跑 `pnpm --filter @palserver/shared gen:game-names`。\n" +
   "import type { BotLang } from \"./game-names.js\";\n\n" +
   `export const PAL_NAMES: Record<string, Record<BotLang, string>> = ${JSON.stringify(palMap)};\n\n` +
@@ -53,4 +67,4 @@ const body =
 
 const outPath = path.join(repoRoot, "packages", "shared", "src", "game-names.generated.ts");
 fs.writeFileSync(outPath, body);
-console.log(`gen-game-names → ${path.relative(repoRoot, outPath)} (pals=${Object.keys(palMap).length} keys, bosses=${bossPoints.length} points)`);
+console.log(`gen-game-names → ${path.relative(repoRoot, outPath)} (names=${Object.keys(palMap).length} keys, bosses=${bossPoints.length} points)`);

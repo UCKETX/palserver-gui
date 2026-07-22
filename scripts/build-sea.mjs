@@ -91,6 +91,8 @@ if (fs.existsSync(webSrc)) {
 // 也要拿到條款(或條款網址)。發佈的壓縮檔因此必須含這一份。
 const licenseDst = path.join(releaseDir, "LICENSE.md");
 fs.copyFileSync(path.join(root, "LICENSE.md"), licenseDst);
+const thirdPartyDst = path.join(releaseDir, "THIRD_PARTY_LICENSES.md");
+fs.copyFileSync(path.join(root, "THIRD_PARTY_LICENSES.md"), thirdPartyDst);
 
 // 8) 清理中間檔
 fs.rmSync(blobPath, { force: true });

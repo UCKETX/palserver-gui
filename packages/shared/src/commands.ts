@@ -114,7 +114,7 @@ export const COMMANDS: CommandSpec[] = [
     name: "pgbroadcast",
     source: "paldefender",
     category: "server",
-    label: "廣播訊息(支援空白字元)",
+    label: "廣播訊息(支援中文)",
     args: [{ name: "message", label: "訊息", required: true, placeholder: "伺服器將在 5 分鐘後重啟" }],
   },
   {

@@ -21,11 +21,17 @@ import { execInPod, readFileInPod, writeFileBytesInPod, makeDirInPod, deletePath
  * Both are fetched from their GitHub latest release (URL overridable via env).
  */
 
-const GH_REPOS: Record<ModComponent, { repo: string; asset: RegExp; envUrl: string }> = {
+const GH_REPOS: Record<
+  ModComponent,
+  { repo: string; asset: RegExp; betaAsset?: RegExp; tag?: string; envUrl: string }
+> = {
   ue4ss: {
-    repo: "UE4SS-RE/RE-UE4SS",
-    /* UE4SS experimental-latest 資產名含 git 資訊(例:UE4SS_v3.0.1-1011-gb50986bd.zip)。 */
-    asset: /^UE4SS_v?[\d.]+(-[\d]+-g[0-9a-f]+)?\.zip$/i,
+    // Palworld 專用的 Okaetsu fork(experimental-palworld);與 PalSchema 用的同一份,
+    // 相容性比上游標準 UE4SS 好。此 release 是固定 tag(非版本號),用 tag 直接鎖定。
+    repo: "Okaetsu/RE-UE4SS",
+    tag: "experimental-palworld",
+    asset: /^UE4SS-Palworld\.zip$/i, // 標準版
+    betaAsset: /^UE4SS-Palworld_zDev\.zip$/i, // 開發版(含除錯主控台/工具,體積較大)
     envUrl: "PALSERVER_UE4SS_URL",
   },
   paldefender: {
@@ -38,6 +44,10 @@ const GH_REPOS: Record<ModComponent, { repo: string; asset: RegExp; envUrl: stri
 };
 
 const win64Dir = (root: string) => path.join(root, "Pal", "Binaries", "Win64");
+
+/** mod 下載逾時(毫秒):卡住的下載超過這個時間就中止並報錯,避免永遠掛著、累積佔連線。
+ *  大檔(UE4SS ~7MB)在正常網路幾秒完成;限速地區走鏡像。3 分鐘是留裕度的上限。 */
+const MOD_DOWNLOAD_TIMEOUT_MS = 180_000;
 
 /** Container/Pod 內的遊戲根目錄（docker/k8s Wine image = /palworld, 同 thijsvanloef 慣例）。 */
 const CONTAINER_INSTALL_DIR = "/palworld";
@@ -294,7 +304,20 @@ interface GitRelease {
   tag_name: string;
   prerelease: boolean;
   draft: boolean;
-  assets: { name: string; browser_download_url: string }[];
+  assets: { name: string; browser_download_url: string; updated_at?: string }[];
+}
+
+/** release 的顯示版本。固定 tag 的元件(如 UE4SS Okaetsu experimental-palworld)tag 不會變,
+ *  改用「標準資產的建置日期(updated_at)」當版本 —— 這樣才標得出版本、且 Okaetsu 重新上傳新
+ *  建置時(同 tag、新日期)偵測得到「有新版」。非固定 tag 的元件照用 tag_name。 */
+function releaseVersion(component: ModComponent, release: GitRelease): string {
+  const cfg = GH_REPOS[component];
+  if (cfg.tag) {
+    const asset = release.assets.find((a) => cfg.asset.test(a.name));
+    const date = asset?.updated_at?.slice(0, 10); // YYYY-MM-DD
+    return date ? `${cfg.tag} (${date})` : cfg.tag;
+  }
+  return release.tag_name;
 }
 
 /** 各元件的最新穩定版 tag(6 小時記憶體快取;查詢失敗回 null,不丟錯)。
@@ -310,11 +333,15 @@ export async function latestModVersions(): Promise<Record<ModComponent, string |
       continue;
     }
     try {
-      const { repo } = GH_REPOS[component];
-      const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+      const cfg = GH_REPOS[component];
+      // 固定 tag 的元件(如 UE4SS Okaetsu fork)直接查該 tag,否則查 latest。
+      const endpoint = cfg.tag
+        ? `https://api.github.com/repos/${cfg.repo}/releases/tags/${cfg.tag}`
+        : `https://api.github.com/repos/${cfg.repo}/releases/latest`;
+      const res = await fetch(endpoint, {
         headers: { "user-agent": "palserver-gui", accept: "application/vnd.github+json" },
       });
-      const tag = res.ok ? ((await res.json()) as GitRelease).tag_name : null;
+      const tag = res.ok ? releaseVersion(component, (await res.json()) as GitRelease) : null;
       latestCache.set(component, { tag, at: Date.now() });
       out[component] = tag;
     } catch {
@@ -329,14 +356,16 @@ async function resolveDownload(
   component: ModComponent,
   channel: "stable" | "beta",
 ): Promise<{ version: string; url: string }> {
-  const { repo, asset, envUrl } = GH_REPOS[component];
+  const { repo, asset, betaAsset, tag, envUrl } = GH_REPOS[component];
   const override = process.env[envUrl];
   if (override) return { version: "custom", url: override };
 
-  // "latest" excludes pre-releases; for beta we scan the release list and take
-  // the newest, whether it's a pre-release or stable.
-  const endpoint =
-    channel === "beta"
+  // 固定 tag 的元件(UE4SS Okaetsu fork = experimental-palworld)兩個通道都用同一 release,
+  // 靠不同資產區分(stable=標準版、beta=zDev 開發版)。否則:stable="latest"(排除 pre-release)、
+  // beta 掃 release 清單取最新(含 pre-release)。
+  const endpoint = tag
+    ? `https://api.github.com/repos/${repo}/releases/tags/${tag}`
+    : channel === "beta"
       ? `https://api.github.com/repos/${repo}/releases?per_page=15`
       : `https://api.github.com/repos/${repo}/releases/latest`;
   const res = await fetch(endpoint, {
@@ -345,19 +374,20 @@ async function resolveDownload(
   if (!res.ok) throw new Error(`GitHub release lookup failed for ${repo}: HTTP ${res.status}`);
 
   const body = await res.json();
-  const release: GitRelease | undefined = channel === "beta"
-    ? (body as GitRelease[]).filter((r) => !r.draft).at(0)
-    : (body as GitRelease);
+  const release: GitRelease | undefined =
+    !tag && channel === "beta" ? (body as GitRelease[]).filter((r) => !r.draft).at(0) : (body as GitRelease);
   if (!release) throw new Error(`no releases found for ${repo}`);
 
-  const match = release.assets.find((a) => asset.test(a.name));
+  // beta 通道若有專屬資產(如 UE4SS zDev)就用它,否則沿用標準資產。
+  const pattern = channel === "beta" && betaAsset ? betaAsset : asset;
+  const match = release.assets.find((a) => pattern.test(a.name));
   if (!match) {
     throw new Error(
-      `no matching asset in ${repo}@${release.tag_name} (looked for ${asset}); ` +
+      `no matching asset in ${repo}@${release.tag_name} (looked for ${pattern}); ` +
         `set ${envUrl} to pin a download URL`,
     );
   }
-  return { version: release.tag_name, url: match.browser_download_url };
+  return { version: releaseVersion(component, release), url: match.browser_download_url };
 }
 
 export async function installComponent(
@@ -365,14 +395,34 @@ export async function installComponent(
   ctx: DriverContext,
   component: ModComponent,
   channel: "stable" | "beta" = "stable",
+  /** 直接指定下載 URL(繞過 GitHub release 解析);給限速地區走鏡像用。資產格式須與該元件相同。 */
+  urlOverride?: string,
 ): Promise<{ version: string }> {
   const status = await getModsStatus(rec, ctx);
   if (!status.supported) {
     throw Object.assign(new Error(status.reason ?? "mods unsupported"), { statusCode: 409 });
   }
 
-  const { version, url } = await resolveDownload(component, channel);
-  const res = await fetch(url, { redirect: "follow" });
+  const { version, url } = urlOverride
+    ? { version: "custom", url: urlOverride }
+    : await resolveDownload(component, channel);
+  // 下載加逾時:沒有 signal 時,連線卡住(慢速 CDN / 對端不回)會讓 fetch 永遠掛著,
+  // 且 HTTP 客戶端斷線也不會中止 server 端下載 → 卡住的下載會累積、佔住連線。逾時就中止並報錯。
+  let res: Response;
+  try {
+    res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(MOD_DOWNLOAD_TIMEOUT_MS) });
+  } catch (e) {
+    if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) {
+      throw Object.assign(
+        new Error(
+          `下載逾時(超過 ${Math.round(MOD_DOWNLOAD_TIMEOUT_MS / 1000)}s):連線過慢或對端無回應。` +
+            `限速地區可改用鏡像(install 帶 url,或設 ${GH_REPOS[component].envUrl})。來源:${url}`,
+        ),
+        { statusCode: 504 },
+      );
+    }
+    throw e;
+  }
   if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`);
   const zipBuffer = Buffer.from(await res.arrayBuffer());
 

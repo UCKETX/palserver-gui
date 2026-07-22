@@ -338,9 +338,47 @@ export function CustomPalModal({
             </div>
           </div>
 
-          <div className="grid gap-2 sm:grid-cols-4">
-            {/* 改為濃縮隻數,因 PalDefender CondensedPals 吃消耗數量而非星等;max 對應 schema 已放寬。 */}
-            {numField(t("濃縮隻數"), stars, setStars, 999)}
+          <div>
+            <div className="mb-1 grid gap-2 sm:grid-cols-5">
+              <label className="flex min-w-0 flex-col gap-1 text-xs font-bold text-ink-muted">
+                {t("濃縮隻數")}
+                <input
+                  className={inputCls}
+                  type="number"
+                  min={0}
+                  max={48}
+                  value={stars}
+                  placeholder="—"
+                  onChange={(e) => setStars(e.target.value)}
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                { stars: 0, count: 0, label: "☆0" },
+                { stars: 1, count: 4, label: "☆1" },
+                { stars: 2, count: 12, label: "☆2" },
+                { stars: 3, count: 24, label: "☆3" },
+                { stars: 4, count: 48, label: "☆4" },
+              ].map((s) => (
+                <button
+                  key={s.stars}
+                  type="button"
+                  className={`rounded-full border-2 px-3 py-1 text-xs font-bold transition ${
+                    Number(stars) === s.count
+                      ? "border-pal bg-pal text-white"
+                      : "border-line bg-card-soft text-ink hover:border-pal"
+                  }`}
+                  onClick={() => setStars(String(s.count))}
+                >
+                  <FiStar className={`mr-1 inline size-3 ${s.stars === 0 ? "opacity-30" : ""}`} />
+                  {s.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1 text-[11px] text-ink-muted">
+              {t("按星等快速填入累積濃縮數量，也可直接手動輸入。")}
+            </p>
           </div>
 
           <div>

@@ -17,6 +17,8 @@ export type Tab =
   | "breeding"
   | "saves"
   | "restart"
+  | "webhooks"
+  | "discord-bot"
   | "bridge"
   | "instance";
 
@@ -37,6 +39,8 @@ export const TABS: { id: Tab; label: string }[] = [
   { id: "breeding", label: "配種計算" },
   { id: "saves", label: "存檔備份" },
   { id: "restart", label: "伺服器重啟" },
+  { id: "webhooks", label: "Webhook" },
+  { id: "discord-bot", label: "Discord Bot" },
   { id: "bridge", label: "群服互通" },
   { id: "instance", label: "設定" },
 ];

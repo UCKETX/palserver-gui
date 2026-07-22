@@ -356,7 +356,6 @@ function collectPals(pals: Record<string, unknown> | undefined, location: PdPal[
   return Object.entries(pals).map(([instanceId, raw]) => {
     const p = (raw ?? {}) as Record<string, unknown>;
     const palId = String(p.PalID ?? "");
-    // BOSS 判定:PD 1.8+ 直接给 IsBoss;老版本或塔主从 palId 前缀 / 内部标记推断。
     const isBoss = Boolean(p.IsBoss ?? p.IsBOSS) || /^BOSS_/i.test(palId) || Boolean(p.IsTowerBoss ?? p.IsTower);
     const isTower = Boolean(p.IsTower ?? p.IsTowerBoss) && !isBoss;
     return {
@@ -379,7 +378,7 @@ function collectPals(pals: Record<string, unknown> | undefined, location: PdPal[
   });
 }
 
-/** 兼容 PD 不同版本的 IVs 字段名:IVs 对象、Talent_HP/Shot/Melee/Defense。 */
+/** Supports the field variants returned by different PalDefender releases. */
 export function readPalIvs(p: Record<string, unknown>): PdPal["ivs"] | undefined {
   const obj = p.IVs;
   if (obj && typeof obj === "object") {
@@ -394,24 +393,22 @@ export function readPalIvs(p: Record<string, unknown>): PdPal["ivs"] | undefined
     if (Object.keys(out).length) return out;
   }
   const hp = readNumber(p.Talent_HP ?? p.TalentHP ?? p.TalentHp);
-  const atk = readNumber(p.Talent_Shot ?? p.TalentShot ?? p.TalentAttack ?? p.Talent_Melee ?? p.TalentMelee);
-  const def = readNumber(p.Talent_Defense ?? p.TalentDefense);
-  if (hp == null && atk == null && def == null) return undefined;
-  return { hp: hp ?? undefined, attack: atk ?? undefined, defense: def ?? undefined };
+  const attack = readNumber(p.Talent_Shot ?? p.TalentShot ?? p.TalentAttack ?? p.Talent_Melee ?? p.TalentMelee);
+  const defense = readNumber(p.Talent_Defense ?? p.TalentDefense);
+  if (hp == null && attack == null && defense == null) return undefined;
+  return { hp, attack, defense };
 }
 
 function readSouls(p: Record<string, unknown>): PdPal["souls"] | undefined {
   const obj = p.Souls ?? p.PalSouls;
-  if (obj && typeof obj === "object") {
-    const o = obj as Record<string, unknown>;
-    const out: NonNullable<PdPal["souls"]> = {};
-    if (readNumber(o.HP) != null) out.hp = readNumber(o.HP);
-    if (readNumber(o.Attack) != null) out.attack = readNumber(o.Attack);
-    if (readNumber(o.Defense) != null) out.defense = readNumber(o.Defense);
-    if (readNumber(o.WorkSpeed) != null) out.workSpeed = readNumber(o.WorkSpeed);
-    if (Object.keys(out).length) return out;
-  }
-  return undefined;
+  if (!obj || typeof obj !== "object") return undefined;
+  const o = obj as Record<string, unknown>;
+  const out: NonNullable<PdPal["souls"]> = {};
+  if (readNumber(o.HP) != null) out.hp = readNumber(o.HP);
+  if (readNumber(o.Attack) != null) out.attack = readNumber(o.Attack);
+  if (readNumber(o.Defense) != null) out.defense = readNumber(o.Defense);
+  if (readNumber(o.WorkSpeed) != null) out.workSpeed = readNumber(o.WorkSpeed);
+  return Object.keys(out).length ? out : undefined;
 }
 
 function readNumber(value: unknown): number | undefined {

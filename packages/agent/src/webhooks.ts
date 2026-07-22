@@ -5,6 +5,7 @@ import {
   WEBHOOK_SPEC_VERSION,
   WEBHOOK_HEADERS,
   eventMatches,
+  toDiscordPayload,
   type WebhookConfig,
   type WebhookConfigPublic,
   type WebhookEnvelope,
@@ -28,7 +29,7 @@ import { featureEnabled } from "./license.js";
  * 即使有人繞過 UI 直接改 JSON,未授權也不會送出。
  */
 
-const FETCH_TIMEOUT_MS = 8_000;
+const FETCH_TIMEOUT_MS = 15_000; // Discord/遠端經 Tailscale 偶有延遲,給多點餘裕(失敗仍有重試佇列)
 const RETRY_TICK_MS = 30_000;
 const MAX_ATTEMPTS = 6;
 const MAX_QUEUE_AGE_MS = 24 * 60 * 60_000;
@@ -100,71 +101,6 @@ const genId = (prefix: string, bytes = 12) => `${prefix}_${crypto.randomBytes(by
 /** HMAC-SHA256(secret, `${timestamp}.${body}`) 的 hex。 */
 export function signBody(secret: string, timestamp: string, body: string): string {
   return crypto.createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex");
-}
-
-/** 把信封轉成 Discord Incoming Webhook 的 embed payload(不簽章)。 */
-export function toDiscordPayload(env: WebhookEnvelope): unknown {
-  const d = env.data as Record<string, unknown>;
-  const s = (k: string) => (typeof d[k] === "string" ? (d[k] as string) : "");
-  const COLOR: Partial<Record<WebhookEventType, number>> = {
-    "player.join": 0x57d38c,
-    "player.leave": 0x9aa4b2,
-    "player.chat": 0x5fb0ff,
-    "player.death": 0xff6b6b,
-    "player.capture": 0xc792ea,
-    "server.running": 0x57d38c,
-    "server.exited": 0x9aa4b2,
-    "server.crash": 0xff5c7a,
-    "server.restart": 0xffcf5f,
-    "server.startup_failure": 0xff5c7a,
-    "boss.killed": 0xf1c40f,
-    "boss.respawn": 0xf1c40f,
-    "backup.completed": 0x57d38c,
-    "backup.failed": 0xff6b6b,
-    "webhook.ping": 0x888888,
-  };
-  const text: Record<string, { title: string; description: string }> = {
-    "player.join": { title: "玩家加入", description: `**${s("name")}** 加入了伺服器` },
-    "player.leave": { title: "玩家離開", description: `**${s("name")}** 離開了伺服器` },
-    "player.chat": { title: "聊天", description: `**${s("name")}**〔${s("channel")}〕${s("message")}` },
-    "player.death": {
-      title: "玩家死亡",
-      description: d.pal
-        ? `**${s("name")}** 被野生 ${s("pal")} 擊殺`
-        : `**${s("name")}** 死亡:${s("cause")}`,
-    },
-    "player.capture": { title: "捕捉帕魯", description: `**${s("name")}** 捕捉了 ${s("pal")}` },
-    "server.starting": { title: "伺服器啟動中", description: "" },
-    "server.running": { title: "伺服器已上線", description: s("version") },
-    "server.exited": { title: "伺服器已停止", description: "" },
-    "server.crash": { title: "伺服器崩潰", description: s("detail") },
-    "server.restart": {
-      title: "伺服器重啟",
-      description: `原因:${s("reason")}(${d.ok ? "成功" : "失敗"})`,
-    },
-    "server.startup_failure": { title: "啟動失敗", description: s("detail") },
-    "server.update_available": {
-      title: "有新版本",
-      description: `${s("current")} → ${s("latest")}`,
-    },
-    "boss.killed": { title: "頭目被擊殺", description: s("name") },
-    "boss.respawn": { title: "頭目重生", description: s("name") },
-    "backup.completed": { title: "備份完成", description: s("path") },
-    "backup.failed": { title: "備份失敗", description: s("error") },
-    "webhook.ping": { title: "Webhook 測試", description: "設定成功,這是一則測試訊息。" },
-  };
-  const t = text[env.type] ?? { title: env.type, description: "" };
-  return {
-    embeds: [
-      {
-        title: t.title,
-        description: t.description || undefined,
-        color: COLOR[env.type] ?? 0x5865f2,
-        timestamp: env.occurredAt,
-        footer: { text: env.instance.name },
-      },
-    ],
-  };
 }
 
 /** 建 generic 格式要送的 headers(含 HMAC 簽章)。 */
@@ -262,13 +198,14 @@ export class WebhooksService {
    *  (含記錄/入佇列),測試可 await。 */
   dispatchEvent(ev: AgentEvent): Promise<void> {
     if (!this.featureEnabledFn()) return Promise.resolve();
-    return this.serialize(ev.instanceId, async () => {
-      const cfg = readConfig(this.store, ev.instanceId);
-      const matched = cfg.webhooks.filter((w) => w.enabled && eventMatches(w.events, ev.type));
-      if (!matched.length) return;
-      const name = this.store.get(ev.instanceId)?.name ?? ev.instanceId;
-      const rt = readRuntime(this.store, ev.instanceId);
-      for (const wh of matched) {
+    const cfg = readConfig(this.store, ev.instanceId);
+    const matched = cfg.webhooks.filter((w) => w.enabled && eventMatches(w.events, ev.type));
+    if (!matched.length) return Promise.resolve();
+    const name = this.store.get(ev.instanceId)?.name ?? ev.instanceId;
+    // 每個 webhook 平行送出、且「不在網路請求期間佔序列化鎖」——一筆慢(甚至 timeout)不會拖垮
+    // 其他 webhook 或後續事件;只在寫 runtime 狀態(記錄/入佇列)時才短暫佔鎖避免並行互蓋。
+    return Promise.all(
+      matched.map(async (wh) => {
         const env: WebhookEnvelope = {
           id: genId(wh.id), // delivery id 以 webhook id 為前綴,方便回查該 webhook 的送出紀錄
           type: ev.type,
@@ -278,19 +215,22 @@ export class WebhooksService {
           data: ev.data,
         };
         const res = await deliver(wh, env, this.agentVersion);
-        this.record(rt, env, res, 1);
-        if (!res.ok) {
-          rt.queue.push({
-            webhookId: wh.id,
-            envelope: env,
-            attempts: 1,
-            nextAttemptAt: Date.now() + backoffMs(1),
-            firstTriedAt: Date.now(),
-          });
-        }
-      }
-      writeRuntime(this.store, ev.instanceId, rt);
-    });
+        await this.serialize(ev.instanceId, async () => {
+          const rt = readRuntime(this.store, ev.instanceId);
+          this.record(rt, env, res, 1);
+          if (!res.ok) {
+            rt.queue.push({
+              webhookId: wh.id,
+              envelope: env,
+              attempts: 1,
+              nextAttemptAt: Date.now() + backoffMs(1),
+              firstTriedAt: Date.now(),
+            });
+          }
+          writeRuntime(this.store, ev.instanceId, rt);
+        });
+      }),
+    ).then(() => {});
   }
 
   private async retryTick(): Promise<void> {
@@ -444,12 +384,21 @@ export class WebhooksService {
     });
   }
 
-  /** log-event-tracker 的 wants(id) 述詞:已授權且有啟用中的 webhook 訂閱 player log 事件。 */
-  wantsLogEvents(id: string): boolean {
+  /** 已授權且有啟用中的 webhook 訂閱到 `types` 任一事件 —— 背景 tracker 用它決定要不要追。 */
+  private wantsAny(id: string, types: WebhookEventType[]): boolean {
     if (!this.featureEnabledFn()) return false;
-    const LOG_EVENTS: WebhookEventType[] = ["player.chat", "player.death", "player.capture"];
     return readConfig(this.store, id).webhooks.some(
-      (w) => w.enabled && LOG_EVENTS.some((t) => eventMatches(w.events, t)),
+      (w) => w.enabled && types.some((t) => eventMatches(w.events, t)),
     );
+  }
+
+  /** log-event-tracker 的 wants(id):訂閱 player log 事件(chat/death/capture)。 */
+  wantsLogEvents(id: string): boolean {
+    return this.wantsAny(id, ["player.chat", "player.death", "player.capture"]);
+  }
+
+  /** boss-event-tracker 的 wants(id):訂閱 boss 事件(killed/respawn)。 */
+  wantsBossEvents(id: string): boolean {
+    return this.wantsAny(id, ["boss.killed", "boss.respawn"]);
   }
 }

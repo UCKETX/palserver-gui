@@ -10,6 +10,7 @@ import type { InstanceRecord } from "./store.js";
 import { renderPalWorldSettingsIni, diffIniAgainstSnapshot } from "./settings-ini.js";
 import { mergeEnginePatch } from "./engine-ini-merge.js";
 import { rest } from "./restapi.js";
+import { emitAgentEvent } from "./events.js";
 import { DATA_DIR } from "./env.js";
 
 const execFileP = promisify(execFile);
@@ -20,6 +21,28 @@ const DEPOTDOWNLOADER_VERSION = "3.4.0";
 const IS_WIN = process.platform === "win32";
 export const SERVER_LAUNCHER = IS_WIN ? "PalServer.exe" : "PalServer.sh";
 const CONFIG_PLATFORM_DIR = IS_WIN ? "WindowsServer" : "LinuxServer";
+
+/** Linux ARM64(樹莓派/NanoPi/Ampere…):官方只出 x86-64 伺服器執行檔,
+ * 直接 exec 會被核心拒絕(shell 誤當腳本解析、噴 Syntax error),
+ * 必須經 x86-64→ARM64 動態轉譯器啟動。 */
+const IS_LINUX_ARM64 = process.platform === "linux" && process.arch === "arm64";
+
+/** 找 x86-64 轉譯器。首選 FEX(實測 Palworld 可跑滿速;box64 缺 x86-64
+ * libgcc_s 會啟動失敗,留作已自備函式庫者的後備)。每種都先看 agent tools
+ * 目錄(免 root 手動安裝可放這),其次 PATH(發行版套件)。
+ * FEX 另需 x86-64 rootfs:跑一次 `FEXRootFSFetcher -y -x` 抓好即可。 */
+function findX64Emulator(): string | null {
+  const candidates = [
+    path.join(DATA_DIR, "tools", "fex", "FEXInterpreter"),
+    path.join(DATA_DIR, "tools", "box64", "box64"),
+  ];
+  for (const name of ["FEXInterpreter", "box64"]) {
+    for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+      if (dir) candidates.push(path.join(dir, name));
+    }
+  }
+  return candidates.find((p) => fs.existsSync(p)) ?? null;
+}
 
 /** The dedicated-server root for an instance: an adopted install if
  * configured, otherwise the agent-managed install under instanceDir. */
@@ -212,8 +235,17 @@ const depotDownloaderDir = () => path.join(DATA_DIR, "tools", `depotdownloader-$
  * 先落到暫存目錄、驗證 exe 存在且大小合理,再整目錄換名上位 —— 半套下載/解壓
  * (斷線、磁碟滿、防毒攔截)不會留下「看似存在其實損毀」的快取,那會讓之後
  * 每一次安裝/更新都敗在同一顆壞 exe 上(症狀:exit 0xE0434352)。 */
+/** Node 的 process.arch → DepotDownloader release asset 的 arch 後綴。
+ * macOS/Windows 官方只出 x64/arm64;linux 另有 arm(32-bit,樹莓派舊機型)。 */
+function depotDownloaderArchSuffix(platform: "windows" | "macos" | "linux"): string {
+  if (process.arch === "arm64") return "arm64";
+  if (process.arch === "arm" && platform === "linux") return "arm";
+  return "x64";
+}
+
 async function ensureDepotDownloader(): Promise<string> {
   const platform = IS_WIN ? "windows" : process.platform === "darwin" ? "macos" : "linux";
+  const arch = depotDownloaderArchSuffix(platform);
   const toolsDir = depotDownloaderDir();
   const binName = IS_WIN ? "DepotDownloader.exe" : "DepotDownloader";
   const bin = path.join(toolsDir, binName);
@@ -224,7 +256,7 @@ async function ensureDepotDownloader(): Promise<string> {
   fs.mkdirSync(tmpDir, { recursive: true });
   const url =
     `https://github.com/SteamRE/DepotDownloader/releases/download/` +
-    `DepotDownloader_${DEPOTDOWNLOADER_VERSION}/DepotDownloader-${platform}-x64.zip`;
+    `DepotDownloader_${DEPOTDOWNLOADER_VERSION}/DepotDownloader-${platform}-${arch}.zip`;
   const zipPath = path.join(tmpDir, "dd.zip");
   const res = await fetch(url);
   if (!res.ok) throw new Error(`failed to download DepotDownloader: HTTP ${res.status}`);
@@ -309,7 +341,11 @@ async function killLeftoverProcessesUnder(
         [
           "-NoProfile",
           "-Command",
-          `Get-Process | Where-Object { $_.Path -like '${psRoot}\\*' } | Select-Object Id,ProcessName | ConvertTo-Json -Compress`,
+          // 用 Win32_Process(CIM)讀 ExecutablePath,不要用 Get-Process 的 .Path:
+          // .Path 需開啟目標行程控制代碼讀 MainModule,對某些行程(權限/位元差異)會拋錯而被
+          // 靜默略過 → 殘留的 PalServer 漏抓、繼續鎖住 dwmapi.dll 擋住更新(長期的「沒真正關掉」bug)。
+          // CIM 直接讀核心行程記錄,列舉更可靠、涵蓋到那些漏抓的殘留行程。
+          `Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '${psRoot}\\*' } | ForEach-Object { [pscustomobject]@{ Id = $_.ProcessId; ProcessName = $_.Name } } | ConvertTo-Json -Compress`,
         ],
         { windowsHide: true, timeout: 15000 },
         (err, out) => (err ? reject(err) : resolve(out)),
@@ -707,6 +743,61 @@ async function getNativeStatus(
   return { status: "created", runtimeId: null };
 }
 
+// ── 精準的伺服器生命週期 webhook 事件(取代 supervisor 30s 輪詢的粗略判斷)──
+// starting:spawn 當下發。running:啟動後探測遊戲 REST /info,第一次通=真的可連才發。
+// exited/crash:child exit 事件即時發,靠 expectedStops 分辨「我們要求的停止」vs 崩潰。
+// agent 重啟後 detached 存活的行程沒有 child handle → 由 supervisor 輪詢兜底(見 supervisor.ts)。
+type ServerChild = ReturnType<typeof spawn>;
+const serverChildren = new Map<string, ServerChild>();
+const expectedStops = new Set<string>();
+const readyProbes = new Map<string, NodeJS.Timeout>();
+const READY_PROBE_MS = 3_000;
+const READY_PROBE_MAX = 40; // 逾此(~2 分鐘)即使 REST 未通也兜底發一次 running
+
+/** child 結束時判定「正常停止」vs「崩潰」:被我們要求停 或 exit code 0 = 正常;被 signal 砍
+ *  或 exit code 非 0 = 崩潰。純函式,方便測試。 */
+export function classifyServerExit(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  expected: boolean,
+): "exited" | "crash" {
+  if (expected) return "exited";
+  if (signal) return "crash";
+  return code === 0 ? "exited" : "crash";
+}
+
+/** 啟動後每 3s 探測遊戲 REST /info;第一次成功 = 遊戲真的可連 → 發 server.running。
+ *  逾時(REST/RCON 未開)兜底發一次。行程中途結束由 exit handler 取消本探測。 */
+function startReadyProbe(rec: InstanceRecord): void {
+  const existing = readyProbes.get(rec.id);
+  if (existing) clearInterval(existing);
+  let attempts = 0;
+  const timer = setInterval(() => {
+    void (async () => {
+      attempts += 1;
+      let version: string | undefined;
+      let reachable = false;
+      try {
+        const info = await rest.info(rec);
+        reachable = !!info;
+        version = info?.version;
+      } catch {
+        reachable = false;
+      }
+      if (!readyProbes.has(rec.id)) return; // 已被 exit handler 取消
+      if (reachable || attempts >= READY_PROBE_MAX) {
+        clearInterval(timer);
+        readyProbes.delete(rec.id);
+        if (serverChildren.has(rec.id)) {
+          emitAgentEvent("server.running", rec.id, version ? { version } : {});
+        }
+      }
+    })();
+  }, READY_PROBE_MS);
+  timer.unref();
+  readyProbes.set(rec.id, timer);
+}
+
 async function spawnServer(rec: InstanceRecord, ctx: DriverContext): Promise<void> {
   writeIni(rec, ctx);
   const root = serverRoot(rec, ctx);
@@ -733,13 +824,37 @@ async function spawnServer(rec: InstanceRecord, ctx: DriverContext): Promise<voi
   // DepotDownloader(與從別處複製來的 adopt 安裝)在 Linux 不會保留可執行位元。
   if (!IS_WIN) fs.chmodSync(exe, 0o755);
 
+  // 繞過 PalServer.sh 直接啟動 shipping 時,要補做該腳本的開場工作:把 Steam 的
+  // linux64/steamclient.so 放到執行檔旁,否則伺服器載入不到 steamclient。
+  if (useShipping && !IS_WIN) {
+    const scSrc = path.join(root, "linux64", "steamclient.so");
+    const scDst = path.join(root, "Pal", "Binaries", "Linux", "steamclient.so");
+    if (fs.existsSync(scSrc) && !fs.existsSync(scDst)) fs.copyFileSync(scSrc, scDst);
+  }
+
+  // Linux ARM64:x86-64 執行檔須經轉譯器啟動(見 IS_LINUX_ARM64 註解)。
+  let spawnExe = exe;
+  let spawnArgs = args;
+  if (IS_LINUX_ARM64) {
+    const emulator = findX64Emulator();
+    if (!emulator) {
+      throw new Error(
+        "這台是 ARM64 主機,而 Palworld 官方伺服器只有 x86-64 版,需要 FEX 轉譯器才能啟動 — " +
+          `請安裝 FEX(ppa:fex-emu/fex)並跑一次 FEXRootFSFetcher -y -x 後重試;` +
+          `免 root 安裝可把 FEXInterpreter 等執行檔放到 ${path.join(DATA_DIR, "tools", "fex")}/`,
+      );
+    }
+    spawnArgs = [exe, ...args];
+    spawnExe = emulator;
+  }
+
   fs.appendFileSync(
     logFile(ctx),
-    `[palserver] starting ${useShipping ? "PalServer (shipping, 日誌已擷取)" : "PalServer launcher(找不到 shipping,遊戲日誌將為空)"}...\n`,
+    `[palserver] starting ${useShipping ? "PalServer (shipping, 日誌已擷取)" : "PalServer launcher(找不到 shipping,遊戲日誌將為空)"}${IS_LINUX_ARM64 ? "(經 x86-64 轉譯器)" : ""}...\n`,
   );
   // 遊戲 console 輸出 → game.log(每次開機重來一份,UE 本來也是一次一份)。
   const gameOut = fs.openSync(gameLogFile(ctx), "w");
-  const child = spawn(exe, args, {
+  const child = spawn(spawnExe, spawnArgs, {
     cwd: root,
     detached: true, // survives agent restarts; we track it via the pid file
     stdio: ["ignore", gameOut, gameOut],
@@ -751,6 +866,54 @@ async function spawnServer(rec: InstanceRecord, ctx: DriverContext): Promise<voi
   // 記下 PID + 建立時間當身分指紋,之後 isAlive/停止前都靠它辨認,避免 PID 重用誤殺。
   const id = await processIdentity(child.pid).catch(() => null);
   writePidRecord(ctx, { pid: child.pid, startedAt: id?.startedAt ?? null });
+
+  // 精準生命週期:spawn = starting;掛 exit 事件;啟動 REST readiness 探測。
+  emitAgentEvent("server.starting", rec.id, {});
+  serverChildren.set(rec.id, child);
+  child.on("exit", (code, signal) => {
+    if (serverChildren.get(rec.id) === child) serverChildren.delete(rec.id);
+    const probe = readyProbes.get(rec.id);
+    if (probe) {
+      clearInterval(probe);
+      readyProbes.delete(rec.id);
+    }
+    if (expectedStops.delete(rec.id)) {
+      // 我們主動要求的停止(且已 sweep 殘留行程)→ 直接發 exited。
+      emitAgentEvent("server.exited", rec.id, { code: code ?? undefined });
+    } else {
+      // 非預期退出:child exit 未必代表伺服器真的掛了(Windows 上 shipping 可能 spawn 真正的
+      // 伺服器子行程後自己退出、或啟動途中 re-exec 換 PID)。先確認再發,避免誤報「已停止」。
+      void verifyThenEmitExit(rec, ctx, code, signal);
+    }
+  });
+  startReadyProbe(rec);
+}
+
+/** child exit 後,以 getNativeStatus(GUI 也用它,是可靠來源)確認伺服器是否真的掛了才發 exited/crash;
+ *  仍在跑(re-exec/子行程接手)就當誤報、不發。等幾秒讓過渡狀態落定。 */
+async function verifyThenEmitExit(
+  rec: InstanceRecord,
+  ctx: DriverContext,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    let status: InstanceStatus;
+    try {
+      status = (await getNativeStatus(rec, ctx)).status;
+    } catch {
+      continue;
+    }
+    if (status === "running") return; // 其實還活著 → 誤報,不發
+    // 非 running 且非過渡態(starting/restarting/installing)→ 確定掛了,跳出去發。
+    if (status !== "starting" && status !== "restarting" && status !== "installing") break;
+  }
+  const kind = classifyServerExit(code, signal, false);
+  emitAgentEvent(kind === "crash" ? "server.crash" : "server.exited", rec.id, {
+    code: code ?? undefined,
+    ...(kind === "crash" && signal ? { detail: `signal ${signal}` } : {}),
+  });
 }
 
 /** 每實例的 CPU 取樣歷史(instanceDir → 上一筆);行程結束就清掉。 */
@@ -905,6 +1068,9 @@ export const nativeDriver: ServerDriver = {
       return;
     }
 
+    // 這是我們主動要求的停止:標記一下,讓 child exit handler 把退出判為正常(exited)而非崩潰。
+    expectedStops.add(rec.id);
+
     if (await requestGracefulShutdown(rec)) {
       // 等它自己收 —— 這期間用便宜的 isAlive 即可:行程還活著就不可能被重用。
       for (let i = 0; i < 20 && isAlive(pid); i++) {
@@ -943,6 +1109,11 @@ export const nativeDriver: ServerDriver = {
     }
     fs.rmSync(pidFile(ctx), { force: true });
     await sweepLeftovers();
+    // agent 重啟後 detached 存活的行程沒有 child handle → exit event 不會發,這裡兜底補一次
+    // server.exited;有 handle 的正常情況由 exit handler 發(此條件為 false,不會重複)。
+    if (!serverChildren.has(rec.id) && expectedStops.delete(rec.id)) {
+      emitAgentEvent("server.exited", rec.id, {});
+    }
   },
 
   async remove(rec, ctx) {
@@ -1123,6 +1294,14 @@ function followNewestInDir(dir: string, onLine: (line: string) => void, replay =
 /** Tail -f a file: replay the last `replay` lines once it exists, then
  * follow appended bytes. Handles truncation/rotation (position reset) and
  * files that appear later. Returns a cleanup fn. */
+/** attach 時要補送哪些既有行:replay>0 給最後 replay 行(UI 補脈絡用),replay=0 完全不補。
+ *  ⚠️ 陷阱:`arr.slice(-0)` === `arr.slice(0)` === 整個陣列(因 `-0 === 0`);replay=0 必須明確回 []。
+ *  之前這裡直接 `slice(-replay)`,replay=0 的 log-event-tracker 一 attach 就把整個當下 log 全部
+ *  當新事件重發(重啟時舊捕捉/死亡誤報的根因)。純函式,方便回歸測試。 */
+export function linesToReplay(existing: string[], replay: number): string[] {
+  return replay > 0 ? existing.slice(-replay) : [];
+}
+
 function followFile(file: string, onLine: (line: string) => void, replay = 200): () => void {
   let attached = false;
   let position = 0;
@@ -1136,8 +1315,10 @@ function followFile(file: string, onLine: (line: string) => void, replay = 200):
       return;
     }
     if (!attached) {
-      const existing = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
-      for (const line of existing.slice(-replay)) onLine(line);
+      // replay=0(如 log-event-tracker)只跟新行,連讀檔都跳過、直接位移到檔尾;
+      // replay>0(如 UI log 視窗)才讀出既有行、補送最後 replay 行。
+      const existing = replay > 0 ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
+      for (const line of linesToReplay(existing, replay)) onLine(line);
       position = size;
       buffer = "";
       attached = true;

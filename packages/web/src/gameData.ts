@@ -65,10 +65,13 @@ export interface CharacterHit {
   entity: GameEntity;
   /** 完整圖示 URL(帕魯與人類 NPC 的圖檔在不同資料夾) */
   iconUrl?: string;
+  /** true 表示這是合成回退實體（不在圖鑑中），用於 UI 標示提示 */
+  unknown?: boolean;
 }
 
 /** 依存檔/REST 的 CharacterID 查「帕魯或人類 NPC」:
- *  大小寫寬鬆、BOSS_ 前綴自動剝除;帕魯圖鑑優先,再查人類 NPC 目錄。 */
+ *  大小寫寬鬆、BOSS_ 前綴自動剝除;帕魯圖鑑優先,再查人類 NPC 目錄。
+ *  若完全找不到,會嘗試去尾綴(Boss001 等)後回退成自訂實體。 */
 export function findCharacter(d: GameData | null, id: string): CharacterHit | undefined {
   if (!d || !id) return undefined;
   const bare = id.replace(/^BOSS_/i, "");
@@ -80,7 +83,23 @@ export function findCharacter(d: GameData | null, id: string): CharacterHit | un
   if (pal) return { entity: pal, iconUrl: pal.icon ? palIconUrl(pal.icon) : undefined };
   const human = d.humanByIdLower.get(id.toLowerCase()) ?? d.humanByIdLower.get(bare.toLowerCase());
   if (human) return { entity: human, iconUrl: human.icon ? humanIconUrl(human.icon) : undefined };
-  return undefined;
+  // 目錄中找不到：剝除尾綴(如 YakushimaBoss001 → Yakushima)再試一次
+  const cleaned = id.replace(/[Bb]oss\d*$/, "").replace(/\d+$/, "");
+  if (cleaned && cleaned !== id) {
+    const pal2 =
+      d.palById.get(cleaned) ??
+      d.palByIdLower.get(cleaned.toLowerCase());
+    if (pal2) return { entity: pal2, iconUrl: pal2.icon ? palIconUrl(pal2.icon) : undefined, unknown: true };
+    const human2 = d.humanByIdLower.get(cleaned.toLowerCase());
+    if (human2) return { entity: human2, iconUrl: human2.icon ? humanIconUrl(human2.icon) : undefined, unknown: true };
+  }
+  // 真的找不到：回退成自訂實體，至少顯示一個可讀名稱
+  const fallbackName = cleaned || id.replace(/_\d+$/, "");
+  return {
+    entity: { id, name: fallbackName },
+    iconUrl: undefined,
+    unknown: true,
+  };
 }
 
 const REMOTE_BASE =

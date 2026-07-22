@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { WORLD_OPTIONS, type OptionMeta } from "./options.js";
+import { DEFAULT_BOT_LANG, type BotLang } from "./game-names.js";
 
 export * from "./options.js";
 export * from "./commands.js";
@@ -10,6 +11,7 @@ export * from "./pal-stats-options.js";
 export * from "./features.js";
 export * from "./world-presets.js";
 export * from "./boss-respawn.js";
+export * from "./game-names.js";
 export * from "./map-helpers.js";
 export * from "./pal-avatars.generated.js";
 export * from "./log-events.js";
@@ -135,8 +137,8 @@ export const CustomPalSchema = z
     })
     .optional(),
   /** 濃縮消耗隻數(PalDefender CondensedPals 吃數量,不是星星等級)。
-   *  滿星(4★)實際需要 116 隻;上限 999 與 UI 的 max 一致,擋荒謬值。 */
-  condensedPals: z.number().int().min(0).max(999).optional(),
+   *  當前版本滿濃縮需 48 隻。 */
+  condensedPals: z.number().int().min(0).max(48).optional(),
   /** 靈魂強化,每項 0–20。 */
   souls: z
     .object({
@@ -194,11 +196,9 @@ export interface InstanceDetail extends InstanceSummary {
   effectiveServerDir: string | null;
 }
 
-/* ── Group chat ↔ game message bridge ── */
-
+/* Group chat <-> game message bridge. */
 export type MessageBridgePlatform = "onebot" | "discord" | "telegram" | "webhook";
-export type MessageBridgeLanguage = "zh-TW" | "zh-CN" | "en" | "ja";
-export { localizePalName } from "./pal-names.generated.js";
+export type MessageBridgeLanguage = BotLang;
 
 export interface MessageBridgeRules {
   relayGroupToGame: boolean;
@@ -282,13 +282,9 @@ export type ModComponent = "ue4ss" | "paldefender";
 /* ── PalDefender REST API: player detail (pals & inventory) ── */
 
 export interface PdPalIvs {
-  /** 生命 / HP */
   hp?: number;
-  /** 攻击(含近战与射击,具体维度看 PalDefender 返回) */
   attack?: number;
-  /** 防御 */
   defense?: number;
-  /** 工作速度(部分 PD 版本) */
   workSpeed?: number;
 }
 
@@ -308,22 +304,14 @@ export interface PdPal {
   shiny: boolean;
   /** which group it's in */
   location: "team" | "palbox" | "basecamp";
-  /** PalDefender 较新版本才会返回的字段;老版本可能缺失。 */
-  /** 个体值(IV / Talent)。 */
+  /** Fields below are available in newer PalDefender versions. */
   ivs?: PdPalIvs;
-  /** 词条 / 被动技能 ID 列表(顺序按重要度)。 */
   passives?: string[];
-  /** 主动技能 ID 列表。 */
   activeSkills?: string[];
-  /** 浓缩星数(0=未浓缩,1-4=对应星星数)。 */
   rank?: number;
-  /** 浓缩已消耗的帕鲁数(PalDefender CondensedPals)。 */
   condensedPals?: number;
-  /** 灵魂强化等级。 */
   souls?: PdPalSouls;
-  /** 头目 / 塔主标记:从 palId 前缀或 PD 字段推断。 */
   isBoss?: boolean;
-  /** 是否塔主 boss(与 isBoss 区分,部分版本单独标记)。 */
   isTower?: boolean;
 }
 
@@ -1337,6 +1325,49 @@ export interface PublicMapStatus {
   settings: PublicMapSettings;
   shareUrl: string | null;
   lastPublish: PublicMapPublishResult | null;
+}
+
+/** 同機 Discord bot(agent 自跑並監督;見 packages/agent/src/discord-bot-manager.ts)前端可見/可改的設定。
+ *  token 不放這個型別 —— 只寫入 agent 端,前端靠 DiscordBotStatus.tokenSet 得知是否已設。 */
+export interface DiscordBotSettings {
+  enabled: boolean;
+  /** 管理員白名單:只有這些 Discord user id 能用管理指令(broadcast/restart/kick/ban/rcon…)。
+   *  留空 = 沒有人能用管理指令(whitelist-only,不看 Discord 伺服器管理員權限)。 */
+  adminUserIds: string[];
+  /** 事件通知要貼到的 Discord 頻道 id(留空 = 不發通知)。bot 用 gateway 直接貼,免另設 webhook URL。 */
+  notifyChannelId?: string;
+  /** 要通知的事件型別(同 webhook 的訂閱語法:精確 / "player.*" / "*")。空陣列 = 不發。 */
+  notifyEvents: string[];
+  /** 狀態面板頻道 id(留空 = 不顯示):bot 在該頻道維護一則每分鐘自動更新的伺服器狀態 embed。 */
+  statusChannelId?: string;
+  /** bot 輸出與事件通知的語言(en / ja / zh-TW / zh-CN)。 */
+  language: BotLang;
+}
+
+export const DEFAULT_DISCORD_BOT_SETTINGS: DiscordBotSettings = {
+  enabled: false,
+  adminUserIds: [],
+  notifyEvents: [],
+  language: DEFAULT_BOT_LANG,
+};
+
+/** 同機 bot 子行程的一行輸出(供 GUI「Discord Bot」分頁的日誌檢視)。 */
+export interface DiscordBotLogLine {
+  /** epoch ms。 */
+  at: number;
+  level: "info" | "error";
+  line: string;
+}
+
+/** GET / PUT /api/instances/:id/discord-bot 的回應形狀。永不含 token 本身。 */
+export interface DiscordBotStatus {
+  settings: DiscordBotSettings;
+  /** 是否已設定 bot token(不回傳 token 本身,僅告知有無)。 */
+  tokenSet: boolean;
+  /** bot 子行程目前是否在執行(agent 同機自跑)。 */
+  running: boolean;
+  /** 最近一次非預期退出/連線失敗的簡述(達重啟上限而停用時亦記於此),供 UI 顯示。 */
+  lastError?: string;
 }
 
 /** 快照裡的座標屬於主世界底圖還是世界樹(見 savToMap / savToWorldTreeMap)。 */

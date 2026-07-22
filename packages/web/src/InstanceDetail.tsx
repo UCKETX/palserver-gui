@@ -13,6 +13,9 @@ import { PalDefenderTab } from "./PalDefenderTab";
 import { PalStatsTab } from "./PalStatsTab";
 import { BossRespawnTab } from "./BossRespawnTab";
 import { BreedingTab } from "./BreedingTab";
+import { WebhookSettingsTab } from "./WebhookSettingsTab";
+import { DiscordBotTab } from "./DiscordBotTab";
+import { MessageBridgeTab } from "./MessageBridgeCard";
 import { PlayersTab } from "./PlayersTab";
 import { GuildsTab } from "./GuildsTab";
 import { LeaderboardTab } from "./LeaderboardTab";
@@ -26,7 +29,6 @@ import { InstanceSettingsTab } from "./InstanceSettingsTab";
 import { SHOW_SPONSOR_FEATURES, SHOW_BOSS_RESPAWN } from "./flags";
 import { PerformanceTab } from "./PerformanceTab";
 import { EngineTab } from "./EngineTab";
-import { MessageBridgeTab } from "./MessageBridgeCard";
 import { maskSteamIdsInText } from "./SteamId";
 import { hasFeature } from "@palserver/shared";
 import { classifyLine, categoryColor, formatLine, genericLine, translateTarget, useLogPrefs } from "./logHighlight";
@@ -228,6 +230,20 @@ export function InstanceDetailPage({
     }
   };
 
+  /** 倒數中「取消」:中止 agent 端倒數且不執行停止/重啟,伺服器繼續跑。
+   *  原本掛著等倒數的 act() 請求會因此 resolve(仍在跑),其 finally 會清掉倒數 UI。 */
+  const cancelDowntime = async () => {
+    const action = countdownAction.current;
+    if (action !== "stop" && action !== "restart") return;
+    stopRequested.current = false; // 沒有真的要停,別讓輪詢把它誤判成意外停止
+    try {
+      await client.action(instanceId, action, undefined, undefined, true);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const saveWorld = async () => {
     setSavingWorld(true);
     setError(null);
@@ -328,9 +344,15 @@ export function InstanceDetailPage({
       </div>
 
       {countdown !== null && (
-        <p className="rounded-xl bg-sun/15 px-3 py-2 text-[13px] font-bold text-sun">
-          {t("已在遊戲聊天室公告,{n} 秒後執行…", { n: countdown })}
-        </p>
+        <div className="flex items-center justify-between gap-3 rounded-xl bg-sun/15 px-3 py-2 text-[13px] font-bold text-sun">
+          <span>{t("已在遊戲聊天室公告,{n} 秒後執行…", { n: countdown })}</span>
+          <button
+            className="shrink-0 underline underline-offset-2 transition hover:opacity-80"
+            onClick={() => void cancelDowntime()}
+          >
+            {countdownAction.current === "restart" ? t("取消重啟") : t("取消停止")}
+          </button>
+        </div>
       )}
 
       {detail.status === "installing" && (
@@ -637,6 +659,8 @@ export function InstanceDetailPage({
         <SavesTab client={client} instanceId={detail.id} running={detail.status === "running"} />
       )}
       {tab === "restart" && <RestartCard client={client} instanceId={detail.id} />}
+      {tab === "webhooks" && <WebhookSettingsTab client={client} instanceId={detail.id} />}
+      {tab === "discord-bot" && <DiscordBotTab client={client} instanceId={detail.id} />}
       {tab === "bridge" && <MessageBridgeTab client={client} instanceId={detail.id} />}
       {tab === "instance" && (
         <InstanceSettingsTab client={client} detail={detail} onChanged={refresh} onDeleted={onDeleted} />

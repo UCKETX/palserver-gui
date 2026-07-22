@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   COMMANDS,
   COOP_HOST_UID,
@@ -27,6 +27,7 @@ import {
   type KnownPlayer,
   type MessageBridgePatch,
   type RconCommandsResponse,
+  type DirEntry,
 } from "@palserver/shared";
 import { fetchServerCommands, rconExec, requireRcon } from "./rcon.js";
 import type { PresenceTracker } from "./presence.js";
@@ -34,6 +35,7 @@ import type { BackupScheduler } from "./backup-scheduler.js";
 import type { RestartSupervisor } from "./supervisor.js";
 import type { PublicMapPublisher } from "./public-map.js";
 import type { WebhooksService } from "./webhooks.js";
+import type { DiscordBotManager } from "./discord-bot-manager.js";
 import type { MessageBridgeService } from "./message-bridge.js";
 import { AGENT_VERSION, PORT, HOST, REQUIRE_TOKEN, WEB_ORIGINS, TLS_ENABLED, OPEN_BROWSER, ENV_LOCKED, IS_PORTABLE_EXE } from "./env.js";
 import { saveSettings } from "./settings.js";
@@ -44,6 +46,7 @@ import {
   type AuthContext,
   extractToken,
   isLoopback,
+  isPrivateNetwork,
   pairingCodeMatches,
   rotatePairingCode,
   tokenMatches,
@@ -159,13 +162,16 @@ async function announceCountdown(
   }
 }
 
-/** 進行中的停機倒數(instance id → 中止器);「立即停止」按第二下時取消。 */
-const pendingCountdowns = new Map<string, AbortController>();
+/** 進行中的停機倒數(instance id → 中止器 + 是否被取消)。
+ *  「立即停止」中止倒數、讓原請求接手停止;「取消停止」中止倒數並標記 cancelled,原請求不執行。 */
+const pendingCountdowns = new Map<string, { ctrl: AbortController; cancelled: boolean }>();
 
 const AnnounceBody = z.object({
   announceTemplate: z.string().max(500).optional(),
   /** true = 跳過/中止倒數公告,立即執行(停止按第二下)。 */
   immediate: z.boolean().optional(),
+  /** true = 取消:中止倒數且不執行停止/重啟(讓伺服器繼續跑)。 */
+  cancel: z.boolean().optional(),
 });
 
 // WebSocket
@@ -252,6 +258,7 @@ export function registerRoutes(
   supervisor: RestartSupervisor,
   publicMap: PublicMapPublisher,
   webhooks: WebhooksService,
+  discordBot: DiscordBotManager,
   messageBridge: MessageBridgeService,
   auth: AuthContext,
   updateOps: UpdateOps,
@@ -485,7 +492,8 @@ export function registerRoutes(
       return reply.code(403).send({ error: "配置評估健檢為贊助者專屬功能,請在設定頁輸入贊助者識別碼解鎖。" });
     }
     const specs = await collectSpecs();
-    return reviewSpecs(specs);
+    // 需求依「同時運行的伺服器數」放大:建立越多台,規格門檻越高、不夠就扣分。
+    return reviewSpecs(specs, store.list().length);
   });
   // 套用系統設定:重啟自己(免安裝執行檔才會真的重啟;開發模式回 restarting:false)。
   app.post("/api/restart", async () => {
@@ -1042,18 +1050,19 @@ export function registerRoutes(
 
   /** 停止/重啟前若帶了 announceTemplate 且伺服器在跑,依該實例的 announceSeconds 設定
    * 先在遊戲聊天室倒數公告(0 秒 = 不公告)。announceSeconds 與自動重啟共用同一個設定。 */
-  const announceBeforeDowntime = async (rec: InstanceRecord, body: unknown): Promise<void> => {
+  const announceBeforeDowntime = async (rec: InstanceRecord, body: unknown): Promise<{ cancelled: boolean }> => {
     const parsed = AnnounceBody.safeParse(body ?? {}).data;
-    if (parsed?.immediate) return; // 立即模式:不倒數
+    if (parsed?.immediate) return { cancelled: false }; // 立即模式:不倒數
     const template = parsed?.announceTemplate;
-    if (!template) return;
+    if (!template) return { cancelled: false };
     const seconds = Math.min(Math.max(supervisor.readPolicy(rec.id).announceSeconds, 0), 300);
-    if (seconds <= 0) return;
-    if ((await driverOf(rec).status(rec, ctxOf(rec))).status !== "running") return;
-    const ctrl = new AbortController();
-    pendingCountdowns.set(rec.id, ctrl);
+    if (seconds <= 0) return { cancelled: false };
+    if ((await driverOf(rec).status(rec, ctxOf(rec))).status !== "running") return { cancelled: false };
+    const entry = { ctrl: new AbortController(), cancelled: false };
+    pendingCountdowns.set(rec.id, entry);
     try {
-      await announceCountdown(rec, seconds, template, ctrl.signal);
+      await announceCountdown(rec, seconds, template, entry.ctrl.signal);
+      return { cancelled: entry.cancelled }; // 倒數期間收到取消 → 呼叫端不執行停止/重啟
     } finally {
       pendingCountdowns.delete(rec.id);
     }
@@ -1061,16 +1070,28 @@ export function registerRoutes(
 
   app.post("/api/instances/:id/stop", async (req) => {
     const rec = getOr404((req.params as { id: string }).id);
-    // 「立即停止」:有進行中的倒數就中止它 —— 原請求會馬上接手執行停止,
-    // 本請求只回摘要,避免兩個請求同時對 driver 下 stop。
-    if (AnnounceBody.safeParse(req.body ?? {}).data?.immediate) {
+    const body = AnnounceBody.safeParse(req.body ?? {}).data;
+    // 「取消停止」:標記取消並中止倒數 —— 原本掛著等倒數的 stop 請求會醒來、看到 cancelled 就
+    // 直接返回不執行停止(伺服器繼續跑)。沒有進行中的倒數 = 太晚了(已進入實際停止)或沒在倒數。
+    if (body?.cancel) {
       const pending = pendingCountdowns.get(rec.id);
       if (pending) {
-        pending.abort();
+        pending.cancelled = true;
+        pending.ctrl.abort();
+      }
+      return toSummary(rec);
+    }
+    // 「立即停止」:有進行中的倒數就中止它 —— 原請求會馬上接手執行停止,
+    // 本請求只回摘要,避免兩個請求同時對 driver 下 stop。
+    if (body?.immediate) {
+      const pending = pendingCountdowns.get(rec.id);
+      if (pending) {
+        pending.ctrl.abort();
         return toSummary(rec);
       }
     }
-    await announceBeforeDowntime(rec, req.body);
+    const { cancelled } = await announceBeforeDowntime(rec, req.body);
+    if (cancelled) return toSummary(rec); // 倒數期間被取消:不停,伺服器繼續跑
     await driverOf(rec).stop(rec, ctxOf(rec));
     presence.markAllOffline(rec.id);
     // A deliberate stop must not look like a crash to the supervisor.
@@ -1080,7 +1101,17 @@ export function registerRoutes(
 
   app.post("/api/instances/:id/restart", async (req) => {
     let rec = getOr404((req.params as { id: string }).id);
-    await announceBeforeDowntime(rec, req.body);
+    // 「取消重啟」:比照停止 —— 中止倒數並標記取消,原請求醒來看到 cancelled 就不重啟。
+    if (AnnounceBody.safeParse(req.body ?? {}).data?.cancel) {
+      const pending = pendingCountdowns.get(rec.id);
+      if (pending) {
+        pending.cancelled = true;
+        pending.ctrl.abort();
+      }
+      return toSummary(rec);
+    }
+    const { cancelled } = await announceBeforeDowntime(rec, req.body);
+    if (cancelled) return toSummary(rec); // 倒數期間被取消:不重啟,伺服器繼續跑
     await driverOf(rec).stop(rec, ctxOf(rec));
     presence.markAllOffline(rec.id);
     rec = await reconcileWorldIni(rec);
@@ -1198,8 +1229,13 @@ export function registerRoutes(
     const component = z
       .enum(["ue4ss", "paldefender"])
       .parse((req.params as { component: string }).component);
-    const { channel } = z
-      .object({ channel: z.enum(["stable", "beta"]).default("stable") })
+    const { channel, url } = z
+      .object({
+        channel: z.enum(["stable", "beta"]).default("stable"),
+        // 選填:直接指定下載 URL(繞過 GitHub release 解析)。給限速地區走鏡像用;
+        // 僅接受 https。資產內容格式須與該元件一致(如 UE4SS 的 UE4SS-Palworld.zip)。
+        url: z.string().url().startsWith("https://").optional(),
+      })
       .parse(req.body ?? {});
     // native: DLLs are locked by the running Windows process — must stop first.
     // docker/k8s: exec into container needs the Pod running; Linux doesn't lock
@@ -1210,7 +1246,7 @@ export function registerRoutes(
     if ((rec.backend === "docker" || rec.backend === "k8s") && !await isRunning(rec)) {
       return reply.code(409).send({ error: "伺服器未運行 — docker/k8s 安裝需要容器在運行中才能傳輸檔案" });
     }
-    const { version } = await installComponent(rec, ctxOf(rec), component, channel);
+    const { version } = await installComponent(rec, ctxOf(rec), component, channel, url);
     // PalDefender's admin/moderation surface depends on RCON. Older records
     // may still carry the historical false default, so installing PD repairs
     // that state and picks a free TCP port before the next restart.
@@ -1633,6 +1669,37 @@ export function registerRoutes(
         target: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9_.\- ]+$/),
       })
       .parse(req.body);
+
+    // 若 target 只有 X Y 兩軸（不含 Z），判斷是否為遠距離傳送。
+    // 直線距離 >= 250 時做兩次 tp，讓地形串流載入後第二次 tp 才正確著地。
+    const coord2d = target.match(/^(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)$/);
+    if (coord2d) {
+      const tx = parseFloat(coord2d[1]);
+      const ty = parseFloat(coord2d[2]);
+
+      // 找出要重傳幾次：讀取目前位置計算距離
+      let attempts = 2; // 預設兩次（遠距離）
+      try {
+        const posOut = await rconExec(rec, `getpos ${source}`);
+        const xm = posOut.match(/X\s*[:=]\s*(-?\d+(?:\.\d+)?)/i);
+        const ym = posOut.match(/Y\s*[:=]\s*(-?\d+(?:\.\d+)?)/i);
+        if (xm && ym) {
+          const dx = tx - parseFloat(xm[1]);
+          const dy = ty - parseFloat(ym[1]);
+          if (Math.sqrt(dx * dx + dy * dy) < 250) attempts = 1;
+        }
+      } catch {
+        // getpos 失敗則保守用兩次 tp
+      }
+
+      await rconExec(rec, `tp ${source} ${tx} ${ty}`);
+      for (let i = 1; i < attempts; i++) {
+        await sleep(500);
+        await rconExec(rec, `tp ${source} ${tx} ${ty}`);
+      }
+      return { output: "OK" };
+    }
+
     const output = await rconExec(rec, `tp ${source} ${target}`);
     return { output };
   });
@@ -2028,6 +2095,37 @@ export function registerRoutes(
     return webhooks.deliveries(id, whId);
   });
 
+  // ── 同機 Discord bot(agent 自跑並監督;贊助限定,共用 webhookGate)。enabled + token 存
+  // <instanceDir>/discord-bot.json;token 寫入不回讀(status 只回 tokenSet),見 discord-bot-manager.ts。
+  const discordBotInput = z.object({
+    enabled: z.boolean().optional(),
+    token: z.string().optional(),
+    adminUserIds: z.array(z.string().trim().min(1)).optional(),
+    notifyChannelId: z.string().trim().optional(),
+    notifyEvents: z.array(z.string().min(1)).optional(),
+    statusChannelId: z.string().trim().optional(),
+    language: z.enum(["en", "ja", "zh-TW", "zh-CN"]).optional(),
+  });
+
+  app.get("/api/instances/:id/discord-bot", async (req, reply) => {
+    if (!webhookGate(reply)) return reply;
+    const rec = getOr404((req.params as { id: string }).id);
+    return discordBot.status(rec.id);
+  });
+
+  app.put("/api/instances/:id/discord-bot", async (req, reply) => {
+    if (!webhookGate(reply)) return reply;
+    const rec = getOr404((req.params as { id: string }).id);
+    const patch = discordBotInput.parse(req.body);
+    return discordBot.update(rec.id, patch);
+  });
+
+  app.get("/api/instances/:id/discord-bot/logs", async (req, reply) => {
+    if (!webhookGate(reply)) return reply;
+    const rec = getOr404((req.params as { id: string }).id);
+    return discordBot.logs(rec.id);
+  });
+
   app.get("/api/instances/:id/version", async (req) => {
     const rec = getOr404((req.params as { id: string }).id);
     return getVersionStatus(rec, ctxOf(rec));
@@ -2397,6 +2495,105 @@ export function registerRoutes(
     return { mirrored: true, worldGuid: result.worldGuid, targetId: dstRec.id };
   });
 
+  // ── host directory browser (for server path picker in create dialog) ──
+  const HostDirQuery = z.object({ path: z.string().max(1000).default("") });
+
+  /** 非同步列出 Windows 上所有可用的磁碟機代號。 */
+  async function listDrives(): Promise<DirEntry[]> {
+    const letters = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+    const results = await Promise.allSettled(
+      letters.map(async (letter) => {
+        const root = `${letter}:\\`;
+        await fs.promises.access(root, fs.constants.F_OK);
+        return root;
+      }),
+    );
+    return results
+      .filter((r) => r.status === "fulfilled")
+      .map((r) => ({
+        name: (r as PromiseFulfilledResult<string>).value,
+        isDir: true,
+        size: 0,
+        modifiedAt: "",
+        editable: false,
+      } satisfies DirEntry));
+  }
+
+  app.get("/api/host/list-dir", async (req) => {
+    // 目錄瀏覽僅限區域網路使用，防止外網持有 token 者瀏覽主機檔案系統
+    if (!isPrivateNetwork(req.ip)) {
+      throw Object.assign(new Error("目錄瀏覽僅限區域網路使用"), { statusCode: 403 });
+    }
+    const { path: dirPath } = HostDirQuery.parse(req.query);
+    const target = dirPath.trim();
+
+    // Windows: 空路徑 → 列出所有可用磁碟機
+    if (!target && process.platform === "win32") {
+      return { path: "", entries: await listDrives() };
+    }
+
+    const resolved = target ? path.resolve(target) : "/";
+    if (target && !path.isAbsolute(target)) {
+      throw Object.assign(new Error("請輸入絕對路徑"), { statusCode: 400 });
+    }
+    let stat: fs.Stats | undefined;
+    try {
+      stat = await fs.promises.stat(resolved);
+    } catch {
+      // 路徑不存在
+    }
+    if (!stat?.isDirectory()) {
+      throw stat
+        ? Object.assign(new Error("不是資料夾"), { statusCode: 400 })
+        : Object.assign(new Error("路徑不存在"), { statusCode: 404 });
+    }
+    const dirents = await fs.promises.readdir(resolved, { withFileTypes: true });
+    const results = await Promise.allSettled(
+      dirents.map(async (entry): Promise<DirEntry | null> => {
+        try {
+          const full = path.join(resolved, entry.name);
+          const s = await fs.promises.stat(full);
+          return {
+            name: entry.name,
+            isDir: entry.isDirectory(),
+            size: s.size,
+            modifiedAt: new Date(s.mtimeMs).toISOString(),
+            editable: false,
+          } satisfies DirEntry;
+        } catch {
+          return null; // 跳過權限不足或無法存取的項目 (如 DumpStack.log.tmp)
+        }
+      }),
+    );
+    const entries: DirEntry[] = results
+      .filter((r): r is PromiseFulfilledResult<DirEntry> => r.status === "fulfilled" && r.value !== null)
+      .map((r) => r.value)
+      .sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+    return { path: resolved, entries };
+  });
+
+  app.post("/api/host/mkdir", async (req, reply) => {
+    if (!isPrivateNetwork(req.ip)) {
+      throw Object.assign(new Error("目錄瀏覽僅限區域網路使用"), { statusCode: 403 });
+    }
+    const { path: dirPath } = z.object({ path: z.string().min(1).max(1000) }).parse(req.body);
+    if (!path.isAbsolute(dirPath)) {
+      throw Object.assign(new Error("請輸入絕對路徑"), { statusCode: 400 });
+    }
+    const resolved = path.resolve(dirPath);
+    try {
+      await fs.promises.access(resolved);
+      throw Object.assign(new Error("路徑已存在"), { statusCode: 409 });
+    } catch (err: any) {
+      if (err.statusCode === 409) throw err; // 路徑已存在
+      // 只放行 ENOENT（不存在），其他錯誤如 EACCES/EPERM 直接拋出
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+    await fs.promises.mkdir(resolved, { recursive: true });
+    reply.code(201);
+    return { created: resolved };
+  });
+
   // ── file browser (native server root or k8s /palworld root) ──
   const PathQuery = z.object({ path: z.string().max(500).default("") });
 
@@ -2482,7 +2679,8 @@ export function registerRoutes(
     return driverOf(rec).logSources(rec, ctxOf(rec));
   });
 
-  // 群聊 ↔ 游戏消息桥。密钥只写不读；公开 webhook 入口使用独立共享密钥认证。
+  // Group chat <-> game message bridge. Secrets are write-only; webhook calls
+  // authenticate with the independently configured shared secret.
   app.get("/api/instances/:id/message-bridge", async (req) => {
     const rec = getOr404((req.params as { id: string }).id);
     return { config: messageBridge.getConfig(rec.id), status: messageBridge.getStatus(rec.id) };
@@ -2490,18 +2688,26 @@ export function registerRoutes(
 
   const MessageBridgeLanguageSchema = z.enum(["zh-TW", "zh-CN", "en", "ja"]);
   const MessageBridgeChannelBaseShape = {
-    id: z.string().trim().regex(/^[A-Za-z0-9_-]{1,64}$/), enabled: z.boolean(),
-    adminIds: z.array(z.string().trim().min(1).max(128)).max(50), language: MessageBridgeLanguageSchema,
-    relayGroupToGame: z.boolean(), relayGameToGroup: z.boolean(), notifyJoinLeave: z.boolean(),
-    notifyCapture: z.boolean(), notifyDeath: z.boolean(), relayPrefix: z.string().trim().max(20),
+    id: z.string().trim().regex(/^[A-Za-z0-9_-]{1,64}$/),
+    enabled: z.boolean(),
+    adminIds: z.array(z.string().trim().min(1).max(128)).max(50),
+    language: MessageBridgeLanguageSchema,
+    relayGroupToGame: z.boolean(),
+    relayGameToGroup: z.boolean(),
+    notifyJoinLeave: z.boolean(),
+    notifyCapture: z.boolean(),
+    notifyDeath: z.boolean(),
+    relayPrefix: z.string().trim().max(20),
     commandPrefix: z.string().trim().min(1).max(3),
   };
-  const MessageBridgePatchSchema = z.object({ channels: z.array(z.discriminatedUnion("platform", [
-    z.object({ ...MessageBridgeChannelBaseShape, platform: z.literal("onebot"), wsUrl: z.string().trim().max(500), groupId: z.string().trim().max(100), accessToken: z.string().max(2000).optional() }),
-    z.object({ ...MessageBridgeChannelBaseShape, platform: z.literal("discord"), channelId: z.string().trim().max(100), proxyEnabled: z.boolean(), proxyUrl: z.string().trim().max(1000).optional(), token: z.string().max(2000).optional() }),
-    z.object({ ...MessageBridgeChannelBaseShape, platform: z.literal("telegram"), chatId: z.string().trim().max(100), token: z.string().max(2000).optional() }),
-    z.object({ ...MessageBridgeChannelBaseShape, platform: z.literal("webhook"), url: z.string().trim().max(1000), secret: z.string().max(2000).optional() }),
-  ])).max(32) }).strict();
+  const MessageBridgePatchSchema = z.object({
+    channels: z.array(z.discriminatedUnion("platform", [
+      z.object({ ...MessageBridgeChannelBaseShape, platform: z.literal("onebot"), wsUrl: z.string().trim().max(500), groupId: z.string().trim().max(100), accessToken: z.string().max(2000).optional() }),
+      z.object({ ...MessageBridgeChannelBaseShape, platform: z.literal("discord"), channelId: z.string().trim().max(100), proxyEnabled: z.boolean(), proxyUrl: z.string().trim().max(1000).optional(), token: z.string().max(2000).optional() }),
+      z.object({ ...MessageBridgeChannelBaseShape, platform: z.literal("telegram"), chatId: z.string().trim().max(100), token: z.string().max(2000).optional() }),
+      z.object({ ...MessageBridgeChannelBaseShape, platform: z.literal("webhook"), url: z.string().trim().max(1000), secret: z.string().max(2000).optional() }),
+    ])).max(32),
+  }).strict();
 
   app.put("/api/instances/:id/message-bridge", async (req) => {
     const rec = getOr404((req.params as { id: string }).id);
@@ -2510,24 +2716,15 @@ export function registerRoutes(
     return { config, status: messageBridge.getStatus(rec.id) };
   });
 
-  app.post("/api/instances/:id/message-bridge/webhook", async (req, reply) => {
-    const rec = store.get((req.params as { id: string }).id);
+  const receiveBridgeWebhook = async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id, channelId } = req.params as { id: string; channelId?: string };
+    const rec = store.get(id);
     if (!rec) return reply.code(404).send({ error: "instance not found" });
-    const body = z.object({ userId: z.string().max(128).optional(), author: z.string().max(80).optional(), text: z.string().trim().min(1).max(500) }).parse(req.body);
-    const supplied = String(req.headers["x-palserver-secret"] ?? "");
-    try {
-      await messageBridge.receiveWebhook(rec.id, undefined, supplied, body.userId ?? "", body.author ?? "Webhook", body.text);
-      return { ok: true };
-    } catch (err) {
-      return reply.code(401).send({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
-  app.post("/api/instances/:id/message-bridge/webhook/:channelId", async (req, reply) => {
-    const rec = store.get((req.params as { id: string }).id);
-    if (!rec) return reply.code(404).send({ error: "instance not found" });
-    const channelId = (req.params as { channelId: string }).channelId;
-    const body = z.object({ userId: z.string().max(128).optional(), author: z.string().max(80).optional(), text: z.string().trim().min(1).max(500) }).parse(req.body);
+    const body = z.object({
+      userId: z.string().max(128).optional(),
+      author: z.string().max(80).optional(),
+      text: z.string().trim().min(1).max(500),
+    }).parse(req.body);
     const supplied = String(req.headers["x-palserver-secret"] ?? "");
     try {
       await messageBridge.receiveWebhook(rec.id, channelId, supplied, body.userId ?? "", body.author ?? "Webhook", body.text);
@@ -2535,7 +2732,9 @@ export function registerRoutes(
     } catch (err) {
       return reply.code(401).send({ error: err instanceof Error ? err.message : String(err) });
     }
-  });
+  };
+  app.post("/api/instances/:id/message-bridge/webhook", receiveBridgeWebhook);
+  app.post("/api/instances/:id/message-bridge/webhook/:channelId", receiveBridgeWebhook);
 
   app.get("/api/instances/:id/logs", { websocket: true }, (socket, req) => {
     const rec = store.get((req.params as { id: string }).id);

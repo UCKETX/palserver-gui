@@ -1,6 +1,6 @@
 {
   "name": "@palserver/agent",
-  "version": "2.6.0",
+  "version": "2.8.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -9,7 +9,6 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "gen:boss-lua": "node scripts/gen-boss-lua.mjs",
     "gen:boss-catalog": "node scripts/gen-boss-catalog.mjs",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -20,6 +19,7 @@
     "@fastify/static": "^8.0.0",
     "@fastify/websocket": "^11.0.0",
     "@kubernetes/client-node": "^1.3.0",
+    "@palserver/discord-bot": "workspace:*",
     "@palserver/shared": "workspace:*",
     "@resvg/resvg-wasm": "2.6.2",
     "dockerode": "^4.0.2",

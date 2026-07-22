@@ -5,8 +5,38 @@ import type { AgentClient } from "./api";
 import { FileBrowserDialog } from "./FileManager";
 import { ModInstallCard } from "./ModInstallCard";
 import { t, useI18n } from "./i18n";
-import { EmptyState, btnGhost, card, errorCls, DismissibleWarning } from "./ui";
+import { EmptyState, btn, btnGhost, card, errorCls, DismissibleWarning } from "./ui";
 
+/** 下載/安裝卡住(超過 10 秒)的黃色警告彈窗:樣式比照公告彈窗(置中卡片),配色改黃色(sun)醒目。
+ *  常見原因是舊版本遺留、沒真正關掉的殭屍 PalServer 進程佔用著 DLL,擋住模組覆蓋安裝。 */
+function SlowInstallWarning({ onClose }: { onClose: () => void }) {
+  useI18n();
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-[rgb(35_32_48/0.55)] p-6 backdrop-blur-[3px]">
+      <div className={`${card} w-[460px] max-w-full border-sun/60 bg-sun/10`}>
+        <h2 className="inline-flex items-center gap-2 text-lg font-extrabold text-sun">
+          <FiAlertTriangle className="size-5 shrink-0" /> {t("下載卡住了?可能有殘留進程")}
+        </h2>
+        <div className="mt-3 space-y-2 text-[13px] leading-relaxed text-sun">
+          <p>
+            {t(
+              "下載/安裝已超過 10 秒還沒完成,多半是舊版本遺留、沒真正關掉的殭屍 PalServer 進程還佔用著檔案(dwmapi.dll 等),擋住模組覆蓋安裝。請擇一處理後再試:",
+            )}
+          </p>
+          <ul className="list-disc space-y-1 pl-5 font-bold">
+            <li>{t("重新開機(推薦,最徹底)")}</li>
+            <li>{t("或開「工作管理員 → 詳細資料」,結束殘留的 PalServer-Win64-Shipping-Cmd.exe 後再試")}</li>
+          </ul>
+        </div>
+        <div className="mt-4 flex justify-end">
+          <button className={btn} onClick={onClose}>
+            {t("我知道了")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function ModsTab({
   client,
@@ -28,6 +58,8 @@ export function ModsTab({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [browsing, setBrowsing] = useState<string | null>(null);
+  // 安裝下載超過 10 秒:多半是舊版遺留的殭屍 PalServer 佔用檔案擋住覆蓋,跳黃色警告提示處理。
+  const [slowInstall, setSlowInstall] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -52,11 +84,14 @@ export function ModsTab({
   }, [client]);
 
   const install = async (component: ModComponent, channel: "stable" | "beta" = "stable") => {
-    if (channel === "beta" && !confirm(t("測試版(Beta)可能不穩定,但含較新的功能(例如玩家細節 API)。\n\n確定要安裝最新測試版嗎?"))) {
+    if (channel === "beta" && !confirm(t("開發版(zDev)含 UE4SS 除錯主控台與開發工具、體積較大,一般伺服器不需要,主要供模組開發。\n\n確定要安裝開發版嗎?"))) {
       return;
     }
     setBusy(component);
     setError(null);
+    setSlowInstall(false);
+    // 下載/安裝超過 10 秒:通常是殭屍 PalServer 佔用檔案卡住覆蓋安裝(擴充解壓遇鎖檔會一直等)。
+    const slowTimer = setTimeout(() => setSlowInstall(true), 10_000);
     try {
       await client.installMod(instanceId, component, channel);
       await refresh();
@@ -64,6 +99,8 @@ export function ModsTab({
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      clearTimeout(slowTimer);
+      setSlowInstall(false);
       setBusy(null);
     }
   };
@@ -119,6 +156,7 @@ export function ModsTab({
 
   return (
     <div className="flex flex-col gap-4">
+      {slowInstall && <SlowInstallWarning onClose={() => setSlowInstall(false)} />}
       {error && <p className={errorCls}>{error}</p>}
       <DismissibleWarning id="warn-mods-compat">
         <span className="inline-flex items-start gap-2">

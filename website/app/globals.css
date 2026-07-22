@@ -316,3 +316,11 @@ nav .lang a.on{background:var(--pal);color:var(--on-pal)}
 .chlog .md a{text-decoration:underline}
 .chlog .ghlink{display:inline-block;margin-top:12px;font-size:13px;font-weight:700;text-decoration:underline;opacity:.75}
 .chlog-note{margin:40px 0;opacity:.7}
+
+/* ── 新手開服教學頁(/guide) ── */
+.guide-page{padding-top:34px;padding-bottom:20px}
+.guide-page h1{font-size:34px;margin:10px 0 14px;line-height:1.25}
+.guide-cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:24px}
+.guide-steps{counter-reset:gs}
+.guide-step .txt{padding-top:48px;position:relative}
+.guide-step .txt::before{counter-increment:gs;content:counter(gs);position:absolute;top:0;left:0;width:34px;height:34px;border-radius:50%;background:var(--pal);color:var(--on-pal);display:grid;place-items:center;font-weight:900;font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:15px}

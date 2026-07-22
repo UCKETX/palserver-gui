@@ -19,7 +19,7 @@ type FeatureText = {
 
 export type Dictionary = {
   meta: { title: string; description: string; ogAlt: string };
-  nav: { features: string; how: string; start: string; team: string; github: string; download: string; changelog: string };
+  nav: { features: string; how: string; start: string; team: string; github: string; download: string; changelog: string; guide: string };
   changelog: { title: string; sub: string; back: string; viewOnGitHub: string; loading: string; error: string; latest: string };
   hero: {
     eyebrow: string;
@@ -67,6 +67,16 @@ export type Dictionary = {
     shotAlt: string;
     shotLabel: string;
     figcaption: string;
+    fullGuide: string;
+  };
+  guide: {
+    metaTitle: string;
+    eyebrow: string;
+    h2: string;
+    lead: string;
+    ctaDownload: string;
+    ctaHome: string;
+    steps: { title: string; body: string; shotAlt: string }[];
   };
   niceDetails: { eyebrow: string; h2: string; lead: string; shotAlt: string; shotLabel: string };
   team: { eyebrow: string; h2: string; lead: string; roles: string[] };
@@ -90,7 +100,7 @@ const zh: Dictionary = {
       'palserver GUI 是免費開源的帕魯(Palworld)專用伺服器管理工具:一鍵開服、內建世界地圖、三套主題、80+ 世界設定、模組管理、自動備份、手機遠端管理。零指令、零設定檔, 免安裝下載即用。',
     ogAlt: 'palserver GUI 伺服器管理總覽畫面',
   },
-  nav: { features: '功能', how: '如何運作', start: '開始使用', team: '團隊', github: 'GitHub', download: '下載', changelog: '更新日誌' },
+  nav: { features: '功能', how: '如何運作', start: '開始使用', team: '團隊', github: 'GitHub', download: '下載', changelog: '更新日誌', guide: '教學' },
   changelog: {
     title: '更新日誌',
     sub: '每個版本改了什麼——即時抓取自 GitHub Releases。',
@@ -255,6 +265,42 @@ const zh: Dictionary = {
     shotAlt: 'palserver GUI 首次連線與配對畫面',
     shotLabel: '第一次連線',
     figcaption: '換裝置或幫朋友設定?把設定連結傳過去, 點一下就連上——不用手動輸入一長串密碼。',
+    fullGuide: '完整新手教學 →',
+  },
+  guide: {
+    metaTitle: '新手開服教學',
+    eyebrow: '新手上手',
+    h2: '幫朋友架一台帕魯伺服器。',
+    lead: '自己架, 不用月費、不用打指令, 大約 5 分鐘就能揪朋友一起上線。',
+    ctaDownload: '下載 palserver GUI',
+    ctaHome: '← 回首頁',
+    steps: [
+      {
+        title: '下載並開啟 palserver GUI',
+        body: '到 palserver-gui.iosoftware.ai 下載檔案, 雙擊開啟就好——它是一般的桌面應用程式, 完全不需要打開終端機或指令列。',
+        shotAlt: 'palserver GUI 伺服器列表畫面',
+      },
+      {
+        title: '建立你的伺服器',
+        body: '點「建立伺服器」跟著精靈走就好, 它會自動下載並設定好帕魯專用伺服器——不用碰 SteamCMD。幫伺服器命名、挑選設定, 按下啟動即可。',
+        shotAlt: 'palserver GUI 伺服器總覽畫面',
+      },
+      {
+        title: '讓朋友加入',
+        body: '內建 playit.gg, 不用自己開埠。拿到邀請地址傳給朋友, 對方在帕魯選單裡「以 IP 加入」貼上就能進來——路由器、開埠通通不用你動手。',
+        shotAlt: 'palserver GUI 首次連線與配對畫面',
+      },
+      {
+        title: '調整世界設定',
+        body: '難度、經驗倍率、世界規則、引擎微調全部在畫面上調, 附白話說明——不用打開 .ini 檔案手動修改。',
+        shotAlt: 'palserver GUI 世界設定編輯器',
+      },
+      {
+        title: '模組與日常維護',
+        body: '模組直接在畫面上開關, 不用刪檔案;存檔一鍵備份;遊戲改版常會弄壞模組伺服器, palserver GUI 會提醒你版本不合的風險。',
+        shotAlt: 'palserver GUI 模組安裝與管理',
+      },
+    ],
   },
   niceDetails: {
     eyebrow: '細節控的貼心',
@@ -293,7 +339,7 @@ const zhCN: Dictionary = {
       'palserver GUI 是免费开源的帕鲁(Palworld)专用服务器管理工具:一键开服、内置世界地图、三套主题、80+ 世界设置、模组管理、自动备份、手机远程管理。零命令、零配置文件,免安装、下载即用。',
     ogAlt: 'palserver GUI 服务器管理总览界面',
   },
-  nav: { features: '功能', how: '工作原理', start: '开始使用', team: '团队', github: 'GitHub', download: '下载', changelog: '更新日志' },
+  nav: { features: '功能', how: '工作原理', start: '开始使用', team: '团队', github: 'GitHub', download: '下载', changelog: '更新日志', guide: '教程' },
   changelog: {
     title: '更新日志',
     sub: '每个版本改了什么——实时抓取自 GitHub Releases。',
@@ -458,6 +504,42 @@ const zhCN: Dictionary = {
     shotAlt: 'palserver GUI 首次连接与配对界面',
     shotLabel: '第一次连接',
     figcaption: '更换设备或帮助朋友配置?发送配置链接,点击即可连接——无需手动输入长密码。',
+    fullGuide: '完整新手教程 →',
+  },
+  guide: {
+    metaTitle: '新手开服教程',
+    eyebrow: '新手入门',
+    h2: '为朋友搭建一台帕鲁服务器。',
+    lead: '自己搭建,不用月费、不用敲命令,大约 5 分钟就能邀请朋友一起上线。',
+    ctaDownload: '下载 palserver GUI',
+    ctaHome: '← 返回首页',
+    steps: [
+      {
+        title: '下载并打开 palserver GUI',
+        body: '到 palserver-gui.iosoftware.ai 下载文件,双击打开即可——它是普通的桌面应用程序,完全不需要打开终端或命令行。',
+        shotAlt: 'palserver GUI 服务器列表界面',
+      },
+      {
+        title: '创建你的服务器',
+        body: '点击“创建服务器”跟着向导走就好,它会自动下载并配置好帕鲁专用服务器——不用碰 SteamCMD。给服务器起个名字、选好设置,点击启动即可。',
+        shotAlt: 'palserver GUI 服务器总览界面',
+      },
+      {
+        title: '邀请朋友加入',
+        body: '内置 playit.gg,不用自己开端口。拿到邀请地址发给朋友,对方在帕鲁菜单里选“以 IP 加入”粘贴即可进入——路由器、端口转发都不用你动手。',
+        shotAlt: 'palserver GUI 首次连接与配对界面',
+      },
+      {
+        title: '调整世界设置',
+        body: '难度、经验倍率、世界规则、引擎微调全都在界面上调整,并附有通俗说明——不用打开 .ini 文件手动修改。',
+        shotAlt: 'palserver GUI 世界设置编辑器',
+      },
+      {
+        title: '模组与日常维护',
+        body: '模组可以直接在界面上开关,不用删除文件;存档一键备份;游戏更新经常会弄坏模组服务器,palserver GUI 会提醒你版本不匹配的风险。',
+        shotAlt: 'palserver GUI 模组安装与管理',
+      },
+    ],
   },
   niceDetails: {
     eyebrow: '细节控的贴心',
@@ -496,7 +578,7 @@ const en: Dictionary = {
       'palserver GUI is a free, open-source manager for Palworld dedicated servers: one-click hosting, a built-in world map, three themes, 80+ world settings, mod management, automatic backups, and remote control from your phone. No commands, no config files — download and run, no install.',
     ogAlt: 'palserver GUI server management overview',
   },
-  nav: { features: 'Features', how: 'How it works', start: 'Get started', team: 'Team', github: 'GitHub', download: 'Download', changelog: 'Changelog' },
+  nav: { features: 'Features', how: 'How it works', start: 'Get started', team: 'Team', github: 'GitHub', download: 'Download', changelog: 'Changelog', guide: 'Guide' },
   changelog: {
     title: 'Changelog',
     sub: 'What changed in every release — pulled live from GitHub Releases.',
@@ -661,6 +743,42 @@ const en: Dictionary = {
     shotAlt: 'palserver GUI first-connection and pairing screen',
     shotLabel: 'First connection',
     figcaption: 'Switching devices or setting up for a friend? Send the setup link, one tap connects — no long password to type by hand.',
+    fullGuide: 'Read the full getting-started guide →',
+  },
+  guide: {
+    metaTitle: 'Getting Started Guide',
+    eyebrow: 'Getting started',
+    h2: 'Host a Palworld server for your friends.',
+    lead: 'Host it yourself — no monthly fee, no command line, and friends can join in about five minutes.',
+    ctaDownload: 'Download palserver GUI',
+    ctaHome: '← Back to home',
+    steps: [
+      {
+        title: 'Download & open palserver GUI',
+        body: "Grab it from palserver-gui.iosoftware.ai and double-click to open — it's a regular desktop app, no terminal or command line required.",
+        shotAlt: 'palserver GUI server list screen',
+      },
+      {
+        title: 'Create your server',
+        body: 'Click "Create Server" and follow the wizard — it downloads and configures the Palworld dedicated server for you, no SteamCMD required. Name it, pick your settings, and start it up.',
+        shotAlt: 'palserver GUI server overview screen',
+      },
+      {
+        title: 'Let your friends join',
+        body: 'Built-in playit.gg means no port forwarding. Grab the invite address and send it over — your friend picks "Join by IP" in Palworld, pastes it in, and they\'re in. You never have to touch your router.',
+        shotAlt: 'palserver GUI first-connection and pairing screen',
+      },
+      {
+        title: 'Tune your world',
+        body: 'Difficulty, XP rates, world rules and engine tuning are all adjustable right in the UI, with plain-language hints — no opening a .ini file to hand-edit values.',
+        shotAlt: 'palserver GUI world settings editor',
+      },
+      {
+        title: 'Mods & day-to-day upkeep',
+        body: 'Toggle mods on and off right in the app without deleting files, back up your save in one click, and get warned when a Palworld update is likely to break a modded server.',
+        shotAlt: 'palserver GUI mod install and management',
+      },
+    ],
   },
   niceDetails: {
     eyebrow: 'Thoughtful for the detail-minded',
@@ -699,7 +817,7 @@ const ja: Dictionary = {
       'palserver GUI は無料・オープンソースの Palworld 専用サーバー管理ツールです。ワンクリックでサーバー起動、内蔵ワールドマップ、3 テーマ、80 以上のワールド設定、MOD 管理、自動バックアップ、スマホからの遠隔管理。コマンド不要・設定ファイル不要、インストール不要でダウンロードしてすぐ使えます。',
     ogAlt: 'palserver GUI サーバー管理の概要画面',
   },
-  nav: { features: '機能', how: '仕組み', start: '使い方', team: 'チーム', github: 'GitHub', download: 'ダウンロード', changelog: '更新履歴' },
+  nav: { features: '機能', how: '仕組み', start: '使い方', team: 'チーム', github: 'GitHub', download: 'ダウンロード', changelog: '更新履歴', guide: 'ガイド' },
   changelog: {
     title: '更新履歴',
     sub: '各バージョンの変更点 — GitHub Releases からリアルタイムに取得。',
@@ -864,6 +982,42 @@ const ja: Dictionary = {
     shotAlt: 'palserver GUI 初回接続とペアリング画面',
     shotLabel: '初回接続',
     figcaption: '端末を替える、フレンドの設定を手伝う?セットアップリンクを送ればワンタップで接続——長いパスワードを手入力する必要はありません。',
+    fullGuide: '新手向け完全ガイドを見る →',
+  },
+  guide: {
+    metaTitle: 'はじめての開設ガイド',
+    eyebrow: 'はじめての方へ',
+    h2: 'フレンドのために Palworld サーバーを立てよう。',
+    lead: '自分でホストするから月額費用もコマンドも不要。だいたい 5 分でフレンドを招待できます。',
+    ctaDownload: 'palserver GUI をダウンロード',
+    ctaHome: '← ホームへ戻る',
+    steps: [
+      {
+        title: 'palserver GUI をダウンロードして開く',
+        body: 'palserver-gui.iosoftware.ai からダウンロードしてダブルクリックで開くだけ。普通のデスクトップアプリなので、ターミナルやコマンドは一切不要です。',
+        shotAlt: 'palserver GUI のサーバー一覧画面',
+      },
+      {
+        title: 'サーバーを作成する',
+        body: '「サーバーを作成」をクリックしてウィザードに従うだけ。Palworld 専用サーバーの本体を自動でダウンロード・設定してくれるので、SteamCMD を触る必要はありません。名前を付けて設定を選び、起動しましょう。',
+        shotAlt: 'palserver GUI のサーバー概要画面',
+      },
+      {
+        title: 'フレンドを招待する',
+        body: 'playit.gg を内蔵しているのでポート開放は不要です。招待用アドレスをコピーしてフレンドに送るだけ。相手は Palworld の「IP で参加」に貼り付ければ接続完了——ルーター設定は一切触りません。',
+        shotAlt: 'palserver GUI の初回接続・ペアリング画面',
+      },
+      {
+        title: 'ワールドを調整する',
+        body: '難易度、経験値倍率、ワールドルール、エンジン調整はすべて画面上でわかりやすい説明付きで変更できます。.ini ファイルを開いて手で編集する必要はありません。',
+        shotAlt: 'palserver GUI のワールド設定エディター',
+      },
+      {
+        title: 'MOD と日常のメンテナンス',
+        body: 'MOD は画面上でオン・オフするだけでファイルを削除する必要はありません。セーブはワンクリックでバックアップ、Palworld のアップデートで MOD サーバーが壊れそうなときは通知でお知らせします。',
+        shotAlt: 'palserver GUI の MOD 導入と管理',
+      },
+    ],
   },
   niceDetails: {
     eyebrow: '細部までの心配り',

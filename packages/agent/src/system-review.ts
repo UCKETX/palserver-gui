@@ -49,8 +49,10 @@ export interface SystemReview {
   cpu: DimensionReview;
   disk: DimensionReview;
   network: DimensionReview;
-  /** 0–100 加權總分。 */
+  /** 加權總分:100 = 剛好滿足需求;可高於 100(硬體超出需求)或低於 100(不足)。 */
   overall: number;
+  /** 計分依據的伺服器數(建立的實例數,至少 1);越多所需規格越高、未達標就扣分。 */
+  serverCount: number;
   generatedAt: string;
 }
 
@@ -141,53 +143,59 @@ export async function collectSpecs(): Promise<SystemSpecs> {
   };
 }
 
-const RATING_SCORE: Record<Rating, number> = { good: 100, ok: 60, poor: 25 };
+/** 比值(實際/需求)→ 分數:
+ *  達標(ratio≥1)給 100 起,超出有遞減加成、封頂 150(1.5×≈120、6×≈150);
+ *  未達標(ratio<1)線性往下扣到 0(半數→50)。這讓「超常表現」能顯示如 121/100。 */
+function scoreFromRatio(ratio: number): number {
+  if (!Number.isFinite(ratio) || ratio <= 0) return 0;
+  return ratio >= 1
+    ? Math.round(100 + Math.min(50, 60 * (1 - 1 / ratio)))
+    : Math.round(100 * ratio);
+}
 
-/** 規則評分:門檻依帕魯專用伺服器的實際需求(RAM 吃最兇,單核時脈次之)。 */
-export function reviewSpecs(specs: SystemSpecs): SystemReview {
+/** 分數 → 評級(前端配色用):100+ 充裕、60+ 夠用、其餘吃緊。 */
+function ratingOf(score: number): Rating {
+  return score >= 100 ? "good" : score >= 60 ? "ok" : "poor";
+}
+
+/**
+ * 規則評分:需求依「伺服器數」(serverCount,至少 1)放大 —— 每多一台伺服器,
+ * RAM / CPU 核 / 磁碟空間 / 寫入速度的需求都往上加;未達標會扣分,硬體超出需求則
+ * 分數高於 100(封頂 150)。同時運行越多台 → 需求越高 → 規格不夠分數就低。
+ */
+export function reviewSpecs(specs: SystemSpecs, serverCount = 1): SystemReview {
   const gb = (n: number) => n / (1 << 30);
+  const n = Math.max(1, Math.floor(serverCount) || 1);
 
-  // RAM:官方建議 16GB 起,實際 8-10 人以上/大量據點會吃到 16-24GB
-  const ramRating: Rating = gb(specs.ramTotalBytes) >= 31 ? "good" : gb(specs.ramTotalBytes) >= 15 ? "ok" : "poor";
-  // CPU:tick 主要吃單核;核心數留給遊戲+系統+GUI
-  const cpuRating: Rating =
-    specs.cpuCores >= 8 && (specs.cpuSpeedMHz === 0 || specs.cpuSpeedMHz >= 3000)
-      ? "good"
-      : specs.cpuCores >= 4
-        ? "ok"
-        : "poor";
-  // 磁碟:自動備份/存檔寫入吃循序寫;剩餘空間要放得下伺服器(~20GB)+備份
-  const diskSpeedRating: Rating = specs.diskWriteMBps >= 300 ? "good" : specs.diskWriteMBps >= 100 ? "ok" : "poor";
-  const diskSpaceRating: Rating = gb(specs.diskFreeBytes) >= 60 ? "good" : gb(specs.diskFreeBytes) >= 25 ? "ok" : "poor";
-  const diskRating: Rating = [diskSpeedRating, diskSpaceRating].includes("poor")
-    ? "poor"
-    : [diskSpeedRating, diskSpaceRating].includes("ok")
-      ? "ok"
-      : "good";
-  // 網路:對外 RTT/抖動當代理;量不到(離線/防火牆)算 ok 不懲罰
-  const netRating: Rating =
+  // RAM:單台約吃 8-12GB,外加系統/GUI 基本盤。需求 = 8 + 8·N GB(1台→16、2台→24、3台→32)。
+  const ramScore = scoreFromRatio(gb(specs.ramTotalBytes) / (8 + 8 * n));
+
+  // CPU:tick 吃單核(時脈),並發吃核心數。有效核心 = 核心數 × 時脈係數(0.65-1.3);需求 = 2 + 2·N 核。
+  const speedFactor = specs.cpuSpeedMHz > 0 ? Math.min(1.3, Math.max(0.65, specs.cpuSpeedMHz / 3200)) : 1;
+  const cpuScore = scoreFromRatio((specs.cpuCores * speedFactor) / (2 + 2 * n));
+
+  // 磁碟:空間(安裝+備份)與循序寫入(自動備份)取較差者當瓶頸;量不到的那項不懲罰(視為足夠)。
+  //   空間需求 = 15 + 25·N GB;寫入需求 = 120 + 40·N MB/s。
+  const diskSpaceRatio = specs.diskTotalBytes > 0 ? gb(specs.diskFreeBytes) / (15 + 25 * n) : Infinity;
+  const diskSpeedRatio = specs.diskWriteMBps > 0 ? specs.diskWriteMBps / (120 + 40 * n) : Infinity;
+  const diskScore = scoreFromRatio(Math.min(diskSpaceRatio, diskSpeedRatio));
+
+  // 網路:對外 RTT/抖動代理(不隨 N 變);量不到(離線/防火牆)給中性 100,不懲罰。
+  const netScore =
     specs.netAvgMs === null
-      ? "ok"
-      : specs.netAvgMs <= 45 && (specs.netJitterMs ?? 0) <= 20
-        ? "good"
-        : specs.netAvgMs <= 110 && (specs.netJitterMs ?? 0) <= 50
-          ? "ok"
-          : "poor";
+      ? 100
+      : scoreFromRatio(Math.min(60 / specs.netAvgMs, 25 / Math.max(1, specs.netJitterMs ?? 0)));
 
-  const overall = Math.round(
-    RATING_SCORE[ramRating] * 0.35 +
-      RATING_SCORE[cpuRating] * 0.3 +
-      RATING_SCORE[diskRating] * 0.2 +
-      RATING_SCORE[netRating] * 0.15,
-  );
+  const overall = Math.round(ramScore * 0.35 + cpuScore * 0.3 + diskScore * 0.2 + netScore * 0.15);
 
   return {
     specs,
-    ram: { rating: ramRating, score: RATING_SCORE[ramRating] },
-    cpu: { rating: cpuRating, score: RATING_SCORE[cpuRating] },
-    disk: { rating: diskRating, score: RATING_SCORE[diskRating] },
-    network: { rating: netRating, score: RATING_SCORE[netRating] },
+    ram: { rating: ratingOf(ramScore), score: ramScore },
+    cpu: { rating: ratingOf(cpuScore), score: cpuScore },
+    disk: { rating: ratingOf(diskScore), score: diskScore },
+    network: { rating: ratingOf(netScore), score: netScore },
     overall,
+    serverCount: n,
     generatedAt: new Date().toISOString(),
   };
 }

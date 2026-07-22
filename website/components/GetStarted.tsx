@@ -23,6 +23,11 @@ export default function GetStarted({ d, lang }: { d: Dictionary['getStarted']; l
           <Shot src={`/assets/${lang}/login.jpg`} alt={d.shotAlt} label={d.shotLabel} width={1320} height={984} />
         </div>
         <figcaption>{d.figcaption}</figcaption>
+        <p style={{ marginTop: 18 }}>
+          <a className="pal" style={{ fontWeight: 700 }} href={`/${lang}/guide/`}>
+            {d.fullGuide}
+          </a>
+        </p>
       </div>
     </section>
   );

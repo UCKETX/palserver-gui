@@ -281,7 +281,8 @@ export function BossRespawnTab({
           }
           desc={t("安裝純伺服器端的 UE4SS Lua 模組,每 15 秒回報野外頭目與地下城頭目的死活與重生時間。模組只讀取遊戲狀態、不改遊戲內容,玩家端不需安裝任何東西。")}
           installed={status.modInstalled}
-          version={status.version ? `${t("模組")} ${status.version}` : null}
+          version={status.version}
+          latestVersion={status.latestVersion}
           running={running ?? false}
           busy={installing}
           busyLabel={status.modInstalled ? t("更新中…") : t("安裝中…")}
@@ -371,7 +372,7 @@ export function BossRespawnTab({
                     </div>
                   )}
                   <p className="text-xs text-ink-muted">
-                    {t("頭目狀態需玩家經過附近才會更新,但看過之後會記住(玩家離開不會變回未知)。野外頭目綁「遊戲內時間」重生(約下個遊戲日),沒有固定秒數——實測到一輪完整重生後才顯示精準倒數;地下城頭目重生時間由遊戲內建、精準。")}
+                    {t("頭目狀態需玩家經過附近才會更新,但看過之後會記住(玩家離開不會變回未知)。野外頭目綁「遊戲內時間」重生,沒有固定秒數,一律標示「約下個遊戲日重生」不做倒數;地下城頭目重生時間由遊戲內建、精準顯示。")}
                   </p>
                   {bosses === null ? (
                     <p className="text-ink-muted">{t("載入頭目清單…")}</p>

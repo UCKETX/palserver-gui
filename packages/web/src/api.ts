@@ -58,6 +58,12 @@ import type {
   SaveScanStats,
   SavesStatus,
   VersionStatus,
+  BotLang,
+  DiscordBotStatus,
+  DiscordBotLogLine,
+  WebhookConfigPublic,
+  WebhookDelivery,
+  WebhookFormat,
   WorldSettings,
 } from "@palserver/shared";
 
@@ -123,7 +129,10 @@ export interface SystemReview {
   cpu: { rating: ReviewRating; score: number };
   disk: { rating: ReviewRating; score: number };
   network: { rating: ReviewRating; score: number };
+  /** 加權總分:100 = 剛好滿足需求;可高於 100(硬體超出需求)或低於 100。 */
   overall: number;
+  /** 計分依據的伺服器數(至少 1);越多台所需規格越高。 */
+  serverCount: number;
   generatedAt: string;
 }
 
@@ -229,6 +238,15 @@ export class AgentClient {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     if (!res.ok) throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
     return body as T;
+  }
+
+  /** 目前連線的 base URL 與存取權杖 —— 給「Discord bot / 其他工具」設定用。
+   *  token 是 agent 的完整存取權杖,顯示時務必遮蔽(見 DiscordBotTab)。 */
+  get baseUrl(): string {
+    return this.conn.url;
+  }
+  get token(): string {
+    return this.conn.token;
   }
 
   info(): Promise<AgentInfo> {
@@ -340,12 +358,14 @@ export class AgentClient {
     announceTemplate?: string,
     /** true = 中止進行中的倒數公告,立即執行(「立即停止」按第二下)。 */
     immediate?: boolean,
+    /** true = 取消:中止倒數且不執行停止/重啟(倒數中按「取消」,伺服器繼續跑)。 */
+    cancel?: boolean,
   ): Promise<InstanceSummary> {
     return this.request(`/api/instances/${id}/${action}`, {
       method: "POST",
       body:
-        announceTemplate || immediate
-          ? JSON.stringify({ announceTemplate, immediate })
+        announceTemplate || immediate || cancel
+          ? JSON.stringify({ announceTemplate, immediate, cancel })
           : undefined,
     });
   }
@@ -567,6 +587,80 @@ export class AgentClient {
   /** 撤銷舊分享連結、產生新的;回傳同 publicMap()。 */
   rotatePublicMapLink(id: string): Promise<PublicMapStatus> {
     return this.request(`/api/instances/${id}/public-map/rotate`, { method: "POST" });
+  }
+
+  /** Webhook 設定清單(贊助者先行版 webhooks)。 */
+  webhooks(id: string): Promise<WebhookConfigPublic[]> {
+    return this.request(`/api/instances/${id}/webhooks`);
+  }
+
+  /** 新增 webhook;回傳的 secret 只在建立當下給一次,之後看不到,要當場顯示給使用者複製。 */
+  createWebhook(
+    id: string,
+    input: { url: string; events: string[]; format?: WebhookFormat; label?: string; enabled?: boolean },
+  ): Promise<{ config: WebhookConfigPublic; secret: string }> {
+    return this.request(`/api/instances/${id}/webhooks`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  updateWebhook(
+    id: string,
+    whId: string,
+    patch: Partial<{ url: string; events: string[]; format: WebhookFormat; enabled: boolean; label: string }>,
+  ): Promise<WebhookConfigPublic> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    });
+  }
+
+  deleteWebhook(id: string, whId: string): Promise<{ ok: true }> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}`, { method: "DELETE" });
+  }
+
+  /** 換發 HMAC 簽章密鑰;舊密鑰立即失效。回傳的新 secret 一樣只顯示這一次。 */
+  rotateWebhookSecret(id: string, whId: string): Promise<{ secret: string }> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}/rotate-secret`, { method: "POST" });
+  }
+
+  /** 手動送一次測試事件(webhook.ping)。 */
+  testWebhook(id: string, whId: string): Promise<{ result: { ok: boolean; status?: number; error?: string } }> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}/test`, { method: "POST" });
+  }
+
+  webhookDeliveries(id: string, whId: string): Promise<WebhookDelivery[]> {
+    return this.request(`/api/instances/${id}/webhooks/${whId}/deliveries`);
+  }
+
+  /** 同機 Discord bot(agent 自跑)目前狀態:啟用與否、是否已設 token、子行程是否在跑。 */
+  discordBot(id: string): Promise<DiscordBotStatus> {
+    return this.request(`/api/instances/${id}/discord-bot`);
+  }
+
+  /** 更新同機 Discord bot 設定(enabled / token / 管理員白名單 / 通知頻道與事件);token 寫入後不回讀(僅回 tokenSet)。回傳同 discordBot()。 */
+  setDiscordBot(
+    id: string,
+    patch: {
+      enabled?: boolean;
+      token?: string;
+      adminUserIds?: string[];
+      notifyChannelId?: string;
+      notifyEvents?: string[];
+      statusChannelId?: string;
+      language?: BotLang;
+    },
+  ): Promise<DiscordBotStatus> {
+    return this.request(`/api/instances/${id}/discord-bot`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    });
+  }
+
+  /** 同機 bot 子行程近期輸出(stdout+stderr,供分頁日誌檢視;含崩潰堆疊)。 */
+  discordBotLogs(id: string): Promise<DiscordBotLogLine[]> {
+    return this.request(`/api/instances/${id}/discord-bot/logs`);
   }
 
   palDefenderRest(id: string): Promise<PdRestStatus> {
@@ -986,6 +1080,17 @@ export class AgentClient {
 
   logSources(id: string): Promise<LogSource[]> {
     return this.request(`/api/instances/${id}/logs/sources`);
+  }
+
+  hostListDir(path: string): Promise<{ path: string; entries: DirEntry[] }> {
+    return this.request(`/api/host/list-dir?path=${encodeURIComponent(path)}`);
+  }
+
+  hostMkdir(path: string): Promise<{ created: string }> {
+    return this.request("/api/host/mkdir", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    });
   }
 
   logsSocket(id: string, source: LogSourceId = "agent"): WebSocket {

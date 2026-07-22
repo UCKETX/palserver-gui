@@ -21,6 +21,7 @@ export default function Nav({ d, lang }: { d: Dictionary['nav']; lang: Locale })
           <a href="#start">{d.start}</a>
           <a href="#team">{d.team}</a>
           <a href={`/${lang}/changelog/`}>{d.changelog}</a>
+          <a href={`/${lang}/guide/`}>{d.guide}</a>
         </div>
         <div className="sp" />
         {/* 桌機:一整排控制項;手機隱藏,改由 NavMenu 漢堡收納 */}

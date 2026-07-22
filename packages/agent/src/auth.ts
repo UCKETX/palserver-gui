@@ -73,6 +73,23 @@ export function isLoopback(ip?: string): boolean {
   );
 }
 
+/** 是否為私有網段:本機、區域網路(192.168 / 10.x / 172.16-31),或 Tailscale/CGNAT(100.64/10)。
+ *  目錄瀏覽等高風險功能僅允許這些網段使用。100.64.0.0/10 是 Tailscale 等 VPN 的常用位址,
+ *  使用者常經 tailnet(100.x)遠端管理,視同區網放行(仍需 agent token)。 */
+export function isPrivateNetwork(ip: string): boolean {
+  if (isLoopback(ip)) return true;
+  const v4 = ip.startsWith("::ffff:") ? ip.slice(7) : ip;
+  const match = v4.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (!match) return false;
+  const a = parseInt(match[1]);
+  const b = parseInt(match[2]);
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10(Tailscale/CGNAT)
+  return false;
+}
+
 /** 從請求取出 token:Authorization: Bearer,或(WebSocket 升級無法帶 header)?token= 。 */
 export function extractToken(req: FastifyRequest): string | undefined {
   const header = req.headers.authorization;

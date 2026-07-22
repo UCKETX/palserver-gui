@@ -116,13 +116,14 @@ export function SystemReviewCard({ client, onClose }: { client: AgentClient; onC
           <div className="flex flex-wrap items-center gap-4">
             <div className="flex flex-col">
               <span className="text-xs font-bold text-ink-muted">{t("綜合評分")}</span>
-              <span className={`text-3xl font-extrabold ${review.overall >= 80 ? "text-grass" : review.overall >= 55 ? "text-sun" : "text-berry"}`}>
+              <span className={`text-3xl font-extrabold ${review.overall >= 100 ? "text-grass" : review.overall >= 65 ? "text-sun" : "text-berry"}`}>
                 {review.overall}
                 <span className="text-base text-ink-muted"> / 100</span>
               </span>
+              <span className="text-[11px] text-ink-muted">{t("依你目前 {n} 台伺服器計算", { n: review.serverCount })}</span>
             </div>
             <p className="min-w-0 flex-1 text-[12px] leading-relaxed text-ink-muted">
-              {t("門檻以帕魯專用伺服器需求為準:記憶體吃最兇(單實例 8-20GB),tick 吃單核,自動備份吃循序寫入。網路為對外連線代理指標,非玩家實際延遲。")}
+              {t("100 分 = 剛好滿足需求;硬體超出需求會高於 100(如 121/100),不足則低於。所需規格依你建立的伺服器數放大 —— 同時要跑越多台,需要的記憶體 / 核心 / 磁碟就越高。網路為對外連線代理指標,非玩家實際延遲。")}
             </p>
           </div>
           <div className="grid gap-2 sm:grid-cols-2">

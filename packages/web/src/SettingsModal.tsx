@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FiX, FiCopy, FiCheck, FiRefreshCw, FiSmartphone, FiKey, FiWifi, FiTrash2, FiStar, FiEye, FiEyeOff, FiSun, FiShield, FiHeart } from "react-icons/fi";
+import { FiX, FiCopy, FiCheck, FiRefreshCw, FiSmartphone, FiKey, FiWifi, FiTrash2, FiStar, FiEye, FiEyeOff, FiSun, FiShield, FiHeart, FiExternalLink } from "react-icons/fi";
 import type { LicenseStatus } from "@palserver/shared";
 import type { AgentClient, Connection, TelemetryStatus, AgentSettingsStatus, AgentSettingsPatch } from "./api";
 import { copyText } from "./clipboard";
@@ -391,6 +391,23 @@ export function SettingsModal({
           >
             <FiTrash2 className="size-4" /> {t("清除暫存並重新整理")}
           </button>
+        </div>
+
+        {/* 開發者:agent REST API 文件連結 */}
+        <div className="border-t border-line pt-3">
+          <h3 className="text-sm font-extrabold">{t("開發者")}</h3>
+          <p className="mt-1 text-xs text-ink-muted">
+            {t("agent 提供完整的 REST API,GUI 與官方 Discord bot 都是它的客戶端 —— 可以用任何語言自製工具串接。")}
+          </p>
+          <a
+            href="https://github.com/io-software-ai/palserver-gui/blob/main/docs/agent-api.md"
+            target="_blank"
+            rel="noreferrer"
+            className="mt-2 inline-flex items-center gap-1.5 text-sm font-bold text-pal hover:underline"
+          >
+            {t("Agent REST API 參考")}
+            <FiExternalLink className="size-3.5" />
+          </a>
         </div>
 
         <div className="flex justify-end">

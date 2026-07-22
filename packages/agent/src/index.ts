@@ -9,7 +9,7 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
 import { ZodError } from "zod";
-import { detectVpn } from "@palserver/shared";
+import { detectVpn, isBotLang } from "@palserver/shared";
 import { DATA_DIR, HOST, PORT, AGENT_VERSION, REQUIRE_TOKEN, WEB_ORIGINS, TLS_ENABLED, OPEN_BROWSER, IS_PORTABLE_EXE } from "./env.js";
 import {
   loadOrCreateToken,
@@ -25,7 +25,9 @@ import { BackupScheduler } from "./backup-scheduler.js";
 import { RestartSupervisor } from "./supervisor.js";
 import { PublicMapPublisher } from "./public-map.js";
 import { WebhooksService } from "./webhooks.js";
+import { DiscordBotManager } from "./discord-bot-manager.js";
 import { LogEventTracker } from "./log-event-tracker.js";
+import { BossEventTracker } from "./boss-event-tracker.js";
 import { fetchLatest } from "./version.js";
 import { isInstalling, nativeDriver } from "./native.js";
 import { dockerDriver } from "./docker.js";
@@ -42,6 +44,26 @@ import { MessageBridgeService } from "./message-bridge.js";
 // 啟動流程包在 async main() 內,讓 entry 沒有頂層 await —— 這樣才能打包成
 // CommonJS 供 Node SEA 免安裝執行檔使用(頂層 await 只能輸出 ESM)。
 async function main() {
+// 同機 Discord bot 子行程:DiscordBotManager 用 self-fork(env PALSERVER_RUN_BOT=1)起這個分支。
+// 必須放在最前面 —— 早於下面的 Windows tray self-fork,否則 bot 子行程會誤觸 tray fork 再分裂一層。
+// 這個分支只跑 bot、直接 return,不啟動 agent 本體(不開 port、不起各種輪詢器)。
+if (process.env.PALSERVER_RUN_BOT) {
+  const { startBot } = await import("@palserver/discord-bot/bot");
+  startBot({
+    discordToken: process.env.DISCORD_TOKEN ?? "",
+    // 同機回控:預設連自己這台 agent 的 loopback(免 token);DiscordBotManager 會帶對的 scheme+port。
+    agentUrl: process.env.AGENT_URL ?? `http://127.0.0.1:${PORT}`,
+    agentToken: process.env.AGENT_TOKEN ?? "",
+    instanceId: process.env.AGENT_INSTANCE_ID,
+    adminUserIds: (process.env.DISCORD_ADMIN_IDS ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+    statusChannelId: process.env.DISCORD_STATUS_CHANNEL_ID?.trim() || undefined,
+    language: isBotLang(process.env.DISCORD_LANG) ? process.env.DISCORD_LANG : "en",
+  });
+  return;
+}
 // Windows 免安裝執行檔:用系統匣圖示取代一直開著的主控台視窗。做法是「用隱藏視窗把自己重啟一份」,
 // 原本這個帶主控台的實例就結束 —— cmd 視窗隨之關閉,背景那份(PALSERVER_TRAY_CHILD=1)負責跑
 // agent 並顯示系統匣。設 PALSERVER_CONSOLE=1 可保留主控台除錯。
@@ -148,7 +170,7 @@ app.addHook("onRequest", async (req, reply) => {
   if (
     routePath === "/api/info" ||
     routePath === "/api/pair" ||
-    /^\/api\/instances\/[^/]+\/message-bridge\/webhook$/.test(routePath)
+    /^\/api\/instances\/[^/]+\/message-bridge\/webhook(?:\/[^/]+)?$/.test(routePath)
   ) return;
   // 本機(loopback)免驗證,單機自用零摩擦;PALSERVER_REQUIRE_TOKEN=1 可關閉。
   if (!REQUIRE_TOKEN && isLoopback(req.ip)) return;
@@ -158,6 +180,9 @@ app.addHook("onRequest", async (req, reply) => {
 // Warm the Steam version cache so the first instance listing already knows
 // whether an update is available (it only ever reads the cache).
 void fetchLatest().catch(() => {});
+// 之後每 6 小時重新抓一次最新版本 —— 讓 supervisor 能在新版釋出時偵測到 false→true
+// 並發 server.update_available webhook(否則快取只停在啟動當下的狀態)。
+setInterval(() => void fetchLatest(true).catch(() => {}), 6 * 60 * 60_000).unref();
 
 const presence = new PresenceTracker(store);
 presence.start();
@@ -165,7 +190,7 @@ presence.start();
 const messageBridge = new MessageBridgeService(
   store,
   presence,
-  (rec) => rec.backend === "native" ? nativeDriver : rec.backend === "k8s" ? k8sDriver : dockerDriver,
+  (rec) => (rec.backend === "native" ? nativeDriver : rec.backend === "k8s" ? k8sDriver : dockerDriver),
 );
 messageBridge.start();
 
@@ -198,12 +223,34 @@ publicMap.start();
 const webhooks = new WebhooksService(store, AGENT_VERSION);
 webhooks.start();
 
+// 同機 Discord bot(贊助限定,gate 同 webhook):enabled + 有 token 的實例由 agent self-fork
+// 一個 bot 子行程並監督(崩潰退避重啟)。bot 回控走 loopback,scheme/port 跟這台 agent。
+const discordBot = new DiscordBotManager(store, `${scheme}://127.0.0.1:${PORT}`);
+discordBot.start();
+// agent 結束時收掉 bot 子行程(不 detached,但顯式收以防孤兒);SIGINT/SIGTERM 導向 exit 讓其生效。
+process.on("exit", () => {
+  try {
+    discordBot.stopAll();
+  } catch {
+    /* ignore */
+  }
+});
+process.once("SIGINT", () => process.exit(0));
+process.once("SIGTERM", () => process.exit(0));
+
 const logEventTracker = new LogEventTracker(
   store,
   (rec) => (rec.backend === "native" ? nativeDriver : rec.backend === "k8s" ? k8sDriver : dockerDriver),
   (id) => webhooks.wantsLogEvents(id),
 );
 logEventTracker.start();
+
+const bossEventTracker = new BossEventTracker(
+  store,
+  (rec) => (rec.backend === "native" ? nativeDriver : rec.backend === "k8s" ? k8sDriver : dockerDriver),
+  (id) => webhooks.wantsBossEvents(id),
+);
+bossEventTracker.start();
 
 // 每小時自動掃描存檔(排行榜/週報資料;每實例可在排行榜分頁開關)
 startAutoScanLoop({
@@ -227,7 +274,7 @@ const updateOps: UpdateOps = {
   log: (msg) => app.log.info(`[update] ${msg}`),
 };
 
-registerRoutes(app, store, presence, scheduler, supervisor, publicMap, webhooks, messageBridge, auth, updateOps);
+registerRoutes(app, store, presence, scheduler, supervisor, publicMap, webhooks, discordBot, messageBridge, auth, updateOps);
 app.addHook("onClose", async () => messageBridge.stop());
 
 await app.listen({ host: HOST, port: PORT });

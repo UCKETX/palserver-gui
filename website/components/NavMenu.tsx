@@ -63,6 +63,9 @@ export default function NavMenu({ d, lang }: { d: Dictionary['nav']; lang: Local
         <a href={`/${lang}/changelog/`} onClick={close}>
           {d.changelog}
         </a>
+        <a href={`/${lang}/guide/`} onClick={close}>
+          {d.guide}
+        </a>
         <div className="pdiv" />
         <LangSwitch current={lang} />
         <a

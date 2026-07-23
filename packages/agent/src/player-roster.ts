@@ -1,11 +1,51 @@
 import type { KnownPlayer, PdPlayerSummary } from "@palserver/shared";
 
-const identityKey = (userId: string): string => {
-  const value = userId.trim().toLowerCase();
-  return value.startsWith("steam_") ? value.slice("steam_".length) : value;
+interface PlayerIdentity {
+  exact: string;
+  platform?: string;
+  numeric?: string;
+}
+
+const playerIdentity = (userId: string): PlayerIdentity => {
+  const exact = userId.trim().toLowerCase();
+  const prefixed = exact.match(/^([a-z][a-z0-9-]*)_(\d+)$/);
+  if (prefixed) return { exact, platform: prefixed[1], numeric: prefixed[2] };
+  return { exact, ...(exact.match(/^\d+$/) ? { numeric: exact } : {}) };
 };
 
 const nameKey = (name: string): string => name.trim().replace(/\s+/g, " ").toLowerCase();
+
+const identitiesMatch = (left: PlayerIdentity, right: PlayerIdentity): boolean =>
+  left.exact === right.exact ||
+  Boolean(
+    left.numeric &&
+    left.numeric === right.numeric &&
+    (!left.platform || !right.platform),
+  );
+
+function matchingIndices(
+  players: KnownPlayer[],
+  identity: PlayerIdentity,
+  playerName: string,
+): number[] {
+  const exact = players
+    .map((player, index) => ({ identity: playerIdentity(player.userId), index }))
+    .filter((candidate) => candidate.identity.exact === identity.exact)
+    .map((candidate) => candidate.index);
+  if (exact.length) return exact;
+
+  const compatible = players
+    .map((player, index) => ({ player, identity: playerIdentity(player.userId), index }))
+    .filter((candidate) => identitiesMatch(candidate.identity, identity));
+  if (compatible.length <= 1) return compatible.map((candidate) => candidate.index);
+
+  const name = nameKey(playerName);
+  if (!name) return compatible.map((candidate) => candidate.index);
+  const named = compatible.filter((candidate) => nameKey(candidate.player.name) === name);
+  return named.length === 1
+    ? named.map((candidate) => candidate.index)
+    : compatible.map((candidate) => candidate.index);
+}
 
 function mergePlayer(player: PdPlayerSummary, previous?: KnownPlayer): KnownPlayer {
   return {
@@ -36,16 +76,19 @@ export function mergeKnownPlayers(
 ): KnownPlayer[] {
   const remaining = [...ownPlayers];
   const merged: KnownPlayer[] = [];
-  const seenIds = new Set<string>();
-  const missingId = pdPlayers.filter((player) => !identityKey(player.userId));
+  const missingId = pdPlayers.filter((player) => !playerIdentity(player.userId).exact);
 
   for (const player of pdPlayers) {
-    const id = identityKey(player.userId);
-    if (!id || seenIds.has(id)) continue;
-    const previousIndex = remaining.findIndex((candidate) => identityKey(candidate.userId) === id);
-    const previous = previousIndex >= 0 ? remaining.splice(previousIndex, 1)[0] : undefined;
+    const identity = playerIdentity(player.userId);
+    if (!identity.exact || matchingIndices(merged, identity, player.name).length) continue;
+    const previousMatches = matchingIndices(remaining, identity, player.name);
+    // A bare numeric ID can match multiple platforms. Do not guess or add a
+    // third representation when the platform cannot be determined safely.
+    if (previousMatches.length > 1) continue;
+    const previous = previousMatches.length === 1
+      ? remaining.splice(previousMatches[0], 1)[0]
+      : undefined;
     merged.push(mergePlayer(player, previous));
-    seenIds.add(id);
   }
 
   const pdNameCounts = new Map<string, number>();
@@ -62,18 +105,18 @@ export function mergeKnownPlayers(
       .filter(({ candidate }) => nameKey(candidate.name) === name);
     if (matches.length !== 1) continue;
     const [{ candidate, index }] = matches;
-    const id = identityKey(candidate.userId);
-    if (!id || seenIds.has(id)) continue;
+    const identity = playerIdentity(candidate.userId);
+    if (!identity.exact || matchingIndices(merged, identity, candidate.name).length) continue;
     remaining.splice(index, 1);
     merged.push(mergePlayer(player, candidate));
-    seenIds.add(id);
   }
 
+  const seenExactIds = new Set(merged.map((player) => playerIdentity(player.userId).exact));
   for (const player of remaining) {
-    const id = identityKey(player.userId);
-    if (!id || seenIds.has(id)) continue;
+    const id = playerIdentity(player.userId).exact;
+    if (!id || seenExactIds.has(id)) continue;
     merged.push(player);
-    seenIds.add(id);
+    seenExactIds.add(id);
   }
   return merged;
 }

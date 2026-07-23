@@ -56,6 +56,42 @@ test("mergeKnownPlayers matches Steam IDs with and without the steam_ prefix", (
   assert.equal(result[0]?.sessions, 8);
 });
 
+test("mergeKnownPlayers matches GDK and PS5 IDs with and without platform prefixes", () => {
+  const result = mergeKnownPlayers(
+    [
+      known({ userId: "gdk_2533274963232060", name: "Xbox player", sessions: 5 }),
+      known({ userId: "ps5_4877707100835767776", name: "PlayStation player", sessions: 7 }),
+    ],
+    [
+      pd({ userId: "2533274963232060", name: "Xbox player", online: true }),
+      pd({ userId: "4877707100835767776", name: "PlayStation player", online: false }),
+    ],
+  );
+
+  assert.equal(result.length, 2);
+  assert.deepEqual(result.map((player) => player.userId), [
+    "gdk_2533274963232060",
+    "ps5_4877707100835767776",
+  ]);
+  assert.deepEqual(result.map((player) => player.sessions), [5, 7]);
+});
+
+test("mergeKnownPlayers keeps different platforms separate when numeric IDs coincide", () => {
+  const result = mergeKnownPlayers(
+    [
+      known({ userId: "gdk_1234567890123456", name: "Xbox player" }),
+      known({ userId: "ps5_1234567890123456", name: "PlayStation player" }),
+    ],
+    [pd({ userId: "1234567890123456", name: "Unknown platform" })],
+  );
+
+  assert.equal(result.length, 2);
+  assert.deepEqual(result.map((player) => player.userId), [
+    "gdk_1234567890123456",
+    "ps5_1234567890123456",
+  ]);
+});
+
 test("mergeKnownPlayers omits unidentifiable PalDefender-only entries", () => {
   const result = mergeKnownPlayers(
     [known({ userId: "steam_76561198000000001", name: "Alice" })],

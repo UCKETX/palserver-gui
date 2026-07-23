@@ -1258,17 +1258,22 @@ export interface PublicMapStatus {
 
 /** 同機 Discord bot(agent 自跑並監督;見 packages/agent/src/discord-bot-manager.ts)前端可見/可改的設定。
  *  token 不放這個型別 —— 只寫入 agent 端,前端靠 DiscordBotStatus.tokenSet 得知是否已設。 */
+export interface DiscordBotNotifyChannel {
+  /** Discord 頻道 id。bot 可同時加入多個 Discord 伺服器,因此不另存 guild id。 */
+  channelId: string;
+  /** 這個頻道要接收的事件型別(同 webhook 的訂閱語法:精確 / "player.*" / "*")。 */
+  events: string[];
+}
+
 export interface DiscordBotSettings {
   enabled: boolean;
   /** 管理員白名單:只有這些 Discord user id 能用管理指令(broadcast/restart/kick/ban/rcon…)。
    *  留空 = 沒有人能用管理指令(whitelist-only,不看 Discord 伺服器管理員權限)。 */
   adminUserIds: string[];
-  /** 事件通知要貼到的 Discord 頻道 id(留空 = 不發通知)。bot 用 gateway 直接貼,免另設 webhook URL。 */
-  notifyChannelId?: string;
-  /** 要通知的事件型別(同 webhook 的訂閱語法:精確 / "player.*" / "*")。空陣列 = 不發。 */
-  notifyEvents: string[];
-  /** 狀態面板頻道 id(留空 = 不顯示):bot 在該頻道維護一則每分鐘自動更新的伺服器狀態 embed。 */
-  statusChannelId?: string;
+  /** 事件通知路由。每個頻道可訂閱不同事件,同一事件也可投遞到多個頻道/Discord 伺服器。 */
+  notifyChannels: DiscordBotNotifyChannel[];
+  /** 狀態面板頻道 id 清單:bot 在每個頻道各維護一則每分鐘自動更新的狀態 embed。 */
+  statusChannelIds: string[];
   /** bot 輸出與事件通知的語言(en / ja / zh-TW / zh-CN)。 */
   language: BotLang;
 }
@@ -1276,7 +1281,8 @@ export interface DiscordBotSettings {
 export const DEFAULT_DISCORD_BOT_SETTINGS: DiscordBotSettings = {
   enabled: false,
   adminUserIds: [],
-  notifyEvents: [],
+  notifyChannels: [],
+  statusChannelIds: [],
   language: DEFAULT_BOT_LANG,
 };
 

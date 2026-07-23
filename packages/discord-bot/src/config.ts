@@ -9,7 +9,7 @@ export interface BotConfig {
   agentToken: string;
   instanceId?: string;
   adminUserIds: string[];
-  statusChannelId?: string;
+  statusChannelIds: string[];
   language: BotLang;
 }
 
@@ -45,7 +45,7 @@ export function loadConfigFromEnv(): BotConfig {
     // 管理員白名單(whitelist-only):逗號分隔的 Discord user id。
     adminUserIds: parseIds(process.env.DISCORD_ADMIN_IDS),
     // 選填:狀態面板頻道 id(bot 在該頻道維護一則每分鐘自動更新的伺服器狀態 embed)。
-    statusChannelId: process.env.DISCORD_STATUS_CHANNEL_ID?.trim() || undefined,
+    statusChannelIds: parseIds(process.env.DISCORD_STATUS_CHANNEL_IDS ?? process.env.DISCORD_STATUS_CHANNEL_ID),
     // 選填:bot 輸出語言(en/ja/zh-TW/zh-CN)。無效值或未設一律退回 en。
     language: isBotLang(process.env.DISCORD_LANG) ? process.env.DISCORD_LANG : "en",
   };

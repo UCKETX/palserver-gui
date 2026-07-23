@@ -1892,5 +1892,16 @@
   "下載卡住了?可能有殘留進程": "Download stuck? A leftover process may be to blame",
   "下載/安裝已超過 10 秒還沒完成,多半是舊版本遺留、沒真正關掉的殭屍 PalServer 進程還佔用著檔案(dwmapi.dll 等),擋住模組覆蓋安裝。請擇一處理後再試:": "The download/install has taken over 10 seconds. This is usually a zombie PalServer process left over from an old version that still holds files (dwmapi.dll, etc.), blocking the mod from being overwritten. Do one of the following, then try again:",
   "重新開機(推薦,最徹底)": "Restart the computer (recommended — most thorough)",
-  "或開「工作管理員 → 詳細資料」,結束殘留的 PalServer-Win64-Shipping-Cmd.exe 後再試": "Or open Task Manager → Details and end the leftover PalServer-Win64-Shipping-Cmd.exe, then try again"
+  "或開「工作管理員 → 詳細資料」,結束殘留的 PalServer-Win64-Shipping-Cmd.exe 後再試": "Or open Task Manager → Details and end the leftover PalServer-Win64-Shipping-Cmd.exe, then try again",
+  "每個頻道可接收不同事件,也可以把同一事件發到多個 Discord 伺服器。要分開聊天,請在一般通知頻道取消聊天訊息,再新增一個只勾選聊天訊息的頻道。": "Each channel can receive different events, and the same event can be sent to multiple Discord servers. To separate chat, deselect Chat messages in the general channel and add a channel with only Chat messages selected.",
+  "貼上頻道 ID": "Paste a channel ID",
+  "移除此通知頻道": "Remove this notification channel",
+  "此頻道接收的事件": "Events sent to this channel",
+  "尚未設定通知頻道。": "No notification channels configured.",
+  "新增通知頻道": "Add notification channel",
+  "bot 會在每個指定頻道維護一則「每分鐘自動更新」的伺服器狀態訊息,可跨多個 Discord 伺服器。": "The bot maintains a server status message that updates every minute in each selected channel, including channels across multiple Discord servers.",
+  "移除此狀態面板頻道": "Remove this status panel channel",
+  "尚未設定狀態面板頻道。": "No status panel channels configured.",
+  "新增狀態面板頻道": "Add status panel channel",
+  "建議使用獨立的 #status 頻道。bot 需要每個頻道的發言與讀取訊息歷史權限;更改後會自動重啟套用。": "Dedicated #status channels are recommended. The bot needs Send Messages and Read Message History permissions in each channel; it restarts automatically after changes."
 }

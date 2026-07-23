@@ -2098,6 +2098,12 @@ export function registerRoutes(
     enabled: z.boolean().optional(),
     token: z.string().optional(),
     adminUserIds: z.array(z.string().trim().min(1)).optional(),
+    notifyChannels: z.array(z.object({
+      channelId: z.string().trim().min(1),
+      events: z.array(z.string().trim().min(1)),
+    })).optional(),
+    statusChannelIds: z.array(z.string().trim().min(1)).optional(),
+    // 舊版 client 相容;manager 會轉成上面的陣列形狀。
     notifyChannelId: z.string().trim().optional(),
     notifyEvents: z.array(z.string().min(1)).optional(),
     statusChannelId: z.string().trim().optional(),

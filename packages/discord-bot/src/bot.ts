@@ -26,8 +26,8 @@ export interface StartBotOptions {
   instanceId?: string;
   /** 管理員白名單(whitelist-only):只有這些 Discord user id 能用管理指令。留空 = 沒人能用。 */
   adminUserIds?: string[];
-  /** 狀態面板頻道 id(留空 = 不顯示):bot 在該頻道維護一則每分鐘自動更新的伺服器狀態 embed。 */
-  statusChannelId?: string;
+  /** 狀態面板頻道 id 清單:bot 在每個頻道維護一則每分鐘自動更新的伺服器狀態 embed。 */
+  statusChannelIds?: string[];
   /** bot 輸出語言(指令描述/embed 文字);留空預設 en。 */
   language?: BotLang;
 }
@@ -161,13 +161,13 @@ export function startBot(opts: StartBotOptions): RunningBot {
     }
   }
 
-  let statusPanel: { stop(): void } | null = null;
+  let statusPanels: { stop(): void }[] = [];
 
   client.once(Events.ClientReady, async (readyClient) => {
     console.log(`[discord-bot] 已上線:${readyClient.user.tag}`);
     await registerGuildCommands(readyClient);
     // 狀態面板:指定頻道維護一則每分鐘自動更新的伺服器狀態 embed(見 status-panel.ts)。
-    if (opts.statusChannelId) statusPanel = startStatusPanel(readyClient, opts.statusChannelId);
+    statusPanels = (opts.statusChannelIds ?? []).map((channelId) => startStatusPanel(readyClient, channelId));
     try {
       const instance = await resolveInstance();
       readyClient.user.setActivity(instance.name, { type: ActivityType.Watching });
@@ -216,7 +216,7 @@ export function startBot(opts: StartBotOptions): RunningBot {
 
   return {
     stop: async () => {
-      statusPanel?.stop();
+      for (const panel of statusPanels) panel.stop();
       await client.destroy();
     },
   };

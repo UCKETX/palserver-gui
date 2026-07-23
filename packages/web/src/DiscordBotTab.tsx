@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FiCheck, FiCode, FiCopy, FiExternalLink, FiMail, FiMessageCircle, FiStar, FiX } from "react-icons/fi";
+import { FiCheck, FiCode, FiCopy, FiExternalLink, FiMail, FiMessageCircle, FiPlus, FiStar, FiTrash2, FiX } from "react-icons/fi";
 import { BOT_LANGS, hasFeature } from "@palserver/shared";
 import type { BotLang, DiscordBotLogLine, DiscordBotStatus, WebhookEventType } from "@palserver/shared";
 import type { AgentClient } from "./api";
@@ -81,9 +81,8 @@ const DEV_PORTAL = "https://discord.com/developers/applications";
 interface Draft {
   enabled: boolean;
   adminUserIds: string[];
-  notifyChannelId: string;
-  notifyEvents: Set<WebhookEventType>;
-  statusChannelId: string;
+  notifyChannels: { channelId: string; events: Set<WebhookEventType> }[];
+  statusChannelIds: string[];
   language: BotLang;
   token?: string;
 }
@@ -92,9 +91,11 @@ function draftFromStatus(s: DiscordBotStatus): Draft {
   return {
     enabled: s.settings.enabled,
     adminUserIds: [...(s.settings.adminUserIds ?? [])],
-    notifyChannelId: s.settings.notifyChannelId ?? "",
-    notifyEvents: new Set((s.settings.notifyEvents ?? []) as WebhookEventType[]),
-    statusChannelId: s.settings.statusChannelId ?? "",
+    notifyChannels: (s.settings.notifyChannels ?? []).map((route) => ({
+      channelId: route.channelId,
+      events: new Set(route.events as WebhookEventType[]),
+    })),
+    statusChannelIds: [...(s.settings.statusChannelIds ?? [])],
     language: s.settings.language,
   };
 }
@@ -173,10 +174,16 @@ export function DiscordBotTab({ client, instanceId }: { client: AgentClient; ins
     let n = 0;
     if (draft.enabled !== s.enabled) n++;
     if (draft.adminUserIds.join(",") !== (s.adminUserIds ?? []).join(",")) n++;
-    if (draft.notifyChannelId.trim() !== (s.notifyChannelId ?? "")) n++;
-    const ev = [...draft.notifyEvents].sort().join(",");
-    if (ev !== [...(s.notifyEvents ?? [])].sort().join(",")) n++;
-    if (draft.statusChannelId.trim() !== (s.statusChannelId ?? "")) n++;
+    const draftRoutes = draft.notifyChannels
+      .map((route) => ({ channelId: route.channelId.trim(), events: [...route.events].sort() }))
+      .filter((route) => route.channelId);
+    const savedRoutes = (s.notifyChannels ?? []).map((route) => ({
+      channelId: route.channelId,
+      events: [...route.events].sort(),
+    }));
+    if (JSON.stringify(draftRoutes) !== JSON.stringify(savedRoutes)) n++;
+    const statusIds = draft.statusChannelIds.map((id) => id.trim()).filter(Boolean);
+    if (JSON.stringify(statusIds) !== JSON.stringify(s.statusChannelIds ?? [])) n++;
     if (draft.language !== s.language) n++;
     if (draft.token !== undefined) n++;
     return n;
@@ -190,9 +197,10 @@ export function DiscordBotTab({ client, instanceId }: { client: AgentClient; ins
       const next = await client.setDiscordBot(instanceId, {
         enabled: draft.enabled,
         adminUserIds: draft.adminUserIds,
-        notifyChannelId: draft.notifyChannelId.trim(),
-        notifyEvents: [...draft.notifyEvents],
-        statusChannelId: draft.statusChannelId.trim(),
+        notifyChannels: draft.notifyChannels
+          .map((route) => ({ channelId: route.channelId.trim(), events: [...route.events] }))
+          .filter((route) => route.channelId),
+        statusChannelIds: draft.statusChannelIds.map((id) => id.trim()).filter(Boolean),
         language: draft.language,
         ...(draft.token !== undefined ? { token: draft.token } : {}),
       });
@@ -489,47 +497,121 @@ export function DiscordBotTab({ client, instanceId }: { client: AgentClient; ins
       <section className={card}>
         <h4 className="text-sm font-extrabold">{t("事件通知")}</h4>
         <p className="mt-1 text-xs text-ink-muted">
-          {t("讓 bot 把伺服器事件(玩家上下線、崩潰、頭目…)貼到指定頻道 —— 免另外設定 Webhook 網址。")}
+          {t("每個頻道可接收不同事件,也可以把同一事件發到多個 Discord 伺服器。要分開聊天,請在一般通知頻道取消聊天訊息,再新增一個只勾選聊天訊息的頻道。")}
         </p>
-        <label className={`${labelCls} mt-3`}>
-          <span>{t("通知頻道 ID")}</span>
-          <input
-            value={draft.notifyChannelId}
-            onChange={(e) => setDraft({ ...draft, notifyChannelId: e.target.value })}
-            placeholder={t("貼上頻道 ID(留空 = 不發通知)")}
-            inputMode="numeric"
-            className={inputCls}
-          />
-        </label>
         <p className="mt-1 text-[11px] text-ink-muted">
           {t("取得頻道 ID:開發者模式下右鍵頻道 →「複製頻道 ID」。請確認 bot 在該頻道有發言權限。")}
         </p>
-        <div className="mt-3 flex flex-col gap-1.5">
-          <span className="text-xs font-bold text-ink-muted">{t("要通知的事件")}</span>
-          <EventPicker
-            selected={draft.notifyEvents}
-            onChange={(next) => setDraft({ ...draft, notifyEvents: next })}
-          />
+        <div className="mt-3 flex flex-col gap-4">
+          {draft.notifyChannels.map((route, index) => (
+            <div key={index} className="border-t border-line pt-3 first:border-t-0 first:pt-0">
+              <div className="flex items-end gap-2">
+                <label className={`${labelCls} min-w-0 flex-1`}>
+                  <span>{t("通知頻道 ID")}</span>
+                  <input
+                    value={route.channelId}
+                    onChange={(e) => {
+                      const notifyChannels = draft.notifyChannels.map((item, i) =>
+                        i === index ? { ...item, channelId: e.target.value } : item,
+                      );
+                      setDraft({ ...draft, notifyChannels });
+                    }}
+                    placeholder={t("貼上頻道 ID")}
+                    inputMode="numeric"
+                    className={inputCls}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className={`${btnGhost} grid size-9 shrink-0 place-items-center px-0`}
+                  title={t("移除此通知頻道")}
+                  aria-label={t("移除此通知頻道")}
+                  onClick={() => setDraft({
+                    ...draft,
+                    notifyChannels: draft.notifyChannels.filter((_, i) => i !== index),
+                  })}
+                >
+                  <FiTrash2 className="size-4" />
+                </button>
+              </div>
+              <div className="mt-3 flex flex-col gap-1.5">
+                <span className="text-xs font-bold text-ink-muted">{t("此頻道接收的事件")}</span>
+                <EventPicker
+                  selected={route.events}
+                  onChange={(events) => {
+                    const notifyChannels = draft.notifyChannels.map((item, i) =>
+                      i === index ? { ...item, events } : item,
+                    );
+                    setDraft({ ...draft, notifyChannels });
+                  }}
+                />
+              </div>
+            </div>
+          ))}
+          {draft.notifyChannels.length === 0 && (
+            <p className="text-xs text-ink-muted">{t("尚未設定通知頻道。")}</p>
+          )}
+          <button
+            type="button"
+            className={`${btnGhost} inline-flex w-fit items-center gap-1.5`}
+            onClick={() => setDraft({
+              ...draft,
+              notifyChannels: [...draft.notifyChannels, { channelId: "", events: new Set<WebhookEventType>() }],
+            })}
+          >
+            <FiPlus className="size-4" /> {t("新增通知頻道")}
+          </button>
         </div>
       </section>
 
       <section className={card}>
         <h4 className="text-sm font-extrabold">{t("狀態面板")}</h4>
         <p className="mt-1 text-xs text-ink-muted">
-          {t("讓 bot 在指定頻道維護一則「每分鐘自動更新」的伺服器狀態訊息(在線玩家、FPS、運行時間…),不會洗版。")}
+          {t("bot 會在每個指定頻道維護一則「每分鐘自動更新」的伺服器狀態訊息,可跨多個 Discord 伺服器。")}
         </p>
-        <label className={`${labelCls} mt-3`}>
-          <span>{t("狀態面板頻道 ID")}</span>
-          <input
-            value={draft.statusChannelId}
-            onChange={(e) => setDraft({ ...draft, statusChannelId: e.target.value })}
-            placeholder={t("貼上頻道 ID(留空 = 不顯示狀態面板)")}
-            inputMode="numeric"
-            className={inputCls}
-          />
-        </label>
+        <div className="mt-3 flex flex-col gap-2">
+          {draft.statusChannelIds.map((channelId, index) => (
+            <div key={index} className="flex items-end gap-2">
+              <label className={`${labelCls} min-w-0 flex-1`}>
+                <span>{t("狀態面板頻道 ID")}</span>
+                <input
+                  value={channelId}
+                  onChange={(e) => setDraft({
+                    ...draft,
+                    statusChannelIds: draft.statusChannelIds.map((id, i) => i === index ? e.target.value : id),
+                  })}
+                  placeholder={t("貼上頻道 ID")}
+                  inputMode="numeric"
+                  className={inputCls}
+                />
+              </label>
+              <button
+                type="button"
+                className={`${btnGhost} grid size-9 shrink-0 place-items-center px-0`}
+                title={t("移除此狀態面板頻道")}
+                aria-label={t("移除此狀態面板頻道")}
+                onClick={() => setDraft({
+                  ...draft,
+                  statusChannelIds: draft.statusChannelIds.filter((_, i) => i !== index),
+                })}
+              >
+                <FiTrash2 className="size-4" />
+              </button>
+            </div>
+          ))}
+          {draft.statusChannelIds.length === 0 && (
+            <p className="text-xs text-ink-muted">{t("尚未設定狀態面板頻道。")}</p>
+          )}
+          <button
+            type="button"
+            className={`${btnGhost} inline-flex w-fit items-center gap-1.5`}
+            onClick={() => setDraft({ ...draft, statusChannelIds: [...draft.statusChannelIds, ""] })}
+          >
+            <FiPlus className="size-4" /> {t("新增狀態面板頻道")}
+          </button>
+        </div>
         <p className="mt-1 text-[11px] text-ink-muted">
-          {t("建議用獨立的 #status 頻道。bot 需要該頻道的發言與讀取訊息歷史權限;更改頻道後 bot 會自動重啟套用。")}
+          {t("建議使用獨立的 #status 頻道。bot 需要每個頻道的發言與讀取訊息歷史權限;更改後會自動重啟套用。")}
         </p>
       </section>
 

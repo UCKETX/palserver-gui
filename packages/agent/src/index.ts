@@ -58,7 +58,10 @@ if (process.env.PALSERVER_RUN_BOT) {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
-    statusChannelId: process.env.DISCORD_STATUS_CHANNEL_ID?.trim() || undefined,
+    statusChannelIds: (process.env.DISCORD_STATUS_CHANNEL_IDS ?? process.env.DISCORD_STATUS_CHANNEL_ID ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
     language: isBotLang(process.env.DISCORD_LANG) ? process.env.DISCORD_LANG : "en",
   });
   return;

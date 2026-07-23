@@ -10,6 +10,7 @@ import {
   type DiscordBotSettings,
   type DiscordBotStatus,
   type DiscordBotLogLine,
+  type DiscordBotNotifyChannel,
   type WebhookEnvelope,
 } from "@palserver/shared";
 import { onAgentEvent, type AgentEvent } from "./events.js";
@@ -26,13 +27,64 @@ interface StoredState {
 const PATCHABLE_KEYS = [
   "enabled",
   "adminUserIds",
-  "notifyChannelId",
-  "notifyEvents",
-  "statusChannelId",
+  "notifyChannels",
+  "statusChannelIds",
   "language",
 ] as const satisfies readonly (keyof DiscordBotSettings)[];
 
-type DiscordBotPatch = Partial<DiscordBotSettings> & { token?: string };
+type DiscordBotPatch = Partial<DiscordBotSettings> & {
+  token?: string;
+  /** 舊版 API 相容欄位;收到後轉成新的陣列設定。 */
+  notifyChannelId?: string;
+  notifyEvents?: string[];
+  statusChannelId?: string;
+};
+
+function uniqueStrings(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  return [
+    ...new Set(
+      values
+        .filter((v): v is string => typeof v === "string")
+        .map((v) => v.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+/** 讀取時正規化並遷移舊版單頻道設定,確保狀態回應永遠只暴露新版形狀。 */
+function normalizeSettings(raw: unknown): DiscordBotSettings {
+  const input = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const merged = { ...DEFAULT_DISCORD_BOT_SETTINGS, ...input } as DiscordBotSettings;
+  const routes = Array.isArray(input.notifyChannels)
+    ? input.notifyChannels
+    : typeof input.notifyChannelId === "string" && input.notifyChannelId.trim()
+      ? [{ channelId: input.notifyChannelId, events: input.notifyEvents }]
+      : [];
+  const byChannel = new Map<string, Set<string>>();
+  for (const value of routes) {
+    if (!value || typeof value !== "object") continue;
+    const route = value as Partial<DiscordBotNotifyChannel>;
+    const channelId = typeof route.channelId === "string" ? route.channelId.trim() : "";
+    if (!channelId) continue;
+    const events = byChannel.get(channelId) ?? new Set<string>();
+    for (const event of uniqueStrings(route.events)) events.add(event);
+    byChannel.set(channelId, events);
+  }
+  return {
+    enabled: !!merged.enabled,
+    adminUserIds: uniqueStrings(merged.adminUserIds),
+    notifyChannels: [...byChannel].map(([channelId, events]) => ({ channelId, events: [...events] })),
+    statusChannelIds: uniqueStrings(
+      Array.isArray(input.statusChannelIds)
+        ? input.statusChannelIds
+        : typeof input.statusChannelId === "string"
+          ? [input.statusChannelId]
+          : [],
+    ),
+    language: merged.language,
+  };
+}
 
 /** 傳給 bot 子行程的通知訊息(agent → bot,走 IPC)。 */
 export interface BotNotifyMessage {
@@ -76,8 +128,8 @@ const MAX_LOG_LINES = 300;
  * <instanceDir>/discord-bot.json,enabled + 有 token + 已授權時 self-fork 一個 bot 子行程
  * (env PALSERVER_RUN_BOT=1),崩潰按退避重啟,設定變更(token/admin)就殺舊起新。
  *
- * 事件通知:本管理器(在 agent 主行程)訂閱事件匯流排,把該實例、且命中 notifyEvents 的事件
- * 渲染成 Discord embed,經 IPC 傳給 bot 子行程貼到 notifyChannelId(bot 用 gateway 貼,免另設 webhook URL)。
+ * 事件通知:本管理器(在 agent 主行程)訂閱事件匯流排,依 notifyChannels 的各頻道訂閱
+ * 渲染成 Discord embed,經 IPC 傳給 bot 子行程(bot 用 gateway 貼,免另設 webhook URL)。
  *
  * 慣例對照:持久化仿 public-map.ts;spawn + exit handler 仿 native.ts spawnServer;
  * 崩潰重啟的滑動視窗上限仿 supervisor.ts handleCrash(另加退避,因 bot 崩潰更快)。
@@ -103,7 +155,7 @@ export class DiscordBotManager {
     try {
       const raw = JSON.parse(fs.readFileSync(this.stateFile(id), "utf8")) as Partial<StoredState>;
       return {
-        settings: { ...DEFAULT_DISCORD_BOT_SETTINGS, ...(raw.settings ?? {}) },
+        settings: normalizeSettings(raw.settings),
         token: typeof raw.token === "string" ? raw.token : undefined,
       };
     } catch {
@@ -165,7 +217,7 @@ export class DiscordBotManager {
 
   /** 影響子行程 env 的設定簽章:只有這些變了才需要重啟 bot 套用(notify 是 live、不算)。 */
   private spawnSignature(state: StoredState): string {
-    return `${state.token ?? ""}|${(state.settings.adminUserIds ?? []).join(",")}|${state.settings.statusChannelId ?? ""}|${state.settings.language}`;
+    return `${state.token ?? ""}|${(state.settings.adminUserIds ?? []).join(",")}|${state.settings.statusChannelIds.join(",")}|${state.settings.language}`;
   }
 
   // ── 對外 API(routes 用) ────────────────────────────────────────────────
@@ -189,6 +241,16 @@ export class DiscordBotManager {
       const value = patch[key];
       if (value !== undefined) target[key] = value;
     }
+    // 舊版 GUI/API client 仍可更新單頻道設定;新版欄位有給時以新版為準。
+    if (patch.notifyChannels === undefined && (patch.notifyChannelId !== undefined || patch.notifyEvents !== undefined)) {
+      const channelId = patch.notifyChannelId?.trim() ?? state.settings.notifyChannels[0]?.channelId ?? "";
+      const events = patch.notifyEvents ?? state.settings.notifyChannels[0]?.events ?? [];
+      state.settings.notifyChannels = channelId ? [{ channelId, events }] : [];
+    }
+    if (patch.statusChannelIds === undefined && patch.statusChannelId !== undefined) {
+      state.settings.statusChannelIds = patch.statusChannelId.trim() ? [patch.statusChannelId.trim()] : [];
+    }
+    state.settings = normalizeSettings(state.settings);
     // token 有給才動:非空 = 設定/更新;空字串 = 清除;沒給 = 保留原本(避免 PATCH 抹掉既有 token)。
     if (patch.token !== undefined) {
       const trimmed = patch.token.trim();
@@ -272,7 +334,7 @@ export class DiscordBotManager {
         // 管理員白名單(whitelist-only):逗號分隔的 Discord user id。
         DISCORD_ADMIN_IDS: (state.settings.adminUserIds ?? []).join(","),
         // 狀態面板頻道(留空 = 不顯示)。
-        DISCORD_STATUS_CHANNEL_ID: state.settings.statusChannelId ?? "",
+        DISCORD_STATUS_CHANNEL_IDS: state.settings.statusChannelIds.join(","),
         DISCORD_LANG: state.settings.language,
       },
     });
@@ -344,13 +406,15 @@ export class DiscordBotManager {
     }
   }
 
-  /** 事件匯流排回呼:把該實例、命中 notifyEvents 的事件渲染成 embed,經 IPC 交給 bot 子行程貼出。 */
+  /** 事件匯流排回呼:依各頻道的事件訂閱路由,經 IPC 交給 bot 子行程貼出。 */
   private forwardEvent(ev: AgentEvent): void {
     const r = this.runtimes.get(ev.instanceId);
     if (!r || !this.isAlive(r) || !r.child?.connected) return;
     const state = this.readState(ev.instanceId);
-    const channelId = state.settings.notifyChannelId;
-    if (!channelId || !eventMatches(state.settings.notifyEvents ?? [], ev.type)) return;
+    const channelIds = state.settings.notifyChannels
+      .filter((route) => eventMatches(route.events, ev.type))
+      .map((route) => route.channelId);
+    if (channelIds.length === 0) return;
     const env: WebhookEnvelope = {
       id: `evt_${crypto.randomUUID()}`,
       type: ev.type,
@@ -359,15 +423,14 @@ export class DiscordBotManager {
       occurredAt: ev.occurredAt,
       data: ev.data,
     };
-    const msg: BotNotifyMessage = {
-      kind: "notify",
-      channelId,
-      payload: toDiscordPayload(env, state.settings.language),
-    };
-    try {
-      r.child.send(msg);
-    } catch {
-      /* IPC 可能剛好關閉:忽略,下次事件再說 */
+    const payload = toDiscordPayload(env, state.settings.language);
+    for (const channelId of channelIds) {
+      const msg: BotNotifyMessage = { kind: "notify", channelId, payload };
+      try {
+        r.child.send(msg);
+      } catch {
+        /* IPC 可能剛好關閉:忽略,下次事件再說 */
+      }
     }
   }
 }

@@ -66,9 +66,10 @@ palserver-GUI 官方 Discord bot:在 Discord 用 slash 指令回控 Palworld 伺
 
 ## 狀態面板(選用)
 
-設 `DISCORD_STATUS_CHANNEL_ID` 後,bot 會在該頻道維護**一則每分鐘自動更新**的伺服器狀態
-embed(在線玩家、FPS、運行時間…),重啟後自動找回同一則訊息續用、不洗版。bot 需要該頻道的
-「發言」與「讀取訊息歷史」權限。
+設 `DISCORD_STATUS_CHANNEL_IDS` 後,bot 會在每個頻道維護**一則每分鐘自動更新**的伺服器狀態
+embed(多個 ID 用逗號分隔,可跨 Discord 伺服器)。重啟後會自動找回各頻道的同一則訊息續用、
+不洗版。bot 需要這些頻道的「發言」與「讀取訊息歷史」權限。舊的單值
+`DISCORD_STATUS_CHANNEL_ID` 仍可使用。
 
 ## 網路需求
 

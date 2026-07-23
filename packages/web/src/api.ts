@@ -624,16 +624,15 @@ export class AgentClient {
     return this.request(`/api/instances/${id}/discord-bot`);
   }
 
-  /** 更新同機 Discord bot 設定(enabled / token / 管理員白名單 / 通知頻道與事件);token 寫入後不回讀(僅回 tokenSet)。回傳同 discordBot()。 */
+  /** 更新同機 Discord bot 設定;token 寫入後不回讀(僅回 tokenSet)。 */
   setDiscordBot(
     id: string,
     patch: {
       enabled?: boolean;
       token?: string;
       adminUserIds?: string[];
-      notifyChannelId?: string;
-      notifyEvents?: string[];
-      statusChannelId?: string;
+      notifyChannels?: { channelId: string; events: string[] }[];
+      statusChannelIds?: string[];
       language?: BotLang;
     },
   ): Promise<DiscordBotStatus> {

@@ -712,6 +712,19 @@ export function disableWorldOptions(rec: InstanceRecord, ctx: DriverContext, wor
   fs.renameSync(file, path.join(worldDir, disabledName));
   return { disabledTo: disabledName };
 }
+
+/** 啟動前偵測用:「當前使用中世界」有沒有 WorldOptions.sav(存在就會覆蓋 ini,造成四人存檔遷來的設定衝突)。
+ *  native/docker 直接看主機 FS;k8s 需 Pod 運行,啟動前拿不到檔案 → 回 supported:false(降級,不擋啟動)。 */
+export async function worldOptionsStatus(
+  rec: InstanceRecord,
+  ctx: DriverContext,
+): Promise<{ hasWorldOptions: boolean; worldGuid: string | null; supported: boolean }> {
+  if (rec.backend === "k8s") return { hasWorldOptions: false, worldGuid: null, supported: false };
+  const worldGuid = await activeWorldGuidAsync(rec, ctx);
+  if (!worldGuid) return { hasWorldOptions: false, worldGuid: null, supported: true };
+  const file = path.join(worldDirOf(rec, ctx, worldGuid), WORLD_OPTIONS_SAV);
+  return { hasWorldOptions: fs.existsSync(file), worldGuid, supported: true };
+}
 /** 本機共玩存檔的主機玩家固定檔名 — 出現它代表要跑 host-save-fix(MIGRATION 情境 C)。 */
 const COOP_HOST_SAV = "00000000000000000000000000000001.sav";
 

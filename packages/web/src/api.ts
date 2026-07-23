@@ -844,6 +844,11 @@ export class AgentClient {
     });
   }
 
+  /** 啟動前偵測:當前使用中世界有沒有 WorldOptions.sav(存在會覆蓋 ini 造成設定衝突)。 */
+  worldOptionsStatus(id: string): Promise<{ hasWorldOptions: boolean; worldGuid: string | null; supported: boolean }> {
+    return this.request(`/api/instances/${id}/saves/world-options-status`);
+  }
+
   disableWorldOptions(id: string, worldGuid: string): Promise<{ disabledTo: string }> {
     return this.request(`/api/instances/${id}/saves/world-options-fix`, {
       method: "POST",

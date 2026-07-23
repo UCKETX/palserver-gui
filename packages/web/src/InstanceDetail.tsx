@@ -39,6 +39,7 @@ import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type D
 import { SortableContext, arrayMove, rectSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import { PortConflictModal } from "./PortConflictModal";
+import { WorldOptionsBlockModal } from "./WorldOptionsBlockModal";
 import type { PortsCheckResult } from "./api";
 
 
@@ -118,6 +119,7 @@ export function InstanceDetailPage({
   const [restartHalted, setRestartHalted] = useState(false);
   // 啟動前偵測到埠被占用 → 開修改面板(新手最常見的開不起來原因)
   const [portConflict, setPortConflict] = useState<PortsCheckResult | null>(null);
+  const [worldOptionsConflict, setWorldOptionsConflict] = useState<{ worldGuid: string } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -174,6 +176,15 @@ export function InstanceDetailPage({
   const act = async (action: "start" | "stop" | "restart", skipPortCheck = false) => {
     if (action === "stop" || action === "restart") stopRequested.current = true;
     if (action === "start") setUnexpectedStop(false);
+    // 啟動前先偵測「當前世界有沒有 WorldOptions.sav」——四人存檔遺留的它會覆蓋 ini(世界設定/管理員密碼失效);
+    // 有就擋下啟動、跳硬限制 modal(刪除後才放行)。比埠衝突更根本,故排在埠檢查前面。
+    if (action === "start" && !skipPortCheck && detail && detail.status !== "running") {
+      const wo = await client.worldOptionsStatus(instanceId).catch(() => null);
+      if (wo?.hasWorldOptions && wo.worldGuid) {
+        setWorldOptionsConflict({ worldGuid: wo.worldGuid });
+        return;
+      }
+    }
     // 啟動前先檢查五種埠(遊戲/查詢/REST/RCON/PalDefender)有沒有被其他程式占走;
     // 有衝突就開修改面板,而不是讓伺服器啟動失敗留下天書錯誤。
     if (action === "start" && !skipPortCheck && detail && detail.status !== "running") {
@@ -370,6 +381,18 @@ export function InstanceDetailPage({
             void act("start", true);
           }}
           onClose={() => setPortConflict(null)}
+        />
+      )}
+
+      {worldOptionsConflict && (
+        <WorldOptionsBlockModal
+          client={client}
+          instanceId={instanceId}
+          worldGuid={worldOptionsConflict.worldGuid}
+          onResolved={() => {
+            setWorldOptionsConflict(null);
+            void act("start");
+          }}
         />
       )}
 

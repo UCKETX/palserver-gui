@@ -2329,6 +2329,12 @@ export function registerRoutes(
     return { ...result, backup: backup.name };
   });
 
+  // ── 啟動前偵測:當前使用中世界有沒有共玩遺留的 WorldOptions.sav(會蓋掉 ini)──
+  app.get("/api/instances/:id/saves/world-options-status", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    return saves.worldOptionsStatus(rec, ctxOf(rec));
+  });
+
   // ── 停用共玩遺留的 WorldOptions.sav(它會蓋掉 ini 的世界設定與 AdminPassword)──
   app.post("/api/instances/:id/saves/world-options-fix", async (req) => {
     const rec = getOr404((req.params as { id: string }).id);

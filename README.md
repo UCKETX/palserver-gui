@@ -85,6 +85,8 @@
 
 **模組**
 - 一鍵安裝 / 更新 / 移除 **PalDefender**(反外掛,前身 Palguard)與 **UE4SS**(Lua/藍圖模組載入器),各有穩定版與測試版通道
+- 搜尋 Steam Workshop 商店並透過 SteamCMD 登入、下載與更新 Mod(Windows 原生實例)
+- 從 GitHub 倉庫、Release、公開 HTTPS ZIP 或 PAK 網址線上導入,自動辨識 Pak、LogicMods 與 UE4SS Lua Mod
 - PalDefender 設定面板、Lua 模組開關、pak 模組管理;**PalDefender REST API 端口可改**
 - **MOTD 登入公告**做進設定 UI
 - 檔案管理器:瀏覽、上傳、編輯、刪除伺服器目錄下的檔案

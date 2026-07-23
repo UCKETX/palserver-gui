@@ -62,6 +62,15 @@ import { getModsStatus, installComponent, latestModVersions, setModEnabled, inst
 import { checkPorts, udpPortFree } from "./port-check.js";
 import { runtimePortFree } from "./runtime-port-check.js";
 import * as pakMods from "./pak-mods.js";
+import { installOnlineMod } from "./online-mods.js";
+import {
+  installWorkshopItem,
+  searchWorkshop,
+  setSteamWebApiKey,
+  startWorkshopLogin,
+  verifyWorkshopLogin,
+  workshopStatus,
+} from "./steam-workshop.js";
 import { clearPalStats, getPalSchemaStatus, getPalStats, installPalSchema, removePalSchema, writePalStats, setPalSchemaEnabled } from "./palschema.js";
 import { getBossReporterStatus, installBossReporter, removeBossReporter } from "./boss-reporter.js";
 import { getModerationLists, moderation } from "./moderation.js";
@@ -1359,6 +1368,63 @@ export function registerRoutes(
     const { name } = z.object({ name: z.string() }).parse(req.query);
     await pakMods.removePakMod(rec, ctxOf(rec), name);
     reply.code(204);
+  });
+
+  /** 從公開 GitHub/HTTPS 來源下載並自動辨識 Pak 或 UE4SS Lua Mod。 */
+  app.post("/api/instances/:id/mods/online-install", async (req, reply) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const { source } = z.object({ source: z.string().trim().min(1).max(2048) }).parse(req.body);
+    if (rec.backend === "native" && await isRunning(rec)) {
+      return reply.code(409).send({ error: "請先停止伺服器再安裝 Mod(執行中時檔案可能被鎖定)" });
+    }
+    if ((rec.backend === "docker" || rec.backend === "k8s") && !await isRunning(rec)) {
+      return reply.code(409).send({ error: "Docker/Kubernetes 安裝 Mod 時需要伺服器容器運行中" });
+    }
+    return installOnlineMod(rec, ctxOf(rec), source);
+  });
+
+  // Steam credentials never enter this API. The GUI can only open a local SteamCMD
+  // console, then verify the cached login after the user completes Steam Guard there.
+  app.get("/api/workshop/status", async () => workshopStatus());
+
+  app.put("/api/workshop/key", async (req) => {
+    const { apiKey } = z.object({ apiKey: z.string().trim() }).parse(req.body);
+    return setSteamWebApiKey(apiKey);
+  });
+
+  app.post("/api/workshop/auth/start", async (req) => {
+    const { accountName } = z.object({ accountName: z.string().trim().min(3).max(64) }).parse(req.body);
+    return startWorkshopLogin(accountName);
+  });
+
+  app.post("/api/workshop/auth/verify", async (req) => {
+    const { accountName } = z.object({ accountName: z.string().trim().min(3).max(64).optional() }).parse(req.body ?? {});
+    return verifyWorkshopLogin(accountName);
+  });
+
+  app.get("/api/instances/:id/workshop/search", async (req) => {
+    const rec = getOr404((req.params as { id: string }).id);
+    const query = z.object({
+      q: z.string().trim().max(200).optional(),
+      sort: z.enum(["popular", "trend", "new", "updated"]).optional(),
+      cursor: z.string().max(500).optional(),
+      pageSize: z.coerce.number().int().min(1).max(50).optional(),
+    }).parse(req.query);
+    return searchWorkshop(rec, ctxOf(rec), {
+      query: query.q,
+      sort: query.sort,
+      cursor: query.cursor,
+      pageSize: query.pageSize,
+    });
+  });
+
+  app.post("/api/instances/:id/workshop/:itemId/install", async (req, reply) => {
+    const { id, itemId } = z.object({ id: z.string(), itemId: z.string() }).parse(req.params);
+    const rec = getOr404(id);
+    if (await isRunning(rec)) {
+      return reply.code(409).send({ error: "请先停止服务器再安装 Workshop Mod" });
+    }
+    return installWorkshopItem(rec, ctxOf(rec), itemId);
   });
 
   // ── live server control via the game's own REST API ──

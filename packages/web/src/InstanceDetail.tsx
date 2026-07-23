@@ -627,6 +627,7 @@ export function InstanceDetailPage({
         <ModsTab
           client={client}
           instanceId={detail.id}
+          backend={detail.backend}
           running={detail.status === "running"}
           onModsChanged={checkPalDefender}
         />

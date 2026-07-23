@@ -161,6 +161,39 @@ export interface PortsCheckResult {
   anyConflict: boolean;
 }
 
+export interface WorkshopStatus {
+  supported: boolean;
+  reason?: string;
+  apiKeyConfigured: boolean;
+  steamcmdInstalled: boolean;
+  loggedIn: boolean;
+  accountName?: string;
+  lastVerifiedAt?: string;
+  appId: string;
+}
+
+export interface WorkshopItem {
+  id: string;
+  title: string;
+  summary: string;
+  previewUrl?: string;
+  steamUrl: string;
+  tags: string[];
+  fileSize?: number;
+  subscriptions?: number;
+  timeCreated?: number;
+  timeUpdated?: number;
+  installed: boolean;
+  updateAvailable: boolean;
+}
+
+export interface WorkshopSearchResult {
+  items: WorkshopItem[];
+  total: number;
+  pageSize: number;
+  nextCursor?: string;
+}
+
 const STORAGE_KEY = "palserver.connection";
 
 export function loadConnection(): Connection | null {
@@ -417,6 +450,47 @@ export class AgentClient {
   /** 各模組元件的最新穩定版 tag(agent 端快取;查詢失敗值為 null)。 */
   modsLatest(): Promise<{ ue4ss: string | null; paldefender: string | null }> {
     return this.request("/api/mods/latest");
+  }
+
+  workshopStatus(): Promise<WorkshopStatus> {
+    return this.request("/api/workshop/status");
+  }
+
+  setWorkshopApiKey(apiKey: string): Promise<WorkshopStatus> {
+    return this.request("/api/workshop/key", { method: "PUT", body: JSON.stringify({ apiKey }) });
+  }
+
+  startWorkshopLogin(accountName: string): Promise<WorkshopStatus> {
+    return this.request("/api/workshop/auth/start", {
+      method: "POST",
+      body: JSON.stringify({ accountName }),
+    });
+  }
+
+  verifyWorkshopLogin(accountName?: string): Promise<WorkshopStatus> {
+    return this.request("/api/workshop/auth/verify", {
+      method: "POST",
+      body: JSON.stringify(accountName ? { accountName } : {}),
+    });
+  }
+
+  searchWorkshop(
+    id: string,
+    params: { query?: string; sort?: "popular" | "trend" | "new" | "updated"; cursor?: string; pageSize?: number },
+  ): Promise<WorkshopSearchResult> {
+    const query = new URLSearchParams();
+    if (params.query) query.set("q", params.query);
+    if (params.sort) query.set("sort", params.sort);
+    if (params.cursor) query.set("cursor", params.cursor);
+    if (params.pageSize) query.set("pageSize", String(params.pageSize));
+    return this.request(`/api/instances/${id}/workshop/search?${query}`);
+  }
+
+  installWorkshopItem(id: string, itemId: string): Promise<{ id: string; title: string; packageName: string }> {
+    return this.request(`/api/instances/${id}/workshop/${itemId}/install`, {
+      method: "POST",
+      body: "{}",
+    });
   }
 
   /** 暫時停用/啟用模組(不刪檔,改名主 DLL)。 */
@@ -1004,6 +1078,19 @@ export class AgentClient {
   removePakMod(id: string, name: string): Promise<void> {
     const q = new URLSearchParams({ name });
     return this.request(`/api/instances/${id}/pak-mods?${q}`, { method: "DELETE" });
+  }
+
+  /** 從 GitHub 或公開 HTTPS 來源下載並安裝 Pak / UE4SS Lua Mod。 */
+  installOnlineMod(id: string, source: string): Promise<{
+    source: string;
+    name: string;
+    pakFiles: string[];
+    luaMods: string[];
+  }> {
+    return this.request(`/api/instances/${id}/mods/online-install`, {
+      method: "POST",
+      body: JSON.stringify({ source }),
+    });
   }
 
   updateBackupSchedule(id: string, patch: Partial<BackupSchedule>): Promise<BackupSchedule> {

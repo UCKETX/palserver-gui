@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { FiPackage, FiFolder, FiTrash2, FiAlertTriangle } from "react-icons/fi";
-import type { ModComponent, ModsStatus } from "@palserver/shared";
+import { FiPackage, FiFolder, FiTrash2, FiAlertTriangle, FiDownloadCloud, FiExternalLink } from "react-icons/fi";
+import type { Backend, ModComponent, ModsStatus } from "@palserver/shared";
 import type { AgentClient } from "./api";
 import { FileBrowserDialog } from "./FileManager";
 import { ModInstallCard } from "./ModInstallCard";
+import { WorkshopStore } from "./WorkshopStore";
 import { t, useI18n } from "./i18n";
-import { EmptyState, btn, btnGhost, card, errorCls, DismissibleWarning } from "./ui";
+import { EmptyState, btn, btnGhost, card, errorCls, inputCls, DismissibleWarning } from "./ui";
 
 /** 下載/安裝卡住(超過 10 秒)的黃色警告彈窗:樣式比照公告彈窗(置中卡片),配色改黃色(sun)醒目。
  *  常見原因是舊版本遺留、沒真正關掉的殭屍 PalServer 進程佔用著 DLL,擋住模組覆蓋安裝。 */
@@ -41,11 +42,13 @@ function SlowInstallWarning({ onClose }: { onClose: () => void }) {
 export function ModsTab({
   client,
   instanceId,
+  backend,
   running,
   onModsChanged,
 }: {
   client: AgentClient;
   instanceId: string;
+  backend: Backend;
   running: boolean;
   /** 安裝/移除模組後通知外層(讓 PalDefender 分頁的 gating 同步)。 */
   onModsChanged?: () => void;
@@ -60,6 +63,8 @@ export function ModsTab({
   const [browsing, setBrowsing] = useState<string | null>(null);
   // 安裝下載超過 10 秒:多半是舊版遺留的殭屍 PalServer 佔用檔案擋住覆蓋,跳黃色警告提示處理。
   const [slowInstall, setSlowInstall] = useState(false);
+  const [onlineSource, setOnlineSource] = useState("");
+  const [onlineResult, setOnlineResult] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -126,12 +131,90 @@ export function ModsTab({
     }
   };
 
+  const installOnline = async () => {
+    const source = onlineSource.trim();
+    if (!source) return;
+    setBusy("online");
+    setError(null);
+    setOnlineResult(null);
+    try {
+      const result = await client.installOnlineMod(instanceId, source);
+      const installed = [...result.pakFiles, ...result.luaMods];
+      setOnlineResult(t("已安裝 {count} 個 Mod:{names}", {
+        count: installed.length,
+        names: installed.length ? ` ${installed.join(", ")}` : "",
+      }));
+      setOnlineSource("");
+      await refresh();
+      onModsChanged?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onlineCard = (
+    <div className={card}>
+      <div className="flex flex-wrap items-center gap-2">
+        <FiDownloadCloud className="size-5 text-pal" />
+        <h3 className="text-sm font-extrabold">{t("線上導入 Mod")}</h3>
+        <a
+          href="https://github.com/uitok/palworld-panel"
+          target="_blank"
+          rel="noreferrer"
+          className="ml-auto inline-flex items-center gap-1 text-xs font-bold text-pal hover:underline"
+        >
+          {t("功能來源")} <FiExternalLink className="size-3.5" />
+        </a>
+      </div>
+      <form
+        className="mt-3 flex flex-col gap-2 sm:flex-row"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void installOnline();
+        }}
+      >
+        <input
+          className={`${inputCls} min-w-0 flex-1`}
+          type="url"
+          inputMode="url"
+          value={onlineSource}
+          onChange={(event) => setOnlineSource(event.target.value)}
+          placeholder={t("貼上 GitHub 倉庫、Release、ZIP 或 PAK 網址")}
+          aria-label={t("Mod 下載網址")}
+          disabled={busy === "online"}
+        />
+        <button
+          type="submit"
+          className={`${btn} inline-flex shrink-0 items-center justify-center gap-1.5`}
+          disabled={!onlineSource.trim() || busy !== null || (backend === "native" ? running : !running)}
+          title={
+            backend === "native" && running
+              ? t("請先停止伺服器")
+              : backend !== "native" && !running
+                ? t("Docker/Kubernetes 安裝時需要伺服器運行中")
+                : undefined
+          }
+        >
+          <FiDownloadCloud className="size-4" />
+          {busy === "online" ? t("下載並檢查中…") : t("下載並安裝")}
+        </button>
+      </form>
+      <p className="mt-2 text-xs text-ink-muted">
+        {t("支援公開 HTTPS ZIP、PAK 與 GitHub Release;會自動辨識 Pak / LogicMods / UE4SS Lua Mod。")}
+      </p>
+    </div>
+  );
+
   if (!mods) return <p className="text-ink-muted">{error ?? t("載入中…")}</p>;
 
   if (!mods.supported) {
     return (
       <div className="flex flex-col gap-4">
         {error && <p className={errorCls}>{error}</p>}
+        {onlineResult && <p className="rounded-xl bg-grass/10 px-3 py-2 text-[13px] font-bold text-grass">{onlineResult}</p>}
+        {(mods.serverInstalled ?? true) && onlineCard}
         <EmptyState icon={<FiPackage />}>{mods.reason}</EmptyState>
         {(mods.serverInstalled ?? true) && (
         <PakModCard
@@ -158,6 +241,15 @@ export function ModsTab({
     <div className="flex flex-col gap-4">
       {slowInstall && <SlowInstallWarning onClose={() => setSlowInstall(false)} />}
       {error && <p className={errorCls}>{error}</p>}
+      {onlineResult && <p className="rounded-xl bg-grass/10 px-3 py-2 text-[13px] font-bold text-grass">{onlineResult}</p>}
+      <WorkshopStore
+        client={client}
+        instanceId={instanceId}
+        backend={backend}
+        running={running}
+        onInstalled={() => { void refresh(); onModsChanged?.(); }}
+      />
+      {onlineCard}
       <DismissibleWarning id="warn-mods-compat">
         <span className="inline-flex items-start gap-2">
           <FiAlertTriangle className="mt-0.5 size-4 shrink-0" />
@@ -166,7 +258,7 @@ export function ModsTab({
           </span>
         </span>
       </DismissibleWarning>
-      {running && (
+      {running && backend === "native" && (
         <p className="rounded-xl bg-sun/10 px-3 py-2 text-[13px] font-bold text-sun">
           {t("伺服器運作中:安裝、更新或移除模組需要先停止伺服器(執行中時模組檔案被鎖定)。")}
         </p>
@@ -326,4 +418,3 @@ function PakModCard({
     </div>
   );
 }
-
